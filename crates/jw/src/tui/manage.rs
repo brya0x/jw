@@ -84,6 +84,52 @@ pub enum Manage {
     /// `,`: the mode and the themes of the kind in force; `cursor` is the one the keys are on
     /// and `shown` how many there are.
     Settings { cursor: usize, shown: usize },
+    /// `G`, `r` on a group, and `n` in `MoveTo`: the name of a group being typed (REQ-672).
+    GroupName {
+        target: Naming,
+        title: String,
+        text: String,
+    },
+    /// `x` on a group: its workspaces stay and belong to none (REQ-665).
+    DeleteGroup {
+        group: String,
+        name: String,
+        members: usize,
+    },
+    /// `g` on a workspace: the list of groups to put its repository in. `cursor` counts the
+    /// groups, then `sin grupo`, then `grupo nuevo…`; `current` is the group it is in now.
+    MoveTo {
+        workspace: String,
+        name: String,
+        scope: String,
+        groups: Vec<(String, String)>,
+        current: Option<String>,
+        cursor: usize,
+    },
+}
+
+/// The most characters the name of a group has (REQ-664): the box takes no more.
+pub const MAX_GROUP_NAME: usize = 40;
+
+/// What the name of a group typed in `GroupName` is for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Naming {
+    /// A new group, empty.
+    New,
+    /// A new group that this workspace goes into at once.
+    NewWith(String),
+    /// A group's new name; the id of the group.
+    Rename(String),
+}
+
+/// Where `MoveTo` puts a workspace's repository.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Dest {
+    Group(String),
+    /// Out of every group.
+    None,
+    /// In a group to be made: its name is asked next.
+    New,
 }
 
 /// What a name is for.
@@ -115,6 +161,17 @@ pub enum Act {
     Theme(usize),
     /// The next mode, or the one before it.
     StepMode(bool),
+    /// Name a group: make it, make it with a workspace in it, or rename it.
+    GroupName {
+        target: Naming,
+        name: String,
+    },
+    DeleteGroup(String),
+    /// Put the repository of this workspace there.
+    MoveTo {
+        workspace: String,
+        to: Dest,
+    },
 }
 
 impl Manage {
@@ -142,6 +199,86 @@ impl Manage {
                         target,
                         title,
                         text,
+                    }),
+                    None,
+                )
+            }
+            Manage::GroupName {
+                target,
+                title,
+                mut text,
+            } => {
+                match code {
+                    KeyCode::Esc => return (None, None),
+                    // A name has to be something: the box waits for it.
+                    KeyCode::Enter if !text.trim().is_empty() => {
+                        return (None, Some(Act::GroupName { target, name: text }));
+                    }
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) if text.chars().count() < MAX_GROUP_NAME => text.push(c),
+                    _ => {}
+                }
+                (
+                    Some(Manage::GroupName {
+                        target,
+                        title,
+                        text,
+                    }),
+                    None,
+                )
+            }
+            Manage::DeleteGroup { group, .. } if key('y') => (None, Some(Act::DeleteGroup(group))),
+            Manage::DeleteGroup { .. } if esc || key('n') => (None, None),
+            Manage::MoveTo {
+                workspace,
+                name,
+                scope,
+                groups,
+                current,
+                cursor,
+            } => {
+                let last = groups.len() + 1;
+                let pick = |at: usize| -> Option<Dest> {
+                    match at {
+                        a if a < groups.len() => Some(Dest::Group(groups[a].0.clone())),
+                        a if a == groups.len() => Some(Dest::None),
+                        _ => Some(Dest::New),
+                    }
+                };
+                let to = match code {
+                    KeyCode::Esc => return (None, None),
+                    KeyCode::Enter => pick(cursor),
+                    KeyCode::Char('0') => Some(Dest::None),
+                    KeyCode::Char('n') => Some(Dest::New),
+                    KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < groups.len() => {
+                        pick(c as usize - '1' as usize)
+                    }
+                    _ => None,
+                };
+                if let Some(to) = to {
+                    // Where it already is, nothing is sent.
+                    let same = match &to {
+                        Dest::Group(g) => current.as_deref() == Some(g.as_str()),
+                        Dest::None => current.is_none(),
+                        Dest::New => false,
+                    };
+                    return (None, (!same).then_some(Act::MoveTo { workspace, to }));
+                }
+                let cursor = match code {
+                    KeyCode::Char('j') | KeyCode::Down => (cursor + 1).min(last),
+                    KeyCode::Char('k') | KeyCode::Up => cursor.saturating_sub(1),
+                    _ => cursor,
+                };
+                (
+                    Some(Manage::MoveTo {
+                        workspace,
+                        name,
+                        scope,
+                        groups,
+                        current,
+                        cursor,
                     }),
                     None,
                 )
@@ -252,6 +389,9 @@ impl Manage {
             Manage::Syncing { .. } => "subiendo… esc cancela",
             Manage::Settings { .. } => "j/k tema · m modo · ↵ elegir · esc cerrar",
             Manage::Rename { .. } => "↵ aceptar · esc cancelar (vacío: el nombre automático)",
+            Manage::GroupName { .. } => "↵ aceptar · esc cancelar",
+            Manage::DeleteGroup { .. } => "y borrar el grupo · esc cancelar",
+            Manage::MoveTo { .. } => "j/k · ↵ mover · 1…9 un grupo · 0 sin grupo · n nuevo · esc",
         }
     }
 
@@ -437,6 +577,69 @@ impl Manage {
                     dim(self.hint()),
                 ],
             ),
+            Manage::GroupName { title, text, .. } => (
+                title.clone(),
+                look::blue(),
+                vec![
+                    dim("nombre (hasta 40 letras)"),
+                    (format!("❯ {text}▏"), Look::Accent),
+                    blank(),
+                    dim(self.hint()),
+                ],
+            ),
+            Manage::DeleteGroup { name, members, .. } => (
+                format!("Borrar el grupo {name}?"),
+                look::yellow(),
+                vec![
+                    match members {
+                        0 => plain("Está vacío."),
+                        1 => plain("Su workspace pasa a «sin grupo»."),
+                        n => plain(&format!("Sus {n} workspaces pasan a «sin grupo».")),
+                    },
+                    dim("Ninguno se cierra: solo se deshace el grupo."),
+                    blank(),
+                    dim(self.hint()),
+                ],
+            ),
+            Manage::MoveTo {
+                name,
+                scope,
+                groups,
+                current,
+                cursor,
+                ..
+            } => {
+                let row = |at: usize, key: String, text: &str, here: bool| {
+                    let marker = if at == *cursor { '❯' } else { ' ' };
+                    let look = if at == *cursor {
+                        Look::Accent
+                    } else {
+                        Look::Plain
+                    };
+                    (
+                        format!("{marker} {key} {text}{}", if here { "  ✓" } else { "" }),
+                        look,
+                    )
+                };
+                let mut lines = vec![dim(scope), blank()];
+                for (i, (id, group)) in groups.iter().enumerate() {
+                    let key = if i < 9 {
+                        (i + 1).to_string()
+                    } else {
+                        " ".to_owned()
+                    };
+                    lines.push(row(i, key, group, current.as_deref() == Some(id.as_str())));
+                }
+                lines.push(row(
+                    groups.len(),
+                    "0".into(),
+                    "sin grupo",
+                    current.is_none(),
+                ));
+                lines.push(row(groups.len() + 1, "n".into(), "grupo nuevo…", false));
+                lines.extend([blank(), dim(self.hint())]);
+                (format!("mover {name}"), look::blue(), lines)
+            }
             Manage::Syncing {
                 branch, cancelling, ..
             } => (
@@ -752,5 +955,113 @@ mod tests {
         );
         assert_eq!(at(1).press(KeyCode::Esc), (None, None));
         assert_eq!(at(1).press(KeyCode::Char('z')), (Some(at(1)), None));
+    }
+
+    fn type_into(q: Manage, text: &str) -> (Option<Manage>, Option<Act>) {
+        let mut state = (Some(q), None);
+        for c in text.chars() {
+            state = state.0.unwrap().press(KeyCode::Char(c));
+        }
+        state
+    }
+
+    fn naming(text: &str) -> Manage {
+        Manage::GroupName {
+            target: Naming::New,
+            title: "grupo nuevo".into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn a_group_name_takes_forty_letters_waits_while_empty_and_is_sent_on_enter() {
+        let (q, act) = type_into(naming(""), &"é".repeat(45));
+        assert!(act.is_none());
+        let Some(Manage::GroupName { text, .. }) = &q else {
+            panic!()
+        };
+        assert_eq!(text.chars().count(), MAX_GROUP_NAME);
+        // empty or blank, enter waits
+        let (q, act) = naming("  ").press(KeyCode::Enter);
+        assert!(q.is_some() && act.is_none());
+        let (q, act) = naming("qa").press(KeyCode::Enter);
+        assert!(q.is_none());
+        assert_eq!(
+            act,
+            Some(Act::GroupName {
+                target: Naming::New,
+                name: "qa".into()
+            })
+        );
+        assert_eq!(naming("qa").press(KeyCode::Esc), (None, None));
+        let (q, _) = naming("qa").press(KeyCode::Backspace);
+        assert!(matches!(q, Some(Manage::GroupName { text, .. }) if text == "q"));
+    }
+
+    #[test]
+    fn deleting_a_group_is_asked_and_only_y_sends() {
+        let q = || Manage::DeleteGroup {
+            group: "g".into(),
+            name: "salesassist".into(),
+            members: 2,
+        };
+        assert_eq!(
+            q().press(KeyCode::Char('y')),
+            (None, Some(Act::DeleteGroup("g".into())))
+        );
+        assert_eq!(q().press(KeyCode::Esc), (None, None));
+        assert_eq!(q().press(KeyCode::Char('n')), (None, None));
+        let (kept, act) = q().press(KeyCode::Char('x'));
+        assert!(kept.is_some() && act.is_none());
+    }
+
+    fn move_to(current: Option<&str>, cursor: usize) -> Manage {
+        Manage::MoveTo {
+            workspace: "w".into(),
+            name: "app".into(),
+            scope: "solo este workspace".into(),
+            groups: vec![("g1".into(), "uno".into()), ("g2".into(), "dos".into())],
+            current: current.map(Into::into),
+            cursor,
+        }
+    }
+
+    fn to(dest: Dest) -> Option<Act> {
+        Some(Act::MoveTo {
+            workspace: "w".into(),
+            to: dest,
+        })
+    }
+
+    #[test]
+    fn the_list_of_groups_answers_by_number_zero_n_or_the_row_and_never_sends_where_it_already_is()
+    {
+        let key = |q: Manage, c: char| q.press(KeyCode::Char(c));
+        assert_eq!(
+            key(move_to(None, 0), '2'),
+            (None, to(Dest::Group("g2".into())))
+        );
+        assert_eq!(key(move_to(Some("g1"), 0), '0'), (None, to(Dest::None)));
+        assert_eq!(key(move_to(None, 0), 'n'), (None, to(Dest::New)));
+        // a number past the groups does nothing, and the box stays
+        let (q, act) = key(move_to(None, 0), '3');
+        assert!(q.is_some() && act.is_none());
+        // where it is already, nothing is sent and the box closes
+        assert_eq!(key(move_to(Some("g1"), 0), '1'), (None, None));
+        assert_eq!(key(move_to(None, 0), '0'), (None, None));
+        // the cursor moves over the groups, `sin grupo` and `grupo nuevo…` and enter picks its row
+        let (q, _) = key(move_to(None, 0), 'j');
+        let (q, _) = q.unwrap().press(KeyCode::Down);
+        let (q, _) = q.unwrap().press(KeyCode::Down);
+        assert!(
+            matches!(&q, Some(Manage::MoveTo { cursor: 3, .. })),
+            "it stops at the last row"
+        );
+        assert_eq!(q.unwrap().press(KeyCode::Enter), (None, to(Dest::New)));
+        assert_eq!(
+            move_to(Some("g1"), 1).press(KeyCode::Enter),
+            (None, to(Dest::Group("g2".into())))
+        );
+        assert_eq!(move_to(None, 0).press(KeyCode::Esc), (None, None));
     }
 }

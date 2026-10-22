@@ -56,7 +56,7 @@ use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
 use conversation::{Act as ConvAct, Ui as ConvUi};
 use field::Field;
-use manage::{Act, Manage, Named, Target};
+use manage::{Act, Dest, Manage, Named, Naming, Target};
 use programs::{Launcher, Pick, Programs};
 use settings::Settings;
 use wire::ClientError;
@@ -364,6 +364,14 @@ enum Cursor {
     Workspace(usize),
 }
 
+/// What the cursor goes to once the session lists it: a group that was just made, or the
+/// workspace that was put in one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Follow {
+    Group(String),
+    Workspace(String),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
     Workspaces,
@@ -428,6 +436,10 @@ pub enum Key {
     Swap(split::Side),
     /// `z`: fold every group, or unfold them when all are folded (REQ-672).
     Fold,
+    /// `g`: the group of the highlighted workspace's repository (REQ-672).
+    Group,
+    /// `G`: a new group (REQ-672).
+    NewGroup,
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
     Resize(SplitDir, bool),
     /// The phone link: its box.
@@ -628,6 +640,27 @@ pub enum After {
     CancelOp {
         workspace: String,
     },
+    /// Make a group, and put the workspace in it when one is named (REQ-672).
+    CreateGroup {
+        name: String,
+        with: Option<String>,
+    },
+    RenameGroup {
+        group: String,
+        name: String,
+    },
+    DeleteGroup {
+        group: String,
+    },
+    /// Put a workspace's repository in a group, or out of every group.
+    MoveToGroup {
+        workspace: String,
+        group: Option<String>,
+    },
+    MoveGroup {
+        group: String,
+        delta: i32,
+    },
     /// Forget a job that ended, or all of those that did (REQ-655).
     DismissJob(String),
     DismissJobs,
@@ -647,6 +680,8 @@ pub struct View {
     on_group: Option<String>,
     /// The groups that are folded: this terminal's own, never sent anywhere (REQ-674).
     folded: HashSet<String>,
+    /// Where the cursor goes once the session lists what a command made, and until when.
+    follow: Option<(Follow, u64)>,
     avisos_selected: usize,
     avisos_tab: AvisosTab,
     /// The line chosen in the tab of jobs.
@@ -786,6 +821,7 @@ impl View {
             selected: 0,
             on_group: None,
             folded: HashSet::new(),
+            follow: None,
             avisos_selected: 0,
             avisos_tab: AvisosTab::Alertas,
             jobs_selected: 0,
@@ -1290,6 +1326,7 @@ impl View {
         self.sync_review_diff();
         self.advance_manage();
         self.follow_goto();
+        self.follow_cursor();
         self.clamp();
         // The folders of the open workspace's tree are asked for before the tree is shown (REQ-636).
         self.ask_folders();
@@ -1337,6 +1374,13 @@ impl View {
                 && self.folded.contains(&g)
             {
                 self.on_group = Some(g);
+            }
+            // With groups and no workspace the first group has the cursor, so `r` and `x` reach it.
+            if self.on_group.is_none()
+                && s.workspaces.is_empty()
+                && let Some(g) = s.groups.first()
+            {
+                self.on_group = Some(g.id.clone());
             }
         }
         if let Some(panes) = self.shown().map(|w| w.panes.len()) {
@@ -2406,9 +2450,134 @@ impl View {
         }
     }
 
+    /// The group whose row the cursor is on.
+    fn group_cursor(&self) -> Option<&contract::Group> {
+        let id = self.on_group.as_deref()?;
+        self.session.as_ref()?.groups.iter().find(|g| g.id == id)
+    }
+
+    /// `G`, `r` on a group and `n` in the list of groups: ask for a group's name.
+    fn ask_group_name(&mut self, target: Naming) {
+        let (title, text) = match &target {
+            Naming::New => ("grupo nuevo".to_owned(), String::new()),
+            Naming::NewWith(ws) => (format!("grupo nuevo con {}", self.label(ws)), String::new()),
+            Naming::Rename(id) => {
+                let name = self
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.groups.iter().find(|g| g.id == *id))
+                    .map(|g| g.name.clone());
+                let Some(name) = name else {
+                    return;
+                };
+                ("renombrar el grupo".to_owned(), name)
+            }
+        };
+        self.manage = Some(Manage::GroupName {
+            target,
+            title,
+            text,
+        });
+    }
+
+    /// `x` on a group's row: its workspaces stay open and belong to none.
+    fn ask_delete_group(&mut self) {
+        let Some(g) = self.group_cursor() else {
+            return;
+        };
+        let members = self.session.as_ref().map_or(0, |s| {
+            s.workspaces
+                .iter()
+                .filter(|w| w.group.as_deref() == Some(g.id.as_str()))
+                .count()
+        });
+        self.manage = Some(Manage::DeleteGroup {
+            group: g.id.clone(),
+            name: g.name.clone(),
+            members,
+        });
+    }
+
+    /// `g` on a workspace: the list of groups for its repository. On a group's row it says where
+    /// to stand.
+    fn ask_move_to_group(&mut self) {
+        let (Some(s), Some(w)) = (&self.session, self.selected_summary()) else {
+            self.flash("g mueve un workspace: ponte en uno");
+            return;
+        };
+        let same = s
+            .workspaces
+            .iter()
+            .filter(|x| w.project.is_some() && x.project == w.project)
+            .count();
+        let scope = match (&w.project, same) {
+            (Some(p), n) if n > 1 => format!("el repositorio {}: {n} workspaces", base(p)),
+            _ => "solo este workspace".to_owned(),
+        };
+        let groups: Vec<(String, String)> = s
+            .groups
+            .iter()
+            .map(|g| (g.id.clone(), g.name.clone()))
+            .collect();
+        let cursor = w
+            .group
+            .as_ref()
+            .and_then(|id| groups.iter().position(|(g, _)| g == id))
+            // with no group in the session the useful row is the last: a new one
+            .unwrap_or(if groups.is_empty() { 1 } else { groups.len() });
+        self.manage = Some(Manage::MoveTo {
+            workspace: w.id.clone(),
+            name: self.label(&w.id),
+            scope,
+            current: w.group.clone(),
+            groups,
+            cursor,
+        });
+    }
+
+    /// The group or the workspace the cursor goes to once the session lists it (REQ-672).
+    fn follow_to(&mut self, to: Follow) {
+        self.follow = Some((to, self.now_ms + 8_000));
+    }
+
+    fn follow_cursor(&mut self) {
+        let Some((to, until)) = self.follow.clone() else {
+            return;
+        };
+        let found = self.session.as_ref().and_then(|s| match &to {
+            Follow::Group(id) => s.groups.iter().position(|g| g.id == *id).map(Cursor::Group),
+            Follow::Workspace(id) => s
+                .workspaces
+                .iter()
+                .position(|w| w.id == *id)
+                .map(Cursor::Workspace),
+        });
+        match found {
+            Some(Cursor::Group(g)) => {
+                self.set_cursor(Cursor::Group(g));
+                self.opened = None;
+                self.focus = 0;
+                self.follow = None;
+            }
+            Some(Cursor::Workspace(i)) => {
+                self.go_to(i);
+                self.follow = None;
+            }
+            None if self.now_ms > until => self.follow = None,
+            None => {}
+        }
+    }
+
     /// `r`: ask for a new name for the highlighted worktree (a folder is a directory on disk and
     /// is not renamed), or for the focused panel.
     fn ask_rename(&mut self, level: Level) {
+        // On a group's row `r` names the group (REQ-672).
+        if level == Level::Workspaces
+            && let Some(id) = self.on_group.clone()
+        {
+            self.ask_group_name(Naming::Rename(id));
+            return;
+        }
         let (target, title, text) = match level {
             Level::Workspaces => {
                 let Some(w) = self
@@ -2483,6 +2652,11 @@ impl View {
 
     /// `x` at the workspace level: ask before the highlighted workspace is closed.
     fn ask_close_workspace(&mut self) {
+        // On a group's row `x` asks to delete the group, never to close a workspace (REQ-672).
+        if self.on_group.is_some() {
+            self.ask_delete_group();
+            return;
+        }
         let Some(w) = self.selected_summary() else {
             return;
         };
@@ -2528,6 +2702,41 @@ impl View {
             Some(Act::Check(workspace)) => After::Check(workspace),
             Some(Act::Cancel(workspace)) => After::CancelOp { workspace },
             Some(Act::Rename { target, name }) => After::Rename { target, name },
+            Some(Act::GroupName { target, name }) => match target {
+                Naming::New => After::CreateGroup { name, with: None },
+                Naming::NewWith(workspace) => {
+                    // The workspace goes into the group at once: where it lands must be in view.
+                    After::CreateGroup {
+                        name,
+                        with: Some(workspace),
+                    }
+                }
+                Naming::Rename(group) => After::RenameGroup { group, name },
+            },
+            Some(Act::DeleteGroup(group)) => After::DeleteGroup { group },
+            Some(Act::MoveTo { workspace, to }) => match to {
+                Dest::New => {
+                    let name = self.label(&workspace);
+                    self.manage = Some(Manage::GroupName {
+                        target: Naming::NewWith(workspace),
+                        title: format!("grupo nuevo con {name}"),
+                        text: String::new(),
+                    });
+                    After::Continue
+                }
+                Dest::None => After::MoveToGroup {
+                    workspace,
+                    group: None,
+                },
+                Dest::Group(group) => {
+                    // The group opens, so that the workspace is seen where it lands (REQ-672).
+                    self.folded.remove(&group);
+                    After::MoveToGroup {
+                        workspace,
+                        group: Some(group),
+                    }
+                }
+            },
             Some(Act::Theme(at)) => {
                 let kind = self.settings.is_dark(self.os_dark);
                 if let Some(t) = contract::themes::of_kind(kind).nth(at) {
@@ -3110,6 +3319,36 @@ impl View {
             (Mode::Workspaces, Key::Left) if level == Level::Workspaces => self.fold_key(true),
             (Mode::Workspaces, Key::Right) if level == Level::Workspaces => self.fold_key(false),
             (Mode::Workspaces, Key::Fold) if level == Level::Workspaces => self.fold_all(),
+            (Mode::Workspaces, Key::Group) if level == Level::Workspaces => {
+                self.ask_move_to_group()
+            }
+            (Mode::Workspaces, Key::NewGroup) if level == Level::Workspaces => {
+                self.ask_group_name(Naming::New)
+            }
+            // `J` and `K` move a group on its row; on a workspace's they wait for N161e.
+            (Mode::Workspaces, Key::Swap(side))
+                if level == Level::Workspaces
+                    && self.on_group.is_some()
+                    && matches!(side, split::Side::Up | split::Side::Down) =>
+            {
+                let delta = if side == split::Side::Down { 1 } else { -1 };
+                let at = self.group_cursor().and_then(|g| {
+                    self.session
+                        .as_ref()?
+                        .groups
+                        .iter()
+                        .position(|x| x.id == g.id)
+                });
+                let n = self.session.as_ref().map_or(0, |s| s.groups.len());
+                match (self.on_group.clone(), at) {
+                    (Some(_), Some(0)) if delta < 0 => self.flash("ya es el primer grupo"),
+                    (Some(_), Some(i)) if delta > 0 && i + 1 >= n => {
+                        self.flash("ya es el último grupo")
+                    }
+                    (Some(group), _) => return After::MoveGroup { group, delta },
+                    _ => {}
+                }
+            }
             (Mode::Workspaces, Key::Next) if level == Level::Panels => self.go_panel(true),
             (Mode::Workspaces, Key::Tree)
                 if level != Level::Terminal && self.on_group.is_none() =>
@@ -5288,12 +5527,12 @@ impl View {
                 (_, Level::Workspaces) if self.on_group.is_some() => (
                     " GRUPO ",
                     look::blue(),
-                    "j/k mover · ↵ plegar o abrir · h l · z todos · a avisos · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ plegar · h l · z todos · r renombrar · x borrar · J K orden · G nuevo · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · p proyecto · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · g grupo · p proyecto · s subir · x cerrar · d cambios · ? teclas · q salir",
                 ),
             },
         };
@@ -5848,14 +6087,20 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
         "z",
         "plegar todos los grupos, o abrirlos si todos están plegados",
     ),
-    ("r", "renombrar el worktree"),
+    ("r", "renombrar el worktree; en un grupo, el grupo"),
     ("o", "abrir una carpeta"),
     ("t", "archivos del workspace"),
     ("w", "worktrees del proyecto: nuevo o los que ya existen"),
     ("R", "revisar un pull request del proyecto"),
     ("p", "la configuración del proyecto"),
     ("s", "subir el worktree a origin"),
-    ("x", "cerrar el workspace (y quitar su worktree)"),
+    (
+        "x",
+        "cerrar el workspace (y quitar su worktree); en un grupo, borrarlo",
+    ),
+    ("g", "el grupo del repositorio del workspace"),
+    ("G", "un grupo nuevo"),
+    ("J K", "en un grupo, bajarlo o subirlo entre los grupos"),
     ("d", "ver sus cambios"),
     ("a", "avisos"),
     ("m", "enlace con el teléfono"),
@@ -6203,6 +6448,8 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Tab => Key::Next,
         KeyCode::Char('t') => Key::Tree,
         KeyCode::Char('z') => Key::Fold,
+        KeyCode::Char('g') => Key::Group,
+        KeyCode::Char('G') => Key::NewGroup,
         KeyCode::Char('H') => Key::Swap(split::Side::Left),
         KeyCode::Char('L') => Key::Swap(split::Side::Right),
         KeyCode::Char('K') => Key::Swap(split::Side::Up),
@@ -6855,6 +7102,53 @@ fn do_after(
             let reply = client.cmd(cmd);
             told(view, "No se pudo renombrar", "renombrado", reply);
         }
+        After::CreateGroup { name, with } => {
+            match reply_value(client.cmd(Cmd::CreateGroup { name })) {
+                Err(why) => view.manage_failed("No se pudo crear el grupo", &why),
+                Ok(made) => {
+                    let group = made["group"].as_str().unwrap_or_default().to_owned();
+                    match with {
+                        // The cursor goes to the group once the session lists it.
+                        None => {
+                            view.follow_to(Follow::Group(group));
+                            view.flash("grupo creado");
+                        }
+                        // The workspace goes in, and the cursor stays on it where it lands.
+                        Some(workspace) => {
+                            let reply = client.cmd(Cmd::MoveToGroup {
+                                workspace: workspace.clone(),
+                                group: Some(group),
+                            });
+                            if matches!(reply, Ok(Ok(_))) {
+                                view.follow_to(Follow::Workspace(workspace));
+                            }
+                            told(view, "No se pudo mover el workspace", "grupo creado", reply);
+                        }
+                    }
+                }
+            }
+        }
+        After::RenameGroup { group, name } => {
+            let reply = client.cmd(Cmd::RenameGroup { group, name });
+            told(
+                view,
+                "No se pudo renombrar el grupo",
+                "grupo renombrado",
+                reply,
+            );
+        }
+        After::DeleteGroup { group } => {
+            let reply = client.cmd(Cmd::DeleteGroup { group });
+            told(view, "No se pudo borrar el grupo", "grupo borrado", reply);
+        }
+        After::MoveToGroup { workspace, group } => {
+            let reply = client.cmd(Cmd::MoveToGroup { workspace, group });
+            told(view, "No se pudo mover el workspace", "movido", reply);
+        }
+        After::MoveGroup { group, delta } => {
+            let reply = client.cmd(Cmd::MoveGroup { group, delta });
+            told(view, "No se pudo mover el grupo", "grupo movido", reply);
+        }
         After::ClosePane(pane) => {
             let reply = client.cmd(Cmd::ClosePane { pane });
             told(view, "No se pudo cerrar el panel", "panel cerrado", reply);
@@ -7363,12 +7657,10 @@ mod tests {
         v.press(Key::Left);
         assert!(v.on_group.is_some() && v.selected_id().is_none());
         for key in [
-            Key::Repeat,
             Key::Sync,
             Key::Worktree,
             Key::Project,
             Key::Review,
-            Key::Close,
             Key::Changes,
             Key::Tree,
             Key::NewPane,
@@ -7380,6 +7672,10 @@ mod tests {
             Key::CopyCmd,
             Key::DismissAll,
             Key::Back,
+            // `g` says where to stand, and the keys that move a panel are the panels'
+            Key::Group,
+            Key::Swap(split::Side::Left),
+            Key::Swap(split::Side::Right),
         ] {
             let after = v.press(key);
             assert_eq!(after, After::Continue, "{key:?}");
@@ -7400,6 +7696,250 @@ mod tests {
         }
         assert_eq!(v.mode, Mode::Workspaces);
         assert!(v.on_group.is_some(), "the cursor did not move");
+    }
+
+    const F1: &str = "00000000-0000-4000-8000-0000000000f1";
+    const F2: &str = "00000000-0000-4000-8000-0000000000f2";
+
+    fn enter(v: &mut View) -> After {
+        v.press_key(plain(KeyCode::Enter))
+    }
+
+    /// REQ-672: `r` and `x` on a group's row ask about the group, and never about a workspace.
+    #[test]
+    fn r_and_x_on_a_group_row_ask_about_the_group_and_never_about_a_workspace() {
+        let mut v = groups_view();
+        v.press(Key::Left);
+        v.press(Key::Repeat);
+        let Some(Manage::GroupName { target, text, .. }) = v.manage.clone() else {
+            panic!("r asks the name of the group: {:?}", v.manage);
+        };
+        assert_eq!(
+            (target, text.as_str()),
+            (Naming::Rename(F1.into()), "salesassist")
+        );
+        // the name is edited in place and sent on enter
+        for _ in 0..3 {
+            v.press_key(plain(KeyCode::Backspace));
+        }
+        for c in "ops".chars() {
+            tap(&mut v, c);
+        }
+        assert_eq!(
+            enter(&mut v),
+            After::RenameGroup {
+                group: F1.into(),
+                name: "salesassops".into()
+            }
+        );
+        assert!(v.manage.is_none());
+        v.press(Key::Close);
+        let Some(Manage::DeleteGroup { group, members, .. }) = v.manage.clone() else {
+            panic!("x asks to delete the group: {:?}", v.manage);
+        };
+        assert_eq!((group.as_str(), members), (F1, 2));
+        // anything but y leaves it; y sends, and nothing was closed
+        tap(&mut v, 'q');
+        assert!(v.manage.is_some(), "only y, n and esc answer");
+        tap(&mut v, 'n');
+        assert!(v.manage.is_none());
+        v.press(Key::Close);
+        assert_eq!(tap(&mut v, 'y'), After::DeleteGroup { group: F1.into() });
+        // the empty group's question says so
+        for _ in 0..3 {
+            v.press(Key::Down);
+        }
+        v.press(Key::Close);
+        assert!(
+            matches!(v.manage, Some(Manage::DeleteGroup { members: 0, .. })),
+            "{:?}",
+            v.manage
+        );
+    }
+
+    /// REQ-672: `G` asks for a name (no more than 40 letters, and not an empty one), creates the
+    /// group, and the cursor goes to it once the session lists it.
+    #[test]
+    fn g_makes_a_group_with_a_name_and_the_cursor_goes_to_it_when_the_session_lists_it() {
+        let mut v = groups_view();
+        v.press(Key::NewGroup);
+        assert!(matches!(
+            v.manage,
+            Some(Manage::GroupName {
+                target: Naming::New,
+                ..
+            })
+        ));
+        assert_eq!(enter(&mut v), After::Continue, "an empty name waits");
+        assert!(v.manage.is_some());
+        for _ in 0..50 {
+            tap(&mut v, 'x');
+        }
+        let Some(Manage::GroupName { text, .. }) = &v.manage else {
+            panic!()
+        };
+        assert_eq!(text.chars().count(), 40, "the box takes no more");
+        for _ in 0..40 {
+            v.press_key(plain(KeyCode::Backspace));
+        }
+        for c in "qa".chars() {
+            tap(&mut v, c);
+        }
+        assert_eq!(
+            enter(&mut v),
+            After::CreateGroup {
+                name: "qa".into(),
+                with: None
+            }
+        );
+        // the daemon answers `{group}`; the client follows it
+        v.follow_to(Follow::Group("g-new".into()));
+        v.sync(
+            [{
+                let mut doc = serde_json::from_str::<serde_json::Value>(
+                    &std::fs::read_to_string(
+                        Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../contract/fixtures/daemon/snapshot-session-groups.json"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()["node"]
+                    .clone();
+                doc["groups"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"id": "g-new", "name": "qa"}));
+                doc["rev"] = 50.into();
+                doc
+            }]
+            .iter(),
+        );
+        assert_eq!(v.on_group.as_deref(), Some("g-new"));
+        assert!(v.follow.is_none());
+        // and a group that never comes is given up after a while
+        v.follow_to(Follow::Group("never".into()));
+        v.set_now(10_000);
+        v.follow_cursor();
+        assert!(v.follow.is_none());
+    }
+
+    /// REQ-672: `g` lists the groups with the one the repository is in marked, and each way to answer
+    /// sends the move; a group that is picked opens.
+    #[test]
+    fn g_lists_the_groups_and_each_answer_moves_the_repository() {
+        let mut v = groups_view();
+        v.press(Key::Group);
+        let Some(Manage::MoveTo {
+            scope,
+            groups,
+            current,
+            cursor,
+            ..
+        }) = v.manage.clone()
+        else {
+            panic!("{:?}", v.manage);
+        };
+        assert_eq!(scope, "el repositorio app: 2 workspaces");
+        assert_eq!(groups.len(), 2);
+        assert_eq!((current.as_deref(), cursor), (Some(F1), 0));
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("❯ 1 salesassist  ✓") && t.contains("0 sin grupo"),
+            "{t}"
+        );
+        // where it already is, nothing is sent
+        assert_eq!(tap(&mut v, '1'), After::Continue);
+        assert!(v.manage.is_none());
+        let ws = v.selected_id().unwrap();
+        // another group: the move is sent and the group, folded here, opens
+        v.folded.insert(F2.into());
+        v.press(Key::Group);
+        assert_eq!(
+            tap(&mut v, '2'),
+            After::MoveToGroup {
+                workspace: ws.clone(),
+                group: Some(F2.into())
+            }
+        );
+        assert!(v.folded.is_empty());
+        // out of every group
+        v.press(Key::Group);
+        assert_eq!(
+            tap(&mut v, '0'),
+            After::MoveToGroup {
+                workspace: ws.clone(),
+                group: None
+            }
+        );
+        // j and enter pick the row the cursor is on; `n` asks for the name of a new group that
+        // takes the workspace
+        v.press(Key::Group);
+        v.press_key(plain(KeyCode::Down));
+        v.press_key(plain(KeyCode::Down));
+        assert_eq!(
+            enter(&mut v),
+            After::MoveToGroup {
+                workspace: ws.clone(),
+                group: None
+            }
+        );
+        v.press(Key::Group);
+        assert_eq!(tap(&mut v, 'n'), After::Continue);
+        assert!(matches!(
+            v.manage,
+            Some(Manage::GroupName { target: Naming::NewWith(ref w), .. }) if *w == ws
+        ));
+        for c in "nuevo".chars() {
+            tap(&mut v, c);
+        }
+        assert_eq!(
+            enter(&mut v),
+            After::CreateGroup {
+                name: "nuevo".into(),
+                with: Some(ws)
+            }
+        );
+    }
+
+    /// REQ-672: `J` and `K` on a group's row move the group, and say when it is at the end; on a
+    /// workspace's row they wait for the repositories (N161e).
+    #[test]
+    fn j_and_k_on_a_group_row_move_the_group_and_say_when_it_is_at_an_end() {
+        let mut v = groups_view();
+        v.press(Key::Left);
+        assert_eq!(v.press(Key::Swap(split::Side::Up)), After::Continue);
+        assert_eq!(v.flash, "ya es el primer grupo");
+        assert_eq!(
+            v.press(Key::Swap(split::Side::Down)),
+            After::MoveGroup {
+                group: F1.into(),
+                delta: 1
+            }
+        );
+        v.press(Key::Down);
+        v.press(Key::Down);
+        v.press(Key::Down);
+        assert_eq!(v.on_group.as_deref(), Some(F2));
+        assert_eq!(v.press(Key::Swap(split::Side::Down)), After::Continue);
+        assert_eq!(v.flash, "ya es el último grupo");
+        assert_eq!(
+            v.press(Key::Swap(split::Side::Up)),
+            After::MoveGroup {
+                group: F2.into(),
+                delta: -1
+            }
+        );
+        v.press(Key::Down);
+        assert!(v.on_group.is_none());
+        assert_eq!(v.press(Key::Swap(split::Side::Down)), After::Continue);
+    }
+
+    /// With groups and no workspace the cursor is on the first group, so `r` and `x` reach it.
+    #[test]
+    fn with_groups_and_no_workspace_the_cursor_is_on_the_first_group() {
+        let v = groups_view_with(|doc| doc["workspaces"] = serde_json::json!([]));
+        assert_eq!(v.on_group.as_deref(), Some(F1));
+        assert!(v.plain(120, 30).contains("GRUPO"));
     }
 
     /// REQ-671: a long list moves just far enough to keep the cursor in view, and a click finds the
