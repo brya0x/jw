@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · trabajos en el teléfono</title>
+<style>
+/* the tokens of mobile.html: the roles of the app's Palette */
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:18px 0 6px}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.row0{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.note{max-width:640px}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.ctl button{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer}
+.ctl button:hover{border-color:var(--blue)}
+/* the phone */
+.phone{position:relative;width:390px;height:780px;background:var(--bg);border:1px solid var(--line);border-radius:36px;overflow:hidden;display:flex;flex-direction:column;font:13.5px/1.4 var(--mono);color:var(--fg)}
+.sb{display:flex;justify-content:space-between;padding:10px 22px 4px;color:var(--dim);font-size:11px}
+.screen{flex:1;display:flex;flex-direction:column;min-height:0}
+.hd{display:flex;align-items:center;gap:10px;padding:8px 14px 6px}
+.hd b{font-size:15px;color:#e6e9ef}.hd .sub{color:var(--dim);font-size:11px}.hd .sp1{flex:1}
+.ib{position:relative;background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;padding:4px 6px}
+.ib .bdg{position:absolute;top:-2px;right:-2px;background:var(--yellow);color:var(--bg);border-radius:8px;font-size:10px;padding:0 5px;font-weight:700}
+.list{flex:1;overflow:auto;padding:0 0 8px}
+.sec{color:var(--dim);font-size:11px;padding:12px 14px 4px;letter-spacing:.04em}
+.row{display:flex;align-items:center;gap:8px;width:100%;min-height:50px;padding:6px 14px;background:none;border:0;border-left:3px solid transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.row[aria-current]{background:var(--sel);border-left-color:var(--blue)}
+.row.wt{padding-left:26px}.row.dis{opacity:.55}
+.row .n{color:var(--dim);width:14px}.row .o{width:14px}.row .nm{flex:1;min-width:0}
+.row .nm b{color:#e6e9ef;font-weight:700;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .nm span{color:var(--dim);font-size:11.5px;display:block}
+.row .at{font-size:11.5px}
+.tag{font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.mk{font-size:12px;min-width:34px;text-align:right}
+.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-red{color:var(--red)}.c-yellow{color:var(--yellow)}.c-dim{color:var(--dim)}
+/* the strip of jobs under the header: new */
+.strip{display:flex;align-items:center;gap:8px;width:calc(100% - 20px);margin:4px 10px 2px;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;text-align:left}
+.strip.run{border-color:#35506b}.strip.ok{border-color:#3f5a33}.strip.bad{border-color:#6b3a40}
+.strip .tx{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.strip i{color:var(--dim);font-style:normal}
+.strip .x{color:var(--dim);padding:0 4px}
+.legend{color:var(--dim);font-size:11px;padding:10px 14px}
+.jr{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;padding:8px 14px;background:none;border:0;border-bottom:1px solid #2d323c;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.jr .g{width:16px;text-align:center}.jr .tt{flex:1;min-width:0}.jr .tt b{display:block;color:#e6e9ef;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jr .tt span{color:var(--dim);font-size:11.5px}.jr .tm{color:var(--dim);font-size:11.5px;text-align:right}
+.empty{color:var(--dim);padding:22px 14px;font-size:12.5px}
+.status{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sel);font-size:11.5px;color:var(--dim)}
+.status .chip{background:var(--blue);color:var(--bg);font-weight:700;padding:0 6px;border-radius:3px}
+.status .sp1{flex:1}.status .jb{color:var(--blue);background:none;border:0;font:inherit;cursor:pointer;padding:0}
+/* sheet and toast, as in mobile.html */
+.back{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none}
+.back.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:78%;background:var(--panel);border-radius:14px 14px 0 0;padding:8px 14px 18px;border-top:1px solid var(--line)}
+.sheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 10px}
+.sheet h3{margin:4px 0 6px;font-size:14px;color:#e6e9ef}.sheet p{margin:4px 0;color:var(--fg);font-size:12.5px}
+.sheet .bad{color:var(--red);font-size:12px;margin:8px 0;white-space:pre-wrap}
+.act{display:block;width:100%;min-height:48px;margin:6px 0;background:#2a2f3a;border:1px solid var(--line);border-radius:10px;color:var(--fg);font:inherit;cursor:pointer;text-align:left;padding:0 14px}
+.act.red{color:var(--red);border-color:#6b3a40}.act[disabled]{opacity:.5}
+.cancel{display:block;text-align:center;color:var(--dim);padding:10px;cursor:pointer}
+#toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:7px 13px;border-radius:16px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86%;text-align:center}
+#toast.on{opacity:1}
+</style></head><body>
+<h1>jw · trabajos en el teléfono</h1>
+<p class="note">Segundo prototipo del mismo cambio (el del terminal es <code>jobs.html</code>). Misma idea: un trabajo es una operación lenta que el PC corre por su cuenta; el teléfono la ve correr y terminar, y ya no se queda esperando en una hoja. Para probar: toca <b>mobile-qa</b> (o mantén pulsada una fila) y quítalo, o usa los botones.</p>
+<div class="ctl" id="ctl">
+  <button data-b="rm-fast">quitar worktree (rápido)</button>
+  <button data-b="rm-slow">quitar worktree (lento, 9 s)</button>
+  <button data-b="rm-fail">quitar con cambios sin guardar (falla)</button>
+  <button data-b="push">subir una rama (4 s)</button>
+  <button data-b="reset">reiniciar</button>
+</div>
+<div class="row0">
+  <div class="phone" id="phone">
+    <div class="sb"><span>9:41</span><span>LTE · 92%</span></div>
+    <div class="screen" id="screen"></div>
+    <div class="back" id="back"><div class="sheet" id="sheet"></div></div>
+    <div id="toast"></div>
+  </div>
+  <div class="note">
+    <h2>Lo que cambia respecto a hoy</h2>
+    <ul>
+      <li><b>La hoja de quitar ya no espera.</b> Hoy muestra «quitando…» y se queda hasta que el PC responde. Ahora se cierra al confirmar, sale un aviso («quitando mobile-qa…») y el trabajo sigue en su cuenta.</li>
+      <li><b>Una franja bajo el título del Home</b> dice qué corre (con el tiempo) y, al terminar, si salió bien o falló. Tocarla abre la pantalla de trabajos. Una <span class="c-dim">×</span> la descarta.</li>
+      <li><b>La fila del workspace</b> que se está quitando muestra el spinner azul y «quitando…», con el nombre atenuado; tocarla avisa que se está quitando. Si falla vuelve a la normalidad con la marca roja.</li>
+      <li><b>Pantalla «trabajos»</b> (como «avisos»: lleva un botón atrás): arriba lo que corre, debajo lo terminado. Tocar un trabajo abre una hoja con el resultado o el error completo, y las acciones que caben: ir al workspace, descartar, cancelar (solo subir una rama).</li>
+      <li><b>Barra de estado de abajo:</b> <code>⠋ 1</code> mientras algo corre; tocarlo abre la pantalla.</li>
+      <li>El teléfono no guarda nada: el PC es la fuente, así que un trabajo que empezaste desde el terminal también se ve aquí.</li>
+    </ul>
+    <h2>Para decidir</h2>
+    <ul>
+      <li>¿Una notificación del sistema cuando un trabajo termina con la app en segundo plano? (no la he puesto: el teléfono hoy no recibe nada con la app cerrada.)</li>
+      <li>¿La franja bajo el título es suficiente, o prefieres un punto en la campana de «avisos»? Propongo la franja y que solo los fallos sumen a la campana.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const now=()=>performance.now();
+const spin=()=>SPIN[Math.floor(now()/110)%SPIN.length];
+const fmt=ms=>{const s=ms/1000;return s<10?s.toFixed(1).replace('.',',')+' s':Math.round(s)+' s'};
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const $=id=>document.getElementById(id);
+
+let ws,jobs,st,nid,toastT;
+function reset(){
+  ws=[
+    {name:'jw',kind:'root',branch:'main',att:0,removing:false},
+    {name:'jw · feat/jobs',kind:'worktree',branch:'feat/jobs',att:0,removing:false,panes:2},
+    {name:'jw · mobile-qa',kind:'worktree',branch:'feat/mobile-qa',att:0,removing:false,panes:1},
+    {name:'jitsubai-api',kind:'worktree',branch:'feat/api',att:0,removing:false,dirty:true,panes:1},
+    {name:'sales-assist',kind:'folder',branch:'',att:0,removing:false,panes:0},
+  ];
+  jobs=[];nid=1;st={screen:'home',sheet:null,sel:2,job:null,ask:null};
+  render();
+}
+const running=()=>jobs.filter(j=>j.state==='running');
+const finished=()=>jobs.filter(j=>j.state!=='running');
+const unseen=()=>finished().filter(j=>!j.seen&&!j.dismissed);
+const vis=()=>ws.map((w,i)=>({w,i})).filter(x=>!x.w.gone);
+
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2200)}
+
+function startJob(kind,i,o){
+  const w=ws[i];
+  const j={id:nid++,kind,target:i,name:w.name,state:'running',start:now(),dur:o.dur,fail:o.fail||'',cancellable:kind==='push',seen:false,msg:'',
+    title:kind==='remove'?'quitar worktree '+w.name:'subir '+w.branch};
+  jobs.unshift(j);if(kind==='remove')w.removing=true;
+  setTimeout(()=>finish(j),o.dur);
+  toast(kind==='remove'?`quitando ${w.name}… míralo en trabajos`:`subiendo ${w.branch}…`);
+  render();
+}
+function finish(j){
+  if(j.state!=='running')return;
+  const w=ws[j.target];j.end=now();j.dur=j.end-j.start;
+  if(j.fail){j.state='failed';j.msg=j.fail;if(j.kind==='remove'){w.removing=false;w.att++}toast('✗ no se pudo: '+j.title)}
+  else{j.state='done';j.msg=(j.kind==='remove'?'quitado · la rama se queda · ':'subido '+w.branch+' · ')+fmt(j.dur);if(j.kind==='remove')w.gone=true;toast('✓ '+j.msg)}
+  render();
+}
+
+/* ---------- screens */
+function strip(){
+  const r=running();
+  if(r.length){const j=r[0];return `<button class="strip run" data-go="jobs"><span class="c-blue">${spin()}</span><span class="tx">${r.length>1?r.length+' trabajos · ':''}${esc(j.title)}… <i>${fmt(now()-j.start)}</i></span><span class="c-dim">›</span></button>`}
+  const u=unseen();if(!u.length)return'';
+  const bad=u.find(j=>j.state==='failed');const j=bad||u[0];
+  return `<button class="strip ${bad?'bad':'ok'}" data-go="jobs"><span class="${bad?'c-red':'c-green'}">${bad?'✗':'✓'}</span><span class="tx">${esc(bad?'falló: '+j.title:j.msg.split(' · ')[0]+' '+j.name)}${u.length>1?' <i>+'+(u.length-1)+'</i>':''}</span><span class="x" data-dismissall="1">×</span></button>`;
+}
+function vHome(){
+  const av=ws.reduce((a,w)=>a+(w.gone?0:w.att),0);
+  let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span><button class="ib" data-t="avisos">🔔${av?`<span class="bdg">${av}</span>`:''}</button><button class="ib" data-t="ajustes">⚙</button></div>`;
+  h+=strip();
+  h+=`<div class="list"><div class="sec">WORKSPACES · ${vis().length}</div>`;
+  vis().forEach(({w,i},k)=>{
+    const g=w.kind==='worktree'?'↳':'●';
+    const det=(w.kind==='root'?'raíz':w.kind==='worktree'?'worktree':'carpeta')+(w.panes?` · ${w.panes} paneles`:'');
+    const at=w.removing?`<div class="at c-blue">${spin()} quitando…</div>`:w.att?`<div class="at c-red">✗ ${esc('no se pudo quitar')}</div>`:'';
+    h+=`<button class="row ${w.kind==='worktree'?'wt':''} ${w.removing?'dis':''}" ${i===st.sel?'aria-current="true"':''} data-ws="${i}"><span class="n">${k+1}</span><span class="o ${w.panes?'c-green':'c-dim'}">${g}</span><span class="nm"><b>${esc(w.name)}</b><span>${det}</span>${at}</span><span class="tag">${w.kind==='root'?'raíz':w.kind==='folder'?'carpeta':'wt'}</span><span class="mk">${w.removing?`<span class="c-blue">${spin()}</span>`:w.att?`<span class="c-red">● ${w.att}</span>`:''}</span></button>`;
+  });
+  h+=`<div class="legend">toca para abrir · mantén pulsado para quitar</div></div>`;
+  return h;
+}
+function jrow(j){
+  const g=j.state==='running'?`<span class="c-blue">${spin()}</span>`:j.state==='done'?'<span class="c-green">✓</span>':'<span class="c-red">✗</span>';
+  const tm=j.state==='running'?fmt(now()-j.start):fmt(j.dur)+'<br>hace '+fmt(now()-j.end);
+  return `<button class="jr" data-job="${j.id}"><span class="g">${g}</span><span class="tt"><b>${esc(j.title)}</b><span>${j.kind==='remove'?'quitar worktree':'subir rama'}${j.state==='failed'?' · falló':''}</span></span><span class="tm">${tm}</span></button>`;
+}
+function vJobs(){
+  const r=running(),f=finished().filter(j=>!j.dismissed);
+  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div><b>trabajos</b><br><span class="sub">lo que corre y lo que terminó</span></div><span class="sp1"></span>${f.length?'<button class="ib c-dim" data-clear="1">limpiar</button>':''}</div><div class="list">`;
+  h+=`<div class="sec">CORRIENDO · ${r.length}</div>`+(r.length?r.map(jrow).join(''):'<div class="empty">nada corre ahora</div>');
+  h+=`<div class="sec">TERMINADOS · ${f.length}</div>`+(f.length?f.map(jrow).join(''):'<div class="empty">lo que termine aparece aquí hasta que lo descartes</div>');
+  return h+'</div>';
+}
+function statusBar(){
+  const n=running().length;
+  const chip=st.screen==='jobs'?'TRABAJOS':'WORKSPACES';
+  return `<div class="status"><span class="chip">${chip}</span><span>${st.screen==='jobs'?'toca uno para ver su resultado':'wifi · conectado'}</span><span class="sp1"></span>${n?`<button class="jb" data-go="jobs">${spin()} ${n}</button>`:''}</div>`;
+}
+function sheetHtml(){
+  if(st.sheet==='rmask'){const w=ws[st.ask];return `<div class="grab"></div><h3>quitar el worktree</h3><p>«${esc(w.name)}» se borra del disco del PC. La rama se queda.</p><p class="c-dim">Seguirá en trabajos: puedes cerrar esto y la app.</p><button class="act red" data-act="rmdo">× quitar worktree</button><span class="cancel" data-act="close">cancelar</span>`}
+  if(st.sheet==='job'){const j=jobs.find(x=>x.id===st.job);if(!j)return'';
+    const ok=!ws[j.target].gone;
+    let b=`<div class="grab"></div><h3>${esc(j.title)}</h3><p>${j.state==='running'?`<span class="c-blue">${spin()}</span> corriendo · ${fmt(now()-j.start)}`:j.state==='done'?`<span class="c-green">✓</span> terminado en ${fmt(j.dur)}`:`<span class="c-red">✗</span> falló a los ${fmt(j.dur)}`}</p>`;
+    if(j.state!=='running')b+=j.state==='failed'?`<div class="bad">${esc(j.msg)}</div><p class="c-dim">Vuelve a intentarlo desde el workspace; con cambios sin guardar pide force.</p>`:`<p>${esc(j.msg)}</p>`;
+    else b+=`<p class="c-dim">${j.cancellable?'Se puede cancelar sin perder nada.':'No se cancela: dejaría el worktree a medias.'}</p>`;
+    if(j.state==='running'&&j.cancellable)b+=`<button class="act red" data-act="cancel">× cancelar</button>`;
+    if(ok&&j.kind==='remove'?j.state==='failed':ok)b+=`<button class="act" data-act="goto">ir al workspace ›</button>`;
+    if(j.state!=='running')b+=`<button class="act" data-act="discard">descartar</button>`;
+    return b+`<span class="cancel" data-act="close">cerrar</span>`;
+  }
+  return'';
+}
+function render(){
+  $('screen').innerHTML=(st.screen==='jobs'?vJobs():vHome())+statusBar();
+  const sh=sheetHtml();$('sheet').innerHTML=sh;$('back').classList.toggle('on',!!sh);
+}
+setInterval(render,120);
+
+/* ---------- input */
+let pressT;
+document.addEventListener('pointerdown',e=>{const r=e.target.closest('[data-ws]');if(r){clearTimeout(pressT);pressT=setTimeout(()=>{askRemove(+r.dataset.ws);r.dataset.long='1'},550)}});
+document.addEventListener('pointerup',()=>clearTimeout(pressT));
+function askRemove(i){
+  const w=ws[i];
+  if(w.removing){toast('se está quitando');return}
+  if(w.kind==='folder'||w.kind==='root'){toast('esta fila no se quita desde aquí');return}
+  st.ask=i;st.sheet='rmask';render();
+}
+document.addEventListener('click',e=>{
+  const t=e.target;
+  if(t.closest('#ctl')){const b=t.dataset.b;if(!b)return;
+    if(b==='reset')return reset();
+    if(b==='push')return startJob('push',1,{dur:4000});
+    const i=b==='rm-fail'?3:2;st.screen='home';st.ask=i;st.sheet='rmask';st.sel=i;window.__slow=b==='rm-slow';if(b!=='rm-fail')ws[2].dirty=false;return render()}
+  if(t.dataset.dismissall){e.stopPropagation();unseen().forEach(j=>j.seen=true);return render()}
+  const go=t.closest('[data-go]');if(go){st.screen=go.dataset.go;if(st.screen==='jobs')finished().forEach(j=>j.seen=true);return render()}
+  if(t.closest('[data-clear]')){jobs.forEach(j=>{if(j.state!=='running')j.dismissed=true});return render()}
+  const jr=t.closest('[data-job]');if(jr){st.job=+jr.dataset.job;st.sheet='job';return render()}
+  const row=t.closest('[data-ws]');
+  if(row){const i=+row.dataset.ws;if(row.dataset.long){delete row.dataset.long;return}
+    if(ws[i].removing){toast('se está quitando');return}st.sel=i;return render()}
+  if(t.closest('.back')&&!t.closest('.sheet')){st.sheet=null;return render()}
+  const a=t.dataset.act;if(!a)return;
+  if(a==='close'){st.sheet=null}
+  else if(a==='rmdo'){const i=st.ask;st.sheet=null;
+    startJob('remove',i,{dur:ws[i].dirty?2500:(window.__slow?9000:1500),fail:ws[i].dirty?'git: el worktree tiene cambios sin guardar (src/lib.rs); usa force para quitarlo':''});window.__slow=false;return}
+  else if(a==='cancel'){const j=jobs.find(x=>x.id===st.job);if(j){j.state='failed';j.end=now();j.dur=j.end-j.start;j.msg='cancelado';j.dismissed=false}st.sheet=null;toast('cancelado')}
+  else if(a==='goto'){const j=jobs.find(x=>x.id===st.job);st.sel=j.target;st.screen='home';st.sheet=null}
+  else if(a==='discard'){const j=jobs.find(x=>x.id===st.job);if(j)j.dismissed=true;st.sheet=null}
+  render();
+});
+reset();
+</script></body></html>
