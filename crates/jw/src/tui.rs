@@ -1800,12 +1800,45 @@ impl View {
             }
             None => pane_rects(doc.panes.len(), area),
         };
-        if self.full && self.level() != Level::Workspaces {
+        if self.single() {
+            // One panel at a time, under a strip of titles (REQ-722).
+            let one = (area.0, area.1 + 1, area.2, area.3.saturating_sub(1));
+            let shown = self.shown_panel(doc);
+            for (i, r) in rects.iter_mut().enumerate() {
+                *r = if i == shown { one } else { (0, 0, 0, 0) };
+            }
+        } else if self.full && self.level() != Level::Workspaces {
             for (i, r) in rects.iter_mut().enumerate() {
                 *r = if i == self.focus { area } else { (0, 0, 0, 0) };
             }
         }
         rects
+    }
+
+    /// The panel a single-panel terminal shows for `doc`: the focused one of the open workspace,
+    /// and the first of one that is only highlighted (the focus is the open workspace's).
+    fn shown_panel(&self, doc: &Workspace) -> usize {
+        let last = (doc.panes.len() + doc.views.len()).saturating_sub(1);
+        if self.opened.as_deref() == Some(doc.head.id.as_str()) {
+            self.focus.min(last)
+        } else {
+            0
+        }
+    }
+
+    /// The terminal is too narrow for panels side by side: the focused one fills the area.
+    fn single(&self) -> bool {
+        self.size.0 < SINGLE_BELOW
+    }
+
+    /// The titles of the strip a single panel has above it: the panes, then the views.
+    fn strip_titles(doc: &Workspace) -> Vec<String> {
+        let panes = doc.panes.iter().map(|p| p.title.clone());
+        let views = doc.views.iter().map(|v| match v.kind {
+            contract::ViewKind::Diff => "± diff".to_owned(),
+            contract::ViewKind::Viewer => format!("▤ {}", v.title),
+        });
+        panes.chain(views).collect()
     }
 
     /// What the sidebar's cursor can be on, in the order the rows are drawn: the row of a group
@@ -2007,6 +2040,9 @@ impl View {
     /// Whether the focused panel can be split along `dir` and leave both halves their least size
     /// (REQ-721). With no layout of the daemon's, or no panel, there is nothing to measure.
     fn room_to_split(&self, dir: SplitDir) -> bool {
+        if self.single() {
+            return true;
+        }
         let (cols, rows) = self.size;
         let Some(doc) = self.shown().filter(|d| d.layout.is_some()) else {
             return true;
@@ -2027,6 +2063,9 @@ impl View {
     /// of the layout, as the daemon puts a new view (REQ-720). The daemon may put it where it
     /// was last, so this is only an estimate.
     fn room_for_edge_panel(&self) -> bool {
+        if self.single() {
+            return true;
+        }
         let Some(doc) = self.shown() else {
             return true;
         };
@@ -2109,7 +2148,7 @@ impl View {
 
     /// Focus the panel on this side of the focused one, when there is one.
     fn focus_toward(&mut self, side: split::Side) {
-        if self.shown().is_some_and(|d| d.layout.is_none()) {
+        if self.single() || self.shown().is_some_and(|d| d.layout.is_none()) {
             self.go_panel(matches!(side, split::Side::Right | split::Side::Down));
         } else if let Some(to) = self.neighbour_toward(side) {
             self.focus = to;
@@ -3647,6 +3686,8 @@ impl View {
                 let panels = self.shown().map_or(0, |d| d.panes.len() + d.views.len());
                 if panels < 2 {
                     self.flash("solo hay un panel");
+                } else if self.single() {
+                    self.flash("con tan poco ancho se ve un panel: H J K L intercambian");
                 } else {
                     self.full = false;
                     self.pick_swap = true;
@@ -4414,6 +4455,15 @@ impl View {
             || self.worktree.is_some()
             || self.project.is_some()
         {
+            return After::Continue;
+        }
+        if self.single()
+            && self.mode == Mode::Workspaces
+            && y == 1
+            && x > SIDEBAR
+            && let (Some(ws), Some(at)) = (self.selected_id(), self.strip_panel(x, cols))
+        {
+            self.open(&ws, at);
             return After::Continue;
         }
         if self.diff.is_some() && inside(self.diff_rect(), x, y) {
@@ -6063,6 +6113,43 @@ impl View {
         g
     }
 
+    /// The strip above the one panel a narrow terminal shows: every panel's title, the shown one lit.
+    fn draw_strip(&self, g: &mut Grid, doc: &Workspace, (x, y, w): (usize, usize, usize)) {
+        let mut at = x;
+        for (i, title) in Self::strip_titles(doc).iter().enumerate() {
+            let label = format!(" {} ", clip(title, 14));
+            let width = label.chars().count();
+            if at + width > x + w {
+                break;
+            }
+            let style = if i == self.shown_panel(doc) {
+                Style::fg(look::bg()).on(look::blue()).bold()
+            } else {
+                Style::fg(look::dim()).on(look::panel())
+            };
+            g.put(at, y, &label, style);
+            at += width;
+        }
+    }
+
+    /// The panel whose title of the strip is at column `x`, when the strip is shown.
+    fn strip_panel(&self, x: usize, cols: usize) -> Option<usize> {
+        let doc = self.shown()?;
+        let end = self.panes_space(cols, self.size.1).0 + self.panes_space(cols, self.size.1).2;
+        let mut at = SIDEBAR + 1;
+        for (i, title) in Self::strip_titles(doc).iter().enumerate() {
+            let width = clip(title, 14).chars().count() + 2;
+            if at + width > end {
+                break;
+            }
+            if x >= at && x < at + width {
+                return Some(i);
+            }
+            at += width;
+        }
+        None
+    }
+
     /// The digit `S` gave each panel, in the middle of it.
     fn draw_digits(&self, g: &mut Grid, doc: Option<&Workspace>, area: Rect) {
         let Some(doc) = doc else { return };
@@ -6150,6 +6237,9 @@ impl View {
         }
         let rects = self.layout(doc, (x, y, w, h));
         let opened = self.opened.as_deref() == Some(doc.head.id.as_str());
+        if self.single() {
+            self.draw_strip(g, doc, (x, y, w));
+        }
         for (j, view) in doc.views.iter().enumerate() {
             let at = doc.panes.len() + j;
             let rect = rects.get(at).copied().unwrap_or((0, 0, 0, 0));
@@ -7080,6 +7170,8 @@ const RESIZE_STEP: i16 = 50;
 
 /// The least a panel is, in columns and rows: a split that would leave less is not made (REQ-720).
 const MIN_PANEL: (usize, usize) = (14, 5);
+/// Under this many columns the terminal shows one panel at a time (REQ-722).
+const SINGLE_BELOW: usize = 64;
 /// A panel this wide has its viewer beside it; a narrower one has it below (REQ-715).
 const WIDE_PANEL: usize = 80;
 const NO_ROOM: &str = "no cabe: f amplía un panel o cierra otro";
@@ -9200,7 +9292,7 @@ mod tests {
     fn a_split_that_leaves_a_panel_too_small_is_not_made() {
         let mut v = fixture_view();
         v.press(Key::Enter);
-        v.set_size(60, 14);
+        v.set_size(66, 14);
         assert_eq!(v.press(Key::SplitRow), After::Continue);
         assert!(v.flash.contains("no cabe"), "{}", v.flash);
         v.set_size(120, 40);
@@ -9361,6 +9453,76 @@ mod tests {
                 keep: false
             }
         );
+    }
+
+    /// REQ-722: under 64 columns the focused panel fills the area under a strip of titles, `h` `l`
+    /// and `tab` change the panel, and a click on a title does too.
+    #[test]
+    fn under_64_columns_one_panel_is_shown_under_a_strip_of_titles() {
+        let mut v = with_diff_view(false);
+        v.set_size(60, 30);
+        v.press(Key::Enter);
+        let rects = v.layout(v.shown().unwrap(), v.panes_space(60, 30));
+        let shown: Vec<usize> = (0..rects.len()).filter(|i| rects[*i].2 > 0).collect();
+        assert_eq!(shown, [v.focus], "only the focused panel has room");
+        let screen = v.plain(60, 30);
+        assert!(
+            screen.contains(" zsh ") && screen.contains("± diff"),
+            "the strip names the panels:\n{screen}"
+        );
+        let first = v.focus;
+        v.press(Key::Right);
+        assert_eq!(v.focus, first + 1, "l goes to the next panel");
+        v.press(Key::Next);
+        assert_eq!(v.focus, first + 2, "tab does");
+        v.press(Key::Left);
+        assert_eq!(v.focus, first + 1, "h goes back");
+        // a click on a title of the strip shows that panel
+        let at = v.strip_panel(SIDEBAR + 2, 60).unwrap();
+        assert_eq!(at, 0);
+        v.click(SIDEBAR + 2, 1, 60, 30);
+        assert_eq!(v.focus, 0);
+        // the diff, when it is the panel shown, has the area
+        let (diff_at, _) = v.diff_panel().unwrap();
+        let ws = v.selected_id().unwrap();
+        v.open(&ws, diff_at);
+        v.sync(with_diff_docs(false).iter());
+        assert!(
+            v.diff_rect().2 > 0 && v.diff_rect().1 == 2,
+            "{:?}",
+            v.diff_rect()
+        );
+        // wide again: all of them
+        v.set_size(120, 30);
+        let rects = v.layout(v.shown().unwrap(), v.panes_space(120, 30));
+        assert!(rects.iter().filter(|r| r.2 > 0).count() > 1);
+        // and a split needs no room check when only one is shown
+        v.set_size(40, 30);
+        assert!(matches!(v.press(Key::SplitRow), After::NewPane(..)));
+    }
+
+    /// A workspace that is only highlighted shows its first panel on a narrow terminal, whatever
+    /// the open workspace's focus was.
+    #[test]
+    fn a_highlighted_workspace_shows_a_panel_on_a_narrow_terminal() {
+        let mut v = with_diff_view(false);
+        v.set_size(60, 30);
+        v.press(Key::Enter);
+        let (diff_at, _) = v.diff_panel().unwrap();
+        let ws = v.selected_id().unwrap();
+        v.open(&ws, diff_at);
+        assert!(diff_at >= 2);
+        // the open workspace's focus is not the focus of one that is only highlighted
+        v.opened = None;
+        let doc = v.shown().unwrap();
+        assert_eq!(v.shown_panel(doc), 0);
+        let rects = v.layout(doc, v.panes_space(60, 30));
+        assert_eq!(
+            rects.iter().filter(|r| r.2 > 0).count(),
+            1,
+            "one panel is up under the strip: {rects:?}"
+        );
+        assert!(rects[0].2 > 0, "the first");
     }
 
     /// A pane that is added moves the number of every view: the focus and the keys stay in the
