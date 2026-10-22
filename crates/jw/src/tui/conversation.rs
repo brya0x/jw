@@ -285,20 +285,20 @@ impl ListState {
 
 enum Pop {
     Pick { of: Of, at: usize },
-    Name(Editor),
+    Name(Composer),
     List(ListState),
 }
 
 /// The line being typed: characters, and where the cursor is among them.
 #[derive(Default, Debug, Clone)]
-pub struct Editor {
+pub struct Composer {
     chars: Vec<char>,
     cursor: usize,
     /// Where a selection began, when there is one: it covers what lies between this and the cursor.
     anchor: Option<usize>,
 }
 
-impl Editor {
+impl Composer {
     pub fn text(&self) -> String {
         self.chars.iter().collect()
     }
@@ -558,7 +558,7 @@ impl Editor {
 /// What this terminal holds about one conversation.
 #[derive(Default)]
 pub struct Ui {
-    pub editor: Editor,
+    pub editor: Composer,
     /// The area of the agents at the right (REQ-601).
     pub agents: agents::State,
     /// The suggestion that the person dismissed with esc (REQ-573).
@@ -587,7 +587,7 @@ pub struct Ui {
     ask_at: usize,
     /// «Seguir planeando» was chosen on the plan that waits (its id) and the instruction that goes
     /// with it is being written (REQ-595).
-    refusing: Option<(String, Editor)>,
+    refusing: Option<(String, Composer)>,
     pop: Option<Pop>,
     images: Vec<(u32, Image)>,
     /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
@@ -2330,7 +2330,7 @@ impl Ui {
     fn choose(&mut self, node: &str, ask: &Ask, at: usize) -> Option<Act> {
         let key = ask.options.get(at)?.key.clone();
         if ask.kind == AskKind::Plan && key == "no" {
-            self.refusing = Some((ask.id.clone(), Editor::default()));
+            self.refusing = Some((ask.id.clone(), Composer::default()));
             return None;
         }
         Some(Act::Answer {
@@ -2343,7 +2343,7 @@ impl Ui {
 
     /// The viewer of the plan asked to keep planning: the box takes the instruction.
     pub fn refuse(&mut self, ask: &str) {
-        self.refusing = Some((ask.to_owned(), Editor::default()));
+        self.refusing = Some((ask.to_owned(), Composer::default()));
     }
 
     /// The keys while the instruction for «seguir planeando» is written.
@@ -3084,7 +3084,7 @@ impl Ui {
 
     /// The field for the conversation's name, with the one it has.
     fn open_name(&mut self, conv: &Conversation) {
-        let mut name = Editor::default();
+        let mut name = Composer::default();
         name.set(&conv.name);
         self.pop = Some(Pop::Name(name));
     }
@@ -4929,7 +4929,7 @@ mod tests {
 
     #[test]
     fn the_line_is_edited_with_the_cursor() {
-        let mut e = Editor::default();
+        let mut e = Composer::default();
         e.insert("uno dos\ntres");
         assert_eq!(e.cursor(), 12);
         assert!(e.vertical(false, false, usize::MAX));
@@ -4947,7 +4947,7 @@ mod tests {
         assert_eq!(e.text(), "uno dos\n>tres<");
         e.word_back();
         assert_eq!(e.text(), "uno dos\n", "^W takes the word before the cursor");
-        let mut e = Editor::default();
+        let mut e = Composer::default();
         e.set("abc def");
         e.kill_to_start();
         assert_eq!(e.text(), "");
@@ -4968,7 +4968,7 @@ mod tests {
     #[test]
     fn option_arrows_jump_a_word_with_shift_they_select_and_option_backspace_takes_it() {
         let (alt, both) = (KeyModifiers::ALT, KeyModifiers::ALT | KeyModifiers::SHIFT);
-        let mut e = Editor::default();
+        let mut e = Composer::default();
         e.set("uno dos tres");
         e.edit(&key(KeyCode::Left, alt));
         assert_eq!(e.cursor(), 8, "to the start of the word before");
@@ -5005,7 +5005,7 @@ mod tests {
         e.edit(&key(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(e.text(), "uno  tres", "a selection goes with backspace");
 
-        let mut e = Editor::default();
+        let mut e = Composer::default();
         e.set("uno dos tres");
         e.edit(&key(KeyCode::Backspace, alt));
         assert_eq!(
@@ -6095,12 +6095,12 @@ mod tests {
             (KeyCode::Char('\x08'), alt | ctrl),
         ];
         for (code, mods) in word {
-            let mut e = Editor::default();
+            let mut e = Composer::default();
             e.set("uno dos tres");
             e.edit(&erase::canonical(key(code, mods)));
             assert_eq!(e.text(), "uno dos ", "{code:?} {mods:?}");
         }
-        let mut e = Editor::default();
+        let mut e = Composer::default();
         e.set("uno dos");
         e.edit(&erase::canonical(key(
             KeyCode::Char('\x08'),
@@ -6132,7 +6132,7 @@ mod tests {
         let (shift, none) = (KeyModifiers::SHIFT, KeyModifiers::NONE);
         // "abcde" "fghij" "kl" at a width of 5, and then a line of its own.
         let wrapped = || {
-            let mut e = Editor::default();
+            let mut e = Composer::default();
             e.set("abcdefghijkl\nxyz");
             e
         };
@@ -6208,7 +6208,7 @@ mod tests {
         assert_eq!(e.selection(), None);
 
         // shift+home and shift+end select to the ends of the line.
-        let mut e = Editor::default();
+        let mut e = Composer::default();
         e.set("uno dos\ntres cuatro");
         e.cursor = 12;
         e.edit(&key(KeyCode::Home, shift));
