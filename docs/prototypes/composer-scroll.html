@@ -1,0 +1,300 @@
+<meta charset="utf-8">
+<title>jw · the composer grows to a limit and then scrolls, with the cursor always in view</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1400px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:92ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button,select{font:12px var(--mono);color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover,select:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.bar label{font:12px var(--mono);color:var(--mut);display:flex;gap:6px;align-items:center}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:6px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:auto}
+.term pre{margin:0;font:13px/1.3 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus{box-shadow:0 0 0 2px var(--blue)}
+.hint{font:12px var(--mono);color:var(--mut);max-width:92ch}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.mag{color:var(--magenta)}.b{font-weight:700}
+.hd{background:var(--panel);color:var(--dim)}
+.band{background:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.box h2{margin:0 0 8px}
+.box ol,.box ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.box li{max-width:100ch}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The composer: grow to a limit, then scroll</h1>
+    <p>Today the composer grows to five rows of text and then shows a window of five rows that follows the cursor (<code>field.rs</code> <code>MAX_TEXT_ROWS</code>, <code>wrap</code>; REQ-254, REQ-256). The window is worked out from the cursor alone on every frame, with no memory, and nothing says that there is more text out of sight. Both terminals below hold the <b>same text and cursor</b>: the left one is what jw does now, the right one is the proposal. Click a terminal and type, or use the buttons.</p>
+  </div>
+  <div class="bar" role="group" aria-label="Text">
+    <button id="paste14" type="button">paste 14 lines</button>
+    <button id="paste30" type="button">paste 30 lines</button>
+    <button id="long" type="button">paste a very long line</button>
+    <button id="clear" type="button">clear</button>
+    <button id="top" type="button">cursor to the start</button>
+  </div>
+  <div class="bar" role="group" aria-label="Proposal">
+    <label>height of the terminal <select id="o-h"><option value="24">24 rows</option><option value="36">36 rows</option><option value="16">16 rows (a small split)</option></select></label>
+    <label>it grows to <select id="o-cap"><option value="5">5 rows (as now)</option><option value="third" selected>a third of the height (at least 5)</option><option value="max">what leaves the list 4 rows</option></select></label>
+    <label>the window <select id="o-win"><option value="state" selected>keeps its place (moves only when the cursor leaves it)</option><option value="follow">follows the cursor (as now)</option></select></label>
+    <label>what says there is more <select id="o-ind"><option value="bar" selected>bar and count</option><option value="none">nothing (as now)</option></select></label>
+    <label>wheel over the field <select id="o-wheel"><option value="on" selected>scrolls the field</option><option value="off">does nothing</option></select></label>
+  </div>
+  <div class="stage">
+    <div class="col"><h2>NOW (5 rows, follows the cursor, no sign)</h2><div class="term"><pre id="scr-a" tabindex="0" aria-label="The composer as it is today. Type to edit."></pre></div></div>
+    <div class="col"><h2>PROPOSAL</h2><div class="term"><pre id="scr-b" tabindex="0" aria-label="The composer as proposed. Type to edit."></pre></div></div>
+  </div>
+  <div class="hint" id="info"></div>
+  <div class="hint">Keys: letters type, <kbd>Enter</kbd> sends (the text goes to the list), <kbd>Shift+Enter</kbd> makes a new line, <kbd>←</kbd> <kbd>→</kbd> move, <kbd>↑</kbd> <kbd>↓</kbd> move one visible row (REQ-680; on the first or last row they still scroll the list, REQ-682, not drawn here), <kbd>Home</kbd> <kbd>End</kbd> go to the start or end of the line (as far as the <kbd>\n</kbd>, REQ-683). The wheel is drawn over the field only when it is on. The phone has its own composer in Compose and is not part of this.</div>
+
+  <div class="box"><h2>WHAT CHANGES</h2>
+    <ul>
+      <li><b>The limit</b> stops being the constant 5 and follows the height of the pane, so a tall terminal gives the person more of what they write, and the list never goes below 4 rows.</li>
+      <li><b>The window has a place.</b> Now, moving down from the top of a long text keeps the cursor glued to the first row while the text slides under it, because <code>start = min(rows − 5, cursor row)</code> is worked out again every frame. With a place of its own (an offset), the cursor moves inside the window and the text slides only when the cursor reaches an edge, one row at a time.</li>
+      <li><b>The field says there is more:</b> a thin bar at the right of the text rows with a thumb, and at the right of the chips row <code>↑3 ↓6</code> (rows out of sight above and below). Nothing is drawn when everything fits.</li>
+      <li><b>The wheel</b> over the text rows moves the window without moving the cursor; the next key brings the window back to the cursor.</li>
+      <li>The offset lives beside the text (the <code>Editor</code> or the <code>Ui</code> that holds it), because <code>Field</code> is made again from <code>input</code> on every frame and cannot remember it. REQ-254 stays; REQ-256 changes from «five rows» to «the limit» and gains the window, the bar and the wheel.</li>
+    </ul>
+  </div>
+
+  <div class="box"><h2>TO DECIDE</h2>
+    <ol>
+      <li><b>The limit.</b> Recommended: a third of the pane's height, never below 5 (24 rows → 8, 36 rows → 12), and never so much that the list keeps fewer than 4 rows. «As now» keeps 5; «what leaves the list 4 rows» lets a long text take almost the whole pane.</li>
+      <li><b>A window that keeps its place</b> (recommended) or the window as it is. It needs one number held beside the text.</li>
+      <li><b>The bar and the count</b> (recommended), or nothing. The bar sits in the columns the field already keeps free at its right (<code>MARKS</code>), so the wrap width does not change.</li>
+      <li><b>The wheel over the field</b> (recommended if the terminal client already receives wheel events over the band: the spec has to check it, REQ-682 only names ↑ and ↓). Off leaves the wheel with the list.</li>
+      <li><b>The name.</b> The type that holds the text is <code>Editor</code> (<code>tui/conversation.rs</code>) and the file that draws it is <code>field.rs</code>, which also draws the shell pane's field. Recommended: rename the type to <code>Composer</code> and leave <code>field.rs</code> as the drawing of any field, in a commit of its own that changes no behaviour. Renaming the file too would put the shell pane's field in a file called composer.</li>
+      <li><b>The phone</b> is left as it is: its composer is Compose and scrolls by itself.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+const W = 80, PROMPT = 2, MARKS = 4, AROUND = 4, MINLIST = 4;
+const IW = W - 2, TW = Math.max(8, IW - (PROMPT + MARKS + 2));
+
+const LIST = [
+  ['dim', 'claude  ·  conversación'],
+  ['', ''],
+  ['blue', 'tú'], ['', 'arregla el login con google, falla con el redirect'],
+  ['', ''],
+  ['green', 'claude'], ['', 'Miro el flujo de OAuth en auth/google.rs.'],
+  ['dim', '  ◆ Read  src/auth/google.rs'],
+  ['dim', '  ◆ Read  src/auth/session.rs'],
+  ['', 'El redirect_uri se arma con el host de la petición y Google lo rechaza'],
+  ['', 'cuando hay un proxy delante. Lo saco de la configuración.'],
+  ['dim', '  ◆ Edit  src/auth/google.rs  +4 −2'],
+  ['', ''],
+  ['blue', 'tú'], ['', 'y en los tests?'],
+  ['', ''],
+  ['green', 'claude'], ['', 'Agrego un test con el host detrás de un proxy.'],
+  ['dim', '  ◆ Edit  src/auth/google_test.rs  +18'],
+  ['dim', '  ◆ Bash  cargo test auth'],
+  ['green', '  ✓ 14 passed'],
+  ['', ''],
+];
+
+// A faithful port of field.rs `wrap` (no selection, no marks): every row of the text, where each begins, and the cursor's place.
+function wrap(chars, cursor, width) {
+  const rows = [''], starts = [0];
+  let at = [0, 0], placed = false;
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    if (c !== '\n' && rows[rows.length - 1].length >= width) { rows.push(''); starts.push(i); }
+    if (i === cursor) { at = [rows.length - 1, rows[rows.length - 1].length]; placed = true; }
+    if (c === '\n') { rows.push(''); starts.push(i + 1); }
+    else rows[rows.length - 1] += c;
+  }
+  if (!placed) {
+    if (rows[rows.length - 1].length >= width) { rows.push(''); starts.push(chars.length); }
+    at = [rows.length - 1, rows[rows.length - 1].length];
+  }
+  return { rows, starts, at };
+}
+
+// How many rows of text the field grows to, for a pane `h` rows high.
+function capFor(rule, h) {
+  const room = h - 1 - AROUND - MINLIST;
+  if (rule === 'max') return Math.max(1, room);
+  if (rule === 'third') return Math.max(1, Math.min(room, Math.max(5, Math.floor(h / 3))));
+  return Math.min(5, Math.max(1, room));
+}
+
+// Where the window of `cap` rows begins: now, a function of the cursor alone; proposed, the offset moved the least that keeps the cursor in view.
+function windowStart(mode, n, cap, cursorRow, off) {
+  const last = Math.max(0, n - cap);
+  if (mode === 'follow') return Math.min(last, cursorRow);
+  let o = Math.min(off, last);
+  if (cursorRow < o) o = cursorRow;
+  if (cursorRow >= o + cap) o = cursorRow - cap + 1;
+  return Math.max(0, Math.min(o, last));
+}
+
+// The thumb of the bar: where it is and how long, in `v` rows, for a window at `off` of `n` rows.
+function thumb(n, v, off) {
+  const len = Math.max(1, Math.round(v * v / n));
+  const travel = v - len;
+  let pos = n === v ? 0 : Math.round(off / (n - v) * travel);
+  if (travel >= 2) {
+    if (off > 0) pos = Math.max(pos, 1);
+    if (off + v < n) pos = Math.min(pos, travel - 1);
+  }
+  return [pos, len];
+}
+
+class Scr {
+  constructor(h) { this.h = h; this.cells = Array.from({ length: h }, () => Array.from({ length: W }, () => [' ', ''])); }
+  put(y, x, s, cls = '') { for (const ch of s) { if (y >= 0 && y < this.h && x >= 0 && x < W) this.cells[y][x] = [ch, cls]; x++; } }
+  fill(y, cls) { for (let x = 0; x < W; x++) this.cells[y][x] = [this.cells[y][x][0], cls + ' ' + this.cells[y][x][1]]; }
+  html() {
+    const esc = s => s === '<' ? '&lt;' : s === '>' ? '&gt;' : s === '&' ? '&amp;' : s;
+    return this.cells.map(r => {
+      let out = '', cur = null, buf = '';
+      for (const [ch, cls] of r) {
+        if (cls !== cur) { if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; }
+        buf += esc(ch);
+      }
+      if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf;
+      return out;
+    }).join('\n');
+  }
+}
+
+const model = { text: [], cursor: 0, sent: [] };
+
+function view(cfg, st) {
+  const w = wrap(model.text, model.cursor, TW);
+  const n = w.rows.length;
+  const cap = cfg.cap;
+  const start = st.peek !== null ? Math.min(st.peek, Math.max(0, n - cap)) : windowStart(cfg.win, n, cap, w.at[0], st.off);
+  return { w, n, cap, start, v: Math.min(n, cap) };
+}
+
+function draw(cfg, st) {
+  const g = new Scr(cfg.h);
+  const V = view(cfg, st);
+  if (st.peek === null) st.off = V.start;
+  const band = AROUND + V.v, top = cfg.h - band;
+  g.put(0, 1, LIST[0][1], 'hd'); g.fill(0, 'hd');
+  const lines = LIST.slice(1).concat(model.sent.map(s => ['blue', '❯ ' + s]));
+  const room = top - 1, shown = lines.slice(Math.max(0, lines.length - room));
+  shown.forEach(([c, s], i) => g.put(1 + room - shown.length + i, 1, s.slice(0, IW), c));
+  for (let y = top; y < cfg.h; y++) g.fill(y, 'band');
+  g.put(top + 1, 3, '▸ ~/ws/jw', 'cyan');
+  g.put(top + 1, 14, '⎇ feat/composer-scroll', 'mag');
+  const above = V.start, below = V.n - V.start - V.v;
+  if (cfg.ind && V.n > V.v) {
+    const s = `↑${above} ↓${below}`;
+    g.put(top + 1, W - 2 - s.length, s, 'yellow');
+  }
+  const rows = V.w.rows.slice(V.start, V.start + V.v);
+  const empty = model.text.length === 0;
+  rows.forEach((r, i) => {
+    const y = top + 3 + i;
+    if (i === 0) { g.put(y, 1, '❯', 'green'); g.put(y, 76, '➤', 'blue'); }
+    if (empty && i === 0) g.put(y, 3, 'escribe un mensaje', 'dim'); else g.put(y, 3, r);
+  });
+  if (cfg.ind && V.n > V.v) {
+    const [pos, len] = thumb(V.n, V.v, V.start);
+    for (let i = 0; i < V.v; i++) {
+      const on = i >= pos && i < pos + len;
+      g.put(top + 3 + i, 78, on ? '┃' : '│', on ? 'blue' : 'dim');
+    }
+  }
+  const cr = V.w.at[0] - V.start;
+  if (cr >= 0 && cr < V.v) {
+    const y = top + 3 + cr, x = 3 + V.w.at[1];
+    const [ch] = g.cells[y][x];
+    g.cells[y][x] = [ch === ' ' ? ' ' : ch, 'cur band'];
+  }
+  return { html: g.html(), V };
+}
+
+const cfgA = () => ({ h: +$('o-h').value, cap: Math.min(5, capFor('5', +$('o-h').value)), win: 'follow', ind: false });
+const cfgB = () => ({ h: +$('o-h').value, cap: capFor($('o-cap').value, +$('o-h').value), win: $('o-win').value, ind: $('o-ind').value === 'bar' });
+const stA = { off: 0, peek: null }, stB = { off: 0, peek: null };
+
+function $(id) { return document.getElementById(id); }
+function render() {
+  const a = draw(cfgA(), stA), b = draw(cfgB(), stB);
+  $('scr-a').innerHTML = a.html; $('scr-b').innerHTML = b.html;
+  $('info').textContent = `text: ${a.V.n} visible rows  ·  now: shows ${a.V.v} (rows ${a.V.start + 1}–${a.V.start + a.V.v})  ·  proposal: limit ${b.V.cap}, shows ${b.V.v} (rows ${b.V.start + 1}–${b.V.start + b.V.v}), the list keeps ${cfgB().h - 1 - AROUND - b.V.v} rows`;
+}
+
+function insert(s) { model.text.splice(model.cursor, 0, ...s); model.cursor += [...s].length; }
+function setText(s) { model.text = [...s]; model.cursor = model.text.length; }
+function moveRow(d) {
+  const w = wrap(model.text, model.cursor, TW), r = w.at[0] + d;
+  if (r < 0 || r >= w.rows.length) return;
+  model.cursor = w.starts[r] + Math.min(w.at[1], w.rows[r].length);
+}
+function lineEdge(end) {
+  let i = model.cursor;
+  if (end) while (i < model.text.length && model.text[i] !== '\n') i++;
+  else while (i > 0 && model.text[i - 1] !== '\n') i--;
+  model.cursor = i;
+}
+function key(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  let used = true;
+  if (k.length === 1) insert(k);
+  else if (k === 'Enter') {
+    if (e.shiftKey) insert('\n');
+    else if (model.text.length) { model.sent.push(model.text.join('').split('\n')[0]); model.text = []; model.cursor = 0; stA.off = stB.off = 0; }
+  }
+  else if (k === 'Backspace') { if (model.cursor > 0) { model.text.splice(model.cursor - 1, 1); model.cursor--; } }
+  else if (k === 'Delete') model.text.splice(model.cursor, 1);
+  else if (k === 'ArrowLeft') model.cursor = Math.max(0, model.cursor - 1);
+  else if (k === 'ArrowRight') model.cursor = Math.min(model.text.length, model.cursor + 1);
+  else if (k === 'ArrowUp') moveRow(-1);
+  else if (k === 'ArrowDown') moveRow(1);
+  else if (k === 'Home') lineEdge(false);
+  else if (k === 'End') lineEdge(true);
+  else used = false;
+  if (used) { e.preventDefault(); stA.peek = stB.peek = null; render(); }
+}
+
+function lines(n) { return Array.from({ length: n }, (_, i) => `línea ${i + 1}: ` + 'texto que se escribe en el composer'.slice(0, 8 + (i * 7) % 28)).join('\n'); }
+
+if (typeof document !== 'undefined') {
+  for (const id of ['scr-a', 'scr-b']) $(id).addEventListener('keydown', key);
+  $('scr-b').addEventListener('wheel', e => {
+    if ($('o-wheel').value !== 'on') return;
+    const c = cfgB(), V = view(c, stB);
+    if (V.n <= V.v) return;
+    e.preventDefault();
+    const cur = stB.peek === null ? V.start : stB.peek;
+    stB.peek = Math.max(0, Math.min(V.n - V.v, cur + (e.deltaY > 0 ? 1 : -1)));
+    render();
+  }, { passive: false });
+  $('paste14').onclick = () => { setText(lines(14)); stA.peek = stB.peek = null; render(); $('scr-b').focus(); };
+  $('paste30').onclick = () => { setText(lines(30)); stA.peek = stB.peek = null; render(); $('scr-b').focus(); };
+  $('long').onclick = () => { setText('Quiero que el flujo de login con Google deje de fallar cuando hay un proxy delante: el redirect_uri se arma con el host de la petición y Google lo rechaza, así que hay que sacarlo de la configuración y cubrirlo con un test que ponga el host detrás de un proxy.'); stA.peek = stB.peek = null; render(); $('scr-b').focus(); };
+  $('clear').onclick = () => { model.text = []; model.cursor = 0; stA.off = stB.off = 0; stA.peek = stB.peek = null; render(); };
+  $('top').onclick = () => { model.cursor = 0; stA.peek = stB.peek = null; render(); $('scr-b').focus(); };
+  for (const id of ['o-h', 'o-cap', 'o-win', 'o-ind', 'o-wheel']) $(id).onchange = () => { stA.peek = stB.peek = null; render(); };
+  setText(lines(14)); model.cursor = 0;
+  render();
+} else {
+  globalThis.__T = { wrap, capFor, windowStart, thumb, model, view, draw, stA, stB, cfg: { A: (h) => ({ h, cap: Math.min(5, capFor('5', h)), win: 'follow', ind: false }) } };
+}
+</script>
