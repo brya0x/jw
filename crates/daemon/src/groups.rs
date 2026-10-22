@@ -89,18 +89,8 @@ pub fn delete(shared: &Shared, group: &str) -> Done {
 /// Put the workspace's repository (every workspace with its key) in `group`, or in none.
 pub fn move_to(shared: &Shared, workspace: &str, group: Option<&str>) -> Done {
     let mut core = shared.lock();
-    let Some(key) = core
-        .model
-        .workspaces
-        .iter()
-        .find(|w| w.id == workspace)
-        .map(|w| w.group_key())
-    else {
-        return Err(err(
-            ErrorCode::NotFound,
-            format!("no workspace {workspace}"),
-        ));
-    };
+    // a workspace that is being removed is `conflict`, as for every command that looks one up (REQ-651)
+    let key = core.workspace(workspace)?.group_key();
     match group {
         Some(g) if core.model.groups.iter().any(|x| x.id == g) => {
             core.model.grouped.insert(key, g.to_owned());
