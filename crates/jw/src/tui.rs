@@ -4307,8 +4307,28 @@ impl View {
             return After::Continue;
         };
         let pane = doc.panes[i].id.clone();
+        if self.conv_wheel(&pane, rects[i], x, y, !down) {
+            return After::Continue;
+        }
         self.scroll_pane(&pane, rects[i], !down, SCROLL_STEP);
         After::Continue
+    }
+
+    /// The wheel over a row of text of a conversation's field moves the field's window and not the
+    /// list (REQ-707); `true` when it did.
+    fn conv_wheel(&mut self, pane: &str, rect: Rect, x: usize, y: usize, up: bool) -> bool {
+        let Some(node) = self.conv_node(pane) else {
+            return false;
+        };
+        let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get(&node)) else {
+            return false;
+        };
+        let full = inner(rect);
+        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        if area.is_some_and(|(ax, ..)| x >= ax) {
+            return false;
+        }
+        ui.wheel(conv, room, y, up)
     }
 
     /// How many columns the file tree takes from the panels' area.
@@ -12896,6 +12916,50 @@ mod tests {
         let (x, y) = find_in(&v, "Listo en 11 s", 24);
         v.scroll(false, x, y, 120, 24);
         v.scroll(true, x, y, 120, 24);
+    }
+
+    /// REQ-707: the wheel over a row of text of a conversation's field moves the field's window; over the list it scrolls the list.
+    #[test]
+    fn the_wheel_over_the_composers_text_moves_its_window_and_over_the_list_scrolls_the_list() {
+        let mut v = conv_view(true);
+        let text: Vec<String> = (1..=30).map(|n| format!("w{n:02}")).collect();
+        v.conv_ui
+            .get_mut(CONV)
+            .unwrap()
+            .editor
+            .set(&text.join("\n"));
+        let (cols, rows) = (120, 40);
+        v.set_size(cols, rows);
+        let before = v.plain(cols, rows);
+        let shown = |p: &str| -> Vec<usize> {
+            (1..=30)
+                .filter(|n| p.contains(&format!("w{n:02}")))
+                .collect()
+        };
+        let at_end = shown(&before);
+        assert_eq!(
+            at_end.last(),
+            Some(&30),
+            "the window shows the end of the text"
+        );
+        assert!(at_end.len() < 30, "and the text does not fit");
+        let cursor = v.conv_ui[CONV].editor.cursor();
+        let (x, y) = find_in(&v, "w30", rows);
+        assert_eq!(v.scroll(false, x, y, cols, rows), After::Continue);
+        let moved = shown(&v.plain(cols, rows));
+        assert_eq!(moved.last(), Some(&29), "a notch up moved the window a row");
+        assert_eq!(
+            v.conv_ui[CONV].editor.cursor(),
+            cursor,
+            "and not the cursor"
+        );
+        // over the list the wheel is the list's: the window stays
+        let (lx, ly) = find_in(&v, "Publicado", rows);
+        v.scroll(false, lx, ly, cols, rows);
+        assert_eq!(shown(&v.plain(cols, rows)).last(), Some(&29));
+        // a key brings the window back to the cursor
+        v.press_key(plain(KeyCode::Left));
+        assert_eq!(shown(&v.plain(cols, rows)).last(), Some(&30));
     }
 
     #[test]

@@ -577,6 +577,9 @@ pub struct Ui {
     /// The row of the text the window of the field began at in the last frame (REQ-704); only the
     /// draw stores it, so every place that reads the field sees the rows the draw showed.
     offset: Cell<usize>,
+    /// Where the wheel put the window while the cursor stayed (REQ-707), with the length of the text
+    /// and the cursor it was put over: the peek is over when either changes, and with any key.
+    peek: Cell<Option<(usize, usize, usize)>>,
     /// What a drag of the mouse covers in the list, and the drag while the button is down
     /// (REQ-461).
     sel: Option<select::Selection>,
@@ -1526,6 +1529,16 @@ impl Ui {
         }
     }
 
+    /// The row the window was put at with the wheel, while it still holds (REQ-707).
+    fn peeked(&self) -> Option<usize> {
+        self.peek
+            .get()
+            .filter(|&(_, len, cursor)| {
+                (len, cursor) == (self.editor.chars.len(), self.editor.cursor)
+            })
+            .map(|(row, ..)| row)
+    }
+
     fn field(&self, conv: &Conversation, (iw, ih): (usize, usize)) -> Field {
         self.text_width.set(field::text_width(iw));
         Field::selecting(
@@ -1540,6 +1553,7 @@ impl Ui {
                 limit: field::limit(ih),
                 offset: Some(self.offset.get()),
                 bar: true,
+                pin: self.peeked(),
             },
         )
     }
@@ -1560,7 +1574,10 @@ impl Ui {
         }
         self.now.set(now_ms);
         let field = self.field(conv, (iw, ih));
-        self.offset.set(field.first_row());
+        // While the wheel has the window elsewhere the next frame still moves from the offset the last one had.
+        if self.peeked().is_none() {
+            self.offset.set(field.first_row());
+        }
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         let lines = self.lines(conv, iw - 2);
         let rows = self.list_rows(&geo, lines.len());
@@ -2103,6 +2120,7 @@ impl Ui {
     // ---- keys ----
 
     pub fn key(&mut self, conv: &Conversation, ev: &KeyEvent) -> Option<Act> {
+        self.peek.set(None);
         let node = conv.head.id.clone();
         // A list opened over the box that asks (the whole plan) has the keys until it is closed.
         if matches!(self.pop, Some(Pop::List(_))) {
@@ -2676,6 +2694,38 @@ impl Ui {
         }
     }
 
+    /// The wheel over a row of text of the field, `up` or down, when the text has more rows than
+    /// the window: the window moves a row without the cursor (REQ-707); `true` when it did, and
+    /// `false` leaves the wheel to the list. `inner` is the box the conversation is drawn in.
+    pub fn wheel(
+        &self,
+        conv: &Conversation,
+        (_, iy, iw, ih): (usize, usize, usize, usize),
+        y: usize,
+        up: bool,
+    ) -> bool {
+        if self.pop.is_some() || conv.ask.is_some() || iw < 12 || ih < 8 {
+            return false;
+        }
+        let field = self.field(conv, (iw, ih));
+        let shown = field.shown_rows();
+        if field.total_rows() <= shown {
+            return false;
+        }
+        let first = self.geo(conv, (iy, ih), field.band_rows()).band.0 + Field::FIRST_TEXT;
+        if !(first..first + shown).contains(&y) {
+            return false;
+        }
+        let row = if up {
+            field.first_row().saturating_sub(1)
+        } else {
+            (field.first_row() + 1).min(field.total_rows() - shown)
+        };
+        let ed = &self.editor;
+        self.peek.set(Some((row, ed.chars.len(), ed.cursor)));
+        true
+    }
+
     pub fn scroll_by(&mut self, up: bool, n: usize) {
         if let Some(Pop::List(l)) = &mut self.pop {
             let last = visible(l).len().saturating_sub(1);
@@ -2918,6 +2968,9 @@ impl Ui {
         let node = conv.head.id.clone();
         let field = self.field(conv, (iw, ih));
         let geo = self.geo(conv, (iy, ih), field.band_rows());
+        if y >= geo.band.0 {
+            self.peek.set(None);
+        }
         // The strip of the checklist opens and closes with a click.
         if self.pop.is_none() && geo.todo_rows > 0 && y == iy {
             self.todos_open = !self.todos_open;
@@ -3791,6 +3844,127 @@ mod tests {
             rows.iter()
                 .all(|r| !r.contains('↑') && !r.contains('┃') && !r.contains('│'))
         );
+    }
+
+    /// The first row of text of the band in `SMALL`: the band is twelve rows high, four and eight of text.
+    const SMALL_FIRST_TEXT: usize = SMALL.1 + SMALL.3 - 1 - 12 + Field::FIRST_TEXT;
+
+    fn text_rows(rows: &[String]) -> Vec<String> {
+        (SMALL_FIRST_TEXT..SMALL_FIRST_TEXT + 8)
+            .map(|y| rows[y][..40].trim().to_owned())
+            .collect()
+    }
+
+    /// REQ-707: the wheel over the rows of text moves the window a row a notch and leaves the cursor, within the text.
+    #[test]
+    fn the_wheel_over_the_text_moves_the_window_and_not_the_cursor() {
+        let (ui, conv) = fourteen_lines();
+        let cursor = ui.editor.cursor();
+        let y = SMALL_FIRST_TEXT + 3;
+        assert!(ui.wheel(&conv, SMALL, y, true));
+        let rows = frame_in(&ui, &conv, SMALL);
+        assert_eq!(text_rows(&rows)[0], "❯ l06", "one row up from l07");
+        assert!(
+            rows.iter().any(|r| r.contains("↑5 ↓1")),
+            "the count follows the window"
+        );
+        assert_eq!(ui.editor.cursor(), cursor, "the cursor stays");
+        for _ in 0..9 {
+            assert!(ui.wheel(&conv, SMALL, y, true));
+        }
+        let rows = frame_in(&ui, &conv, SMALL);
+        assert_eq!(text_rows(&rows)[0], "❯ l01", "at the top it stops");
+        assert!(rows.iter().any(|r| r.contains("↑0 ↓6")));
+        for _ in 0..9 {
+            assert!(ui.wheel(&conv, SMALL, y, false));
+        }
+        let rows = frame_in(&ui, &conv, SMALL);
+        assert_eq!(text_rows(&rows)[7], "l14", "and at the bottom");
+        assert!(rows.iter().any(|r| r.contains("↑6 ↓0")));
+    }
+
+    /// REQ-707: the cursor is not drawn while the window is away from it.
+    #[test]
+    fn the_cursor_is_not_drawn_while_the_window_is_away_from_it() {
+        let (ui, conv) = fourteen_lines();
+        let lit = |ui: &Ui| {
+            let mut g = Grid::new(100, 60);
+            ui.draw(&mut g, &conv, SMALL, &[], true, 0);
+            (SMALL_FIRST_TEXT..SMALL_FIRST_TEXT + 8)
+                .any(|y| (0..g.cols).any(|x| g.cells[y * g.cols + x].1.reverse))
+        };
+        assert!(
+            lit(&ui),
+            "the cursor is on the last row, which the window shows"
+        );
+        assert!(ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, true));
+        assert!(!lit(&ui), "one row up the last row is out of the window");
+        assert!(ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, false));
+        assert!(lit(&ui), "and back it is drawn again");
+    }
+
+    /// REQ-707: a key, a click in the field and a change of the text bring the window back to the cursor, from the offset the last frame had.
+    #[test]
+    fn a_key_a_click_or_a_change_of_the_text_end_the_peek() {
+        let ends = |end: &dyn Fn(&mut Ui, &Conversation)| {
+            let (mut ui, conv) = fourteen_lines();
+            for _ in 0..6 {
+                ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, true);
+            }
+            assert_eq!(text_rows(&frame_in(&ui, &conv, SMALL))[0], "❯ l01");
+            assert_eq!(ui.offset.get(), 6, "the frame of a peek stores nothing");
+            end(&mut ui, &conv);
+            let rows = frame_in(&ui, &conv, SMALL);
+            assert_eq!(
+                text_rows(&rows)[0],
+                "❯ l07",
+                "back where it was, the cursor in view"
+            );
+        };
+        ends(&|ui, conv| drop(press(ui, conv, KeyCode::Left)));
+        ends(&|ui, conv| drop(press(ui, conv, KeyCode::Char('x'))));
+        ends(&|ui, conv| drop(ui.click(conv, SMALL, 20, SMALL_FIRST_TEXT + 2)));
+        ends(&|ui, _| ui.editor.insert("y"));
+    }
+
+    /// REQ-707: the wheel is the list's over anything but a row of text of a window that does not hold all of it.
+    #[test]
+    fn the_wheel_is_left_to_the_list_off_the_text_rows_or_when_the_text_fits() {
+        let (mut ui, conv) = fourteen_lines();
+        for y in [
+            SMALL.1 + 3,
+            SMALL_FIRST_TEXT - 2,
+            SMALL_FIRST_TEXT - 1,
+            SMALL_FIRST_TEXT + 8,
+        ] {
+            assert!(
+                !ui.wheel(&conv, SMALL, y, true),
+                "row {y} is not a row of text"
+            );
+        }
+        assert!(ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT + 7, true));
+        ui.editor.set("l01\nl02\nl03");
+        frame_in(&ui, &conv, SMALL);
+        assert!(
+            !ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, true),
+            "a text that fits"
+        );
+    }
+
+    /// REQ-707, RISK-85: a double click after the wheel moved the window picks the word that is drawn.
+    #[test]
+    fn a_double_click_after_the_wheel_picks_the_word_that_is_drawn() {
+        let (ui, conv) = fourteen_lines();
+        for _ in 0..4 {
+            ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, true);
+        }
+        let rows = frame_in(&ui, &conv, SMALL);
+        let y = row_of(&rows, "l04");
+        let x = rows[y].chars().position(|c| c == 'l').unwrap();
+        let mut ui = ui;
+        assert!(ui.select_word_in_field(&conv, SMALL, x + 1, y));
+        let (from, to) = ui.editor.selection().expect("a word is selected");
+        assert_eq!(&ui.editor.text()[from..to], "l04");
     }
 
     /// REQ-703: the limit does not change when a turn starts, so the band does not jump.

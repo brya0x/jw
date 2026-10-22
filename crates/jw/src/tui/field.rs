@@ -110,6 +110,9 @@ pub struct Window {
     pub offset: Option<usize>,
     /// Whether a text that has more rows than the window says so: the bar and the count (REQ-706).
     pub bar: bool,
+    /// The row the window begins at when the person looked elsewhere with the wheel (REQ-707):
+    /// it wins over the cursor, which may then be out of view.
+    pub pin: Option<usize>,
 }
 
 impl Window {
@@ -118,6 +121,7 @@ impl Window {
         limit: MAX_TEXT_ROWS,
         offset: None,
         bar: false,
+        pin: None,
     };
 }
 
@@ -130,6 +134,8 @@ pub struct Field {
     total: usize,
     /// The bar and the count are drawn when the text has more rows than are shown.
     bar: bool,
+    /// The cursor is in one of the rows shown.
+    seen: bool,
     cursor: (usize, usize),
     /// The cells (row, column) that a selection covers.
     selected: Vec<(usize, usize)>,
@@ -160,6 +166,7 @@ impl Field {
                 first: 0,
                 total: 1,
                 bar: false,
+                seen: true,
                 cursor: (0, col),
                 selected: Vec::new(),
                 lit: Vec::new(),
@@ -170,6 +177,7 @@ impl Field {
                 first: 0,
                 total: 1,
                 bar: false,
+                seen: true,
                 cursor: (0, 0),
                 selected: Vec::new(),
                 lit: Vec::new(),
@@ -195,6 +203,15 @@ impl Field {
             marks,
             window,
         )
+    }
+
+    /// How many rows of text are shown, and how many the whole text has.
+    pub fn shown_rows(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn total_rows(&self) -> usize {
+        self.total
     }
 
     /// The row of the whole text that the first row shown is: the offset a window that
@@ -351,7 +368,7 @@ impl Field {
         }
         let (row, col) = self.cursor;
         let at = (tx + col, first + row);
-        if focused && at.0 < send_at(ix, iw) && at.1 < g.rows && at.0 < g.cols {
+        if focused && self.seen && at.0 < send_at(ix, iw) && at.1 < g.rows && at.0 < g.cols {
             g.cells[at.1 * g.cols + at.0].1.reverse = true;
         }
     }
@@ -419,9 +436,10 @@ fn wrap(
     }
     let total = rows.len();
     let limit = window.limit;
-    let start = match window.offset {
-        Some(offset) => window_start(total, limit, at.0, offset),
-        None => total.saturating_sub(limit).min(at.0),
+    let start = match (window.pin, window.offset) {
+        (Some(pin), _) => pin.min(total.saturating_sub(limit)),
+        (None, Some(offset)) => window_start(total, limit, at.0, offset),
+        (None, None) => total.saturating_sub(limit).min(at.0),
     };
     let kept: Vec<String> = rows.into_iter().skip(start).take(limit).collect();
     Field {
@@ -429,7 +447,8 @@ fn wrap(
         first: start,
         total,
         bar: window.bar,
-        cursor: (at.0 - start, at.1),
+        seen: (start..start + limit).contains(&at.0),
+        cursor: (at.0.saturating_sub(start), at.1),
         selected: selected
             .into_iter()
             .filter_map(|(r, c)| r.checked_sub(start).map(|r| (r, c)))
@@ -602,6 +621,7 @@ mod tests {
                     limit: 8,
                     offset: Some(offset),
                     bar: true,
+                    pin: None,
                 },
             )
         };
@@ -694,6 +714,7 @@ mod tests {
                 limit: 8,
                 offset: Some(offset),
                 bar,
+                pin: None,
             },
         )
     }
@@ -814,6 +835,7 @@ mod tests {
                         limit: usize::MAX,
                         offset: None,
                         bar: false,
+                        pin: None,
                     },
                 );
                 assert_eq!(
