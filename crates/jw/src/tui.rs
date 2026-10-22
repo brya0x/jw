@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use contract::{
     Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, FileKind, FileListing,
     FoundFiles, GitMark, Job, JobKind, JobState, Node, Pane, Program, Session, SplitDir, Workspace,
-    WorkspaceKind,
+    WorkspaceKind, WorkspaceSummary,
 };
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -314,6 +314,13 @@ pub(crate) const URGENCY: [AttentionKind; 8] = [
     AttentionKind::Merged,
 ];
 
+/// The first row of the sidebar's list that is drawn, when `avail` rows fit and the cursor is at
+/// row `at`: the list moves just far enough to keep the cursor in view (REQ-671). It depends on
+/// nothing but the cursor, so the drawing and a click find the same rows.
+fn side_top(at: Option<usize>, avail: usize) -> usize {
+    at.map_or(0, |a| (a + 1).saturating_sub(avail.max(1)))
+}
+
 fn mark(a: &Attention) -> (&'static str, Rgb) {
     match a.kind {
         AttentionKind::Permission => ("!", look::red()),
@@ -347,6 +354,14 @@ fn tone(a: &Attention) -> Rgb {
         c if c == look::green() || c == look::dim() || c == look::cyan() => look::dim(),
         c => c,
     }
+}
+
+/// What the sidebar's cursor is on: the row of the group at an index into the session's groups,
+/// or the workspace at an index into its workspaces (REQ-671).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Cursor {
+    Group(usize),
+    Workspace(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -411,6 +426,8 @@ pub enum Key {
     Tree,
     /// Swap the focused panel with the one on this side.
     Swap(split::Side),
+    /// `z`: fold every group, or unfold them when all are folded (REQ-672).
+    Fold,
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
     Resize(SplitDir, bool),
     /// The phone link: its box.
@@ -625,6 +642,11 @@ pub struct View {
     mode: Mode,
     /// The highlighted workspace.
     selected: usize,
+    /// The cursor is on the row of this group, not on a workspace (REQ-671): nothing is
+    /// highlighted among the workspaces then, so no key acts on one.
+    on_group: Option<String>,
+    /// The groups that are folded: this terminal's own, never sent anywhere (REQ-674).
+    folded: HashSet<String>,
     avisos_selected: usize,
     avisos_tab: AvisosTab,
     /// The line chosen in the tab of jobs.
@@ -762,6 +784,8 @@ impl View {
             seen: HashMap::new(),
             mode: Mode::Workspaces,
             selected: 0,
+            on_group: None,
+            folded: HashSet::new(),
             avisos_selected: 0,
             avisos_tab: AvisosTab::Alertas,
             jobs_selected: 0,
@@ -1279,6 +1303,27 @@ impl View {
         }
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         self.selected = self.selected.min(workspaces.saturating_sub(1));
+        // A group the daemon no longer lists is forgotten, and the cursor leaves its row; a
+        // highlighted workspace that a fold hides has the cursor on its group's row (REQ-671, REQ-674).
+        if let Some(s) = &self.session {
+            self.folded.retain(|g| s.groups.iter().any(|x| x.id == *g));
+            if self
+                .on_group
+                .as_ref()
+                .is_some_and(|g| !s.groups.iter().any(|x| x.id == *g))
+            {
+                self.on_group = None;
+            }
+            if self.on_group.is_none()
+                && let Some(g) = s
+                    .workspaces
+                    .get(self.selected)
+                    .and_then(|w| w.group.clone())
+                && self.folded.contains(&g)
+            {
+                self.on_group = Some(g);
+            }
+        }
         if let Some(panes) = self.shown().map(|w| w.panes.len()) {
             self.focus = self.focus.min(panes.saturating_sub(1));
         }
@@ -1373,11 +1418,15 @@ impl View {
     }
 
     fn selected_id(&self) -> Option<String> {
-        self.session
-            .as_ref()?
-            .workspaces
-            .get(self.selected)
-            .map(|w| w.id.clone())
+        self.selected_summary().map(|w| w.id.clone())
+    }
+
+    /// The highlighted workspace's summary: none while the cursor is on a group's row.
+    fn selected_summary(&self) -> Option<&WorkspaceSummary> {
+        if self.on_group.is_some() {
+            return None;
+        }
+        self.session.as_ref()?.workspaces.get(self.selected)
     }
 
     /// The workspace on the right: the highlighted one.
@@ -1420,9 +1469,15 @@ impl View {
         s.workspaces
             .iter()
             .flat_map(|w| {
+                // The group, WHERE the workspace has one, before its name (REQ-673).
+                let group = w
+                    .group
+                    .as_ref()
+                    .and_then(|id| s.groups.iter().find(|g| g.id == *id))
+                    .map_or_else(String::new, |g| format!("{} › ", g.name));
                 self.unseen(&w.attention)
                     .into_iter()
-                    .map(|a| (w.id.clone(), self.label(&w.id), a))
+                    .map(move |a| (w.id.clone(), format!("{group}{}", self.label(&w.id)), a))
             })
             .collect()
     }
@@ -1506,7 +1561,7 @@ impl View {
             return false;
         };
         let target = match (level, &self.opened) {
-            (Level::Workspaces, _) | (_, None) => s.workspaces.get(self.selected),
+            (Level::Workspaces, _) | (_, None) => self.selected_summary(),
             (_, Some(id)) => s.workspaces.iter().find(|w| w.id == *id),
         };
         target.is_some_and(|w| w.removing)
@@ -1670,16 +1725,146 @@ impl View {
         rects
     }
 
-    /// Move the highlight of the sidebar to the next or the previous workspace.
+    /// What the sidebar's cursor can be on, in the order the rows are drawn: the row of a group
+    /// or a workspace the folds leave in view (REQ-671).
+    fn cursor_rows(&self) -> Vec<Cursor> {
+        let Some(s) = &self.session else {
+            return Vec::new();
+        };
+        side::rows(&s.workspaces, &s.groups, &self.folded)
+            .into_iter()
+            .filter_map(|r| match r {
+                side::Side::Group(g) => Some(Cursor::Group(g)),
+                side::Side::Workspace(i) => Some(Cursor::Workspace(i)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where the cursor is now.
+    fn cursor(&self) -> Option<Cursor> {
+        let s = self.session.as_ref()?;
+        match &self.on_group {
+            Some(id) => s.groups.iter().position(|g| g.id == *id).map(Cursor::Group),
+            None => {
+                (self.selected < s.workspaces.len()).then_some(Cursor::Workspace(self.selected))
+            }
+        }
+    }
+
+    fn set_cursor(&mut self, to: Cursor) {
+        match (to, &self.session) {
+            (Cursor::Group(g), Some(s)) => self.on_group = s.groups.get(g).map(|g| g.id.clone()),
+            (Cursor::Workspace(i), _) => {
+                self.selected = i;
+                self.on_group = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Move the highlight of the sidebar to the next or the previous row that can hold it.
     fn select_workspace(&mut self, forward: bool) {
-        let n = self.session.as_ref().map_or(0, |s| s.workspaces.len());
+        let rows = self.cursor_rows();
         self.typing = false;
         self.full = false;
-        self.selected = if forward {
-            (self.selected + 1).min(n.saturating_sub(1))
+        let at = self
+            .cursor()
+            .and_then(|c| rows.iter().position(|r| *r == c))
+            .unwrap_or(0);
+        let to = if forward {
+            (at + 1).min(rows.len().saturating_sub(1))
         } else {
-            self.selected.saturating_sub(1)
+            at.saturating_sub(1)
         };
+        if let Some(c) = rows.get(to) {
+            self.set_cursor(*c);
+        }
+        self.opened = None;
+        self.focus = 0;
+    }
+
+    /// The highlight goes to the workspace at `i`, whose group opens if it was folded (REQ-671).
+    fn go_to(&mut self, i: usize) {
+        self.selected = i;
+        self.on_group = None;
+        let group = self
+            .session
+            .as_ref()
+            .and_then(|s| s.workspaces.get(i))
+            .and_then(|w| w.group.clone());
+        if let Some(g) = group {
+            self.folded.remove(&g);
+        }
+    }
+
+    /// Fold or unfold the group the cursor is on (REQ-672); the cursor stays on its row.
+    fn fold_group(&mut self, fold: bool) {
+        let Some(id) = self.on_group.clone() else {
+            return;
+        };
+        if fold {
+            self.folded.insert(id);
+        } else {
+            self.folded.remove(&id);
+        }
+    }
+
+    /// `h` and `l` at the workspace level: `h` folds the group the cursor is on, or from a
+    /// workspace goes up to its group; `l` unfolds it, or goes in to its first workspace.
+    fn fold_key(&mut self, left: bool) {
+        match (&self.on_group, left) {
+            (Some(id), true) if !self.folded.contains(id) => self.fold_group(true),
+            (Some(id), false) if self.folded.contains(id) => self.fold_group(false),
+            (Some(_), false) => {
+                let rows = self.cursor_rows();
+                let at = self
+                    .cursor()
+                    .and_then(|c| rows.iter().position(|r| *r == c));
+                let next = at.and_then(|at| rows.get(at + 1).copied());
+                if let (Some(Cursor::Workspace(i)), Some(s)) = (next, &self.session)
+                    && s.workspaces[i].group == self.on_group
+                {
+                    self.set_cursor(Cursor::Workspace(i));
+                }
+            }
+            (None, true) => {
+                let group = self.selected_summary().and_then(|w| w.group.clone());
+                if group.is_some() {
+                    self.on_group = group;
+                }
+            }
+            _ => {}
+        }
+        self.opened = None;
+        self.focus = 0;
+    }
+
+    /// The index in `rows` of the row the cursor is on.
+    fn cursor_row(&self, rows: &[side::Side]) -> Option<usize> {
+        let at = self.cursor()?;
+        rows.iter().position(|r| match (r, at) {
+            (side::Side::Group(g), Cursor::Group(c)) => *g == c,
+            (side::Side::Workspace(i), Cursor::Workspace(c)) => *i == c,
+            _ => false,
+        })
+    }
+
+    /// `z`: every group folded, or all unfolded when none is open.
+    fn fold_all(&mut self) {
+        let Some(s) = &self.session else {
+            return;
+        };
+        let open = s.groups.iter().any(|g| !self.folded.contains(&g.id));
+        if open {
+            self.folded = s.groups.iter().map(|g| g.id.clone()).collect();
+            // a workspace that was highlighted is hidden now: its group holds the cursor
+            if let Some(g) = self.selected_summary().and_then(|w| w.group.clone()) {
+                self.on_group = Some(g);
+            }
+        } else {
+            self.folded.clear();
+        }
         self.opened = None;
         self.focus = 0;
     }
@@ -1873,7 +2058,7 @@ impl View {
     fn project_of_selected(
         &self,
     ) -> Option<(String, std::path::PathBuf, WorkspaceKind, Option<String>)> {
-        let w = self.session.as_ref()?.workspaces.get(self.selected)?;
+        let w = self.selected_summary()?;
         let project = self
             .workspaces
             .get(&w.id)
@@ -2138,7 +2323,7 @@ impl View {
                         .map(|i| (i, s.workspaces[i].id.clone()))
                 });
                 if let Some((i, id)) = there {
-                    self.selected = i;
+                    self.go_to(i);
                     self.open(&id, 0);
                     self.flash = "ya estaba abierta: voy a ella".into();
                     return After::Continue;
@@ -2198,7 +2383,7 @@ impl View {
             .as_ref()
             .and_then(|s| s.workspaces.iter().position(|w| w.id == id));
         if let Some(i) = at {
-            self.selected = i;
+            self.go_to(i);
             self.open(&id, 0);
             self.goto = None;
         } else if self.now_ms > until {
@@ -2212,9 +2397,7 @@ impl View {
         let (target, title, text) = match level {
             Level::Workspaces => {
                 let Some(w) = self
-                    .session
-                    .as_ref()
-                    .and_then(|s| s.workspaces.get(self.selected))
+                    .selected_summary()
                     .filter(|w| w.kind == WorkspaceKind::Worktree)
                 else {
                     return;
@@ -2246,9 +2429,7 @@ impl View {
     /// `s`: push the highlighted worktree's branch; a folder has none of its own to push.
     fn ask_sync(&mut self) -> After {
         let Some((id, kind, branch)) = self
-            .session
-            .as_ref()
-            .and_then(|s| s.workspaces.get(self.selected))
+            .selected_summary()
             .map(|w| (w.id.clone(), w.kind, w.branch.clone()))
         else {
             return After::Continue;
@@ -2287,11 +2468,7 @@ impl View {
 
     /// `x` at the workspace level: ask before the highlighted workspace is closed.
     fn ask_close_workspace(&mut self) {
-        let Some(w) = self
-            .session
-            .as_ref()
-            .and_then(|s| s.workspaces.get(self.selected))
-        else {
+        let Some(w) = self.selected_summary() else {
             return;
         };
         let doc = self.workspaces.get(&w.id);
@@ -2915,8 +3092,15 @@ impl View {
             (Mode::Workspaces, Key::Up) if level == Level::Workspaces => {
                 self.select_workspace(false)
             }
+            (Mode::Workspaces, Key::Left) if level == Level::Workspaces => self.fold_key(true),
+            (Mode::Workspaces, Key::Right) if level == Level::Workspaces => self.fold_key(false),
+            (Mode::Workspaces, Key::Fold) if level == Level::Workspaces => self.fold_all(),
             (Mode::Workspaces, Key::Next) if level == Level::Panels => self.go_panel(true),
-            (Mode::Workspaces, Key::Tree) if level != Level::Terminal => self.toggle_tree(),
+            (Mode::Workspaces, Key::Tree)
+                if level != Level::Terminal && self.on_group.is_none() =>
+            {
+                self.toggle_tree()
+            }
             (Mode::Workspaces, Key::Swap(side)) if level == Level::Panels => {
                 return self.swap_toward(side);
             }
@@ -2939,6 +3123,8 @@ impl View {
                 Level::Workspaces => {
                     if let Some(id) = self.selected_id() {
                         self.open(&id, self.focus);
+                    } else if let Some(g) = self.on_group.clone() {
+                        self.fold_group(!self.folded.contains(&g));
                     }
                 }
                 Level::Panels => {
@@ -3090,7 +3276,7 @@ impl View {
                 match (ws, at) {
                     (Some(ws), Some(at)) => {
                         self.mode = Mode::Workspaces;
-                        self.selected = at;
+                        self.go_to(at);
                         self.open(&ws, 0);
                     }
                     (Some(_), None) => self.flash("ese workspace ya no está"),
@@ -3111,7 +3297,7 @@ impl View {
                         .as_ref()
                         .and_then(|s| s.workspaces.iter().position(|w| w.id == ws))
                     {
-                        self.selected = i;
+                        self.go_to(i);
                     }
                     self.open(&ws, focus);
                     // An attention is a call to answer: the keyboard goes to the pane.
@@ -3623,14 +3809,31 @@ impl View {
             .session
             .as_ref()
             .filter(|_| x + 1 < SIDEBAR && y >= 2 && y < rows.saturating_sub(5))
-            .and_then(|s| side::rows(&s.workspaces).into_iter().nth(y - 2));
-        if let Some(side::Side::Workspace(i)) = row {
-            let same = self.selected == i;
-            self.selected = i;
-            if let Some(id) = self.selected_id() {
-                self.open(&id, if same { self.focus } else { 0 });
+            .and_then(|s| {
+                let all = side::rows(&s.workspaces, &s.groups, &self.folded);
+                let top = side_top(self.cursor_row(&all), rows.saturating_sub(7));
+                all.into_iter().nth(y - 2 + top)
+            });
+        match row {
+            Some(side::Side::Workspace(i)) => {
+                let same = self.selected == i && self.on_group.is_none();
+                self.set_cursor(Cursor::Workspace(i));
+                if let Some(id) = self.selected_id() {
+                    self.open(&id, if same { self.focus } else { 0 });
+                }
+                return After::Continue;
             }
-            return After::Continue;
+            // A click on a group's row folds or unfolds it, with the cursor on it (REQ-672).
+            Some(side::Side::Group(g)) => {
+                self.set_cursor(Cursor::Group(g));
+                self.opened = None;
+                self.focus = 0;
+                if let Some(id) = self.on_group.clone() {
+                    self.fold_group(!self.folded.contains(&id));
+                }
+                return After::Continue;
+            }
+            _ => {}
         }
         if let Some(doc) = self.shown() {
             let id = doc.head.id.clone();
@@ -4589,6 +4792,146 @@ impl View {
         };
     }
 
+    /// What the workspaces of a group say: how many run (Claude works or a worktree is being
+    /// removed) and each kind of attention that has not been seen, the most urgent first, with
+    /// the mark that kind has and how many (REQ-670).
+    fn group_summary(&self, id: &str) -> (usize, Vec<(&'static str, Rgb, usize)>) {
+        let Some(s) = &self.session else {
+            return (0, Vec::new());
+        };
+        let mut run = 0;
+        let mut kinds: Vec<(usize, &'static str, Rgb, usize)> = Vec::new();
+        for w in s
+            .workspaces
+            .iter()
+            .filter(|w| w.group.as_deref() == Some(id))
+        {
+            run += usize::from(w.working || w.removing);
+            for a in self.unseen(&w.attention) {
+                let (glyph, colour) = mark(&a);
+                match kinds.iter_mut().find(|k| k.1 == glyph && k.2 == colour) {
+                    Some(k) => k.3 += 1,
+                    None => {
+                        let urgency = URGENCY
+                            .iter()
+                            .position(|k| *k == a.kind)
+                            .unwrap_or(URGENCY.len());
+                        kinds.push((urgency, glyph, colour, 1));
+                    }
+                }
+            }
+        }
+        kinds.sort_by_key(|k| k.0);
+        (run, kinds.into_iter().map(|k| (k.1, k.2, k.3)).collect())
+    }
+
+    /// What the panels' place says while the cursor is on a group: its name and what its
+    /// workspaces say, kind by kind.
+    fn draw_group_card(&self, g: &mut Grid, group: &contract::Group, (px, pw): (usize, usize)) {
+        let dim = Style::fg(look::dim());
+        let title = clip(&group.name, pw.saturating_sub(10));
+        g.put(px + 1, 0, &title, Style::fg(look::blue()).bold());
+        g.put(px + 3 + title.chars().count(), 0, "grupo", dim);
+        let Some(s) = &self.session else {
+            return;
+        };
+        let n = s
+            .workspaces
+            .iter()
+            .filter(|w| w.group.as_deref() == Some(group.id.as_str()))
+            .count();
+        if n == 0 {
+            g.put(px + 1, 2, "vacío", dim);
+            return;
+        }
+        g.put(
+            px + 1,
+            2,
+            &format!("{n} workspace{}", if n == 1 { "" } else { "s" }),
+            dim,
+        );
+        let (run, kinds) = self.group_summary(&group.id);
+        let mut y = 4;
+        if run > 0 {
+            let line = format!("{} {run} corriendo", shell::spin(self.now_ms));
+            g.put(px + 1, y, &line, Style::fg(look::blue()));
+            y += 1;
+        }
+        for (glyph, colour, count) in kinds {
+            g.put(
+                px + 1,
+                y,
+                &format!("{glyph} {count}"),
+                Style::fg(colour).bold(),
+            );
+            y += 1;
+        }
+        if y == 4 {
+            g.put(px + 1, y, "nada espera algo de ti", dim);
+        }
+    }
+
+    /// The row of a group: `▾` or `▸`, its name and, at the right, the number of its workspaces
+    /// when it is open or what they say when it is folded (REQ-669, REQ-670).
+    fn draw_group_row(&self, g: &mut Grid, y: usize, group: &contract::Group) {
+        let dim = Style::fg(look::dim());
+        let open = !self.folded.contains(&group.id);
+        let on =
+            self.on_group.as_deref() == Some(group.id.as_str()) && self.mode == Mode::Workspaces;
+        if on {
+            g.paint_bg(0, y, SIDEBAR - 1, look::sel());
+        }
+        g.put_over(1, y, if open { "▾" } else { "▸" }, dim);
+        // The pieces at the right, each with its colour.
+        let mut pieces: Vec<(String, Style)> = Vec::new();
+        if open {
+            let n = self.session.as_ref().map_or(0, |s| {
+                s.workspaces
+                    .iter()
+                    .filter(|w| w.group.as_deref() == Some(group.id.as_str()))
+                    .count()
+            });
+            pieces.push((n.to_string(), dim));
+        } else {
+            let (run, kinds) = self.group_summary(&group.id);
+            if run > 0 {
+                pieces.push((
+                    format!("{}{run}", shell::spin(self.now_ms)),
+                    Style::fg(look::blue()),
+                ));
+            }
+            for (glyph, colour, n) in kinds.iter().take(3) {
+                let text = if *n > 1 {
+                    format!("{glyph}{n}")
+                } else {
+                    (*glyph).to_owned()
+                };
+                pieces.push((text, Style::fg(*colour).bold()));
+            }
+            let rest: usize = kinds.iter().skip(3).map(|k| k.2).sum();
+            if rest > 0 {
+                pieces.push((format!("+{rest}"), dim));
+            }
+        }
+        let width: usize = pieces
+            .iter()
+            .map(|p| p.0.chars().count() + 1)
+            .sum::<usize>()
+            .saturating_sub(1);
+        let name_style = if on {
+            Style::fg(look::blue()).bold()
+        } else {
+            Style::fg(look::fg()).bold()
+        };
+        let room = (SIDEBAR - 2).saturating_sub(3 + if width > 0 { width + 1 } else { 0 });
+        g.put_over(3, y, &clip(&group.name, room), name_style);
+        let mut at = SIDEBAR - 2 - width;
+        for (text, style) in pieces {
+            g.put_over(at, y, &text, style);
+            at += text.chars().count() + 1;
+        }
+    }
+
     fn grid(&self, cols: usize, rows: usize) -> Grid {
         look::set(
             self.settings.palette(self.os_dark),
@@ -4615,20 +4958,40 @@ impl View {
             g.put(SIDEBAR - 1, y, "│", Style::fg(divider));
         }
         g.put(1, 0, &clip(&session.name, 12), dim.bold());
-        for (k, row) in side::rows(&session.workspaces).iter().enumerate() {
-            let y = 2 + k;
-            if y >= rows.saturating_sub(5) {
-                break;
-            }
-            let side::Side::Workspace(i) = *row else {
-                if let side::Side::Head(head) = row {
-                    g.put_over(2, y, &clip(head, SIDEBAR - 4), dim);
+        let all = side::rows(&session.workspaces, &session.groups, &self.folded);
+        let avail = rows.saturating_sub(7);
+        let top = side_top(self.cursor_row(&all), avail);
+        // WHERE a group exists everything is drawn two columns in, under its row or `sin grupo`.
+        let indent = if session.groups.is_empty() { 0 } else { 2 };
+        let mut number = all[..top.min(all.len())]
+            .iter()
+            .filter(|r| matches!(r, side::Side::Workspace(_)))
+            .count();
+        for (k, row) in all.iter().enumerate().skip(top).take(avail) {
+            let y = 2 + k - top;
+            let i = match row {
+                side::Side::Workspace(i) => *i,
+                side::Side::Head(head) => {
+                    g.put_over(2 + indent, y, &clip(head, SIDEBAR - 4 - indent), dim);
+                    continue;
                 }
-                continue;
+                side::Side::Ungrouped => {
+                    g.put_over(3, y, "sin grupo", dim);
+                    continue;
+                }
+                side::Side::Empty => {
+                    g.put_over(4, y, "vacío", dim);
+                    continue;
+                }
+                side::Side::Group(at) => {
+                    self.draw_group_row(&mut g, y, &session.groups[*at]);
+                    continue;
+                }
             };
+            number += 1;
             let w = &session.workspaces[i];
             let worktree = w.kind == WorkspaceKind::Worktree;
-            let on = i == self.selected && self.mode == Mode::Workspaces;
+            let on = i == self.selected && self.on_group.is_none() && self.mode == Mode::Workspaces;
             let un = self.unseen(&w.attention);
             if on {
                 g.paint_bg(0, y, SIDEBAR - 1, look::sel());
@@ -4639,7 +5002,11 @@ impl View {
                 w.name.clone()
             };
             // A worktree is drawn four columns in, under its root (REQ-223).
-            let (dot, text) = if worktree { (6, 8) } else { (2, 4) };
+            let (dot, text) = if worktree {
+                (6 + indent, 8 + indent)
+            } else {
+                (2 + indent, 4 + indent)
+            };
             let name_style = if w.removing {
                 dim
             } else if on {
@@ -4649,14 +5016,15 @@ impl View {
             } else {
                 Style::fg(look::fg())
             };
-            let number = if i < 9 {
-                (i + 1).to_string()
+            // The numbers are the position among the workspaces that are drawn (REQ-671).
+            let label = if number <= 9 {
+                number.to_string()
             } else {
                 " ".into()
             };
-            g.put_over(0, y, &number, dim);
+            g.put_over(0, y, &label, dim);
             if worktree {
-                g.put_over(4, y, "↳", dim);
+                g.put_over(4 + indent, y, "↳", dim);
             }
             g.put_over(
                 dot,
@@ -4735,7 +5103,13 @@ impl View {
         // The header row and the panes.
         let px = SIDEBAR + 1;
         let pw = cols.saturating_sub(px);
-        if let Some(ws) = session.workspaces.get(self.selected) {
+        if let Some(group) = self
+            .on_group
+            .as_ref()
+            .and_then(|id| session.groups.iter().find(|g| g.id == *id))
+        {
+            self.draw_group_card(&mut g, group, (px, pw));
+        } else if let Some(ws) = session.workspaces.get(self.selected) {
             let doc = self.workspaces.get(&ws.id);
             let mut x = px + 1;
             if let (WorkspaceKind::Worktree, Some(p)) =
@@ -4895,6 +5269,11 @@ impl View {
                     " PANEL ",
                     look::magenta(),
                     "hjkl panel · HJKL mover · ↵ escribir · n | - nuevo · < > { } tamaño · t archivos · x cerrar · esc volver · ? teclas",
+                ),
+                (_, Level::Workspaces) if self.on_group.is_some() => (
+                    " GRUPO ",
+                    look::blue(),
+                    "j/k mover · ↵ plegar o abrir · h l · z todos · a avisos · m teléfono · ? teclas · q salir",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
@@ -5445,7 +5824,15 @@ const SCROLL_STEP: usize = 3;
 /// The keys of each level, for the box `?` opens. Only what the client does is listed.
 const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("j k", "mover por los workspaces"),
-    ("↵", "entrar al workspace"),
+    ("↵", "entrar al workspace; en un grupo, plegarlo o abrirlo"),
+    (
+        "h l",
+        "plegar o abrir el grupo (h sube al grupo desde un workspace)",
+    ),
+    (
+        "z",
+        "plegar todos los grupos, o abrirlos si todos están plegados",
+    ),
     ("r", "renombrar el worktree"),
     ("o", "abrir una carpeta"),
     ("t", "archivos del workspace"),
@@ -5800,6 +6187,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('l') | KeyCode::Right => Key::Right,
         KeyCode::Tab => Key::Next,
         KeyCode::Char('t') => Key::Tree,
+        KeyCode::Char('z') => Key::Fold,
         KeyCode::Char('H') => Key::Swap(split::Side::Left),
         KeyCode::Char('L') => Key::Swap(split::Side::Right),
         KeyCode::Char('K') => Key::Swap(split::Side::Up),
@@ -6770,6 +7158,317 @@ mod tests {
         v.set_size(120, 30);
         v.sync(fixture_docs().iter());
         v
+    }
+
+    /// A session with groups as the only document (`snapshot-session-groups.json`): `salesassist`
+    /// with `app` and its worktree `feat/login`, `ideas` with nothing in it, and `notes` in none.
+    /// `edit` changes the document before the view reads it.
+    fn groups_view_with(edit: impl FnOnce(&mut serde_json::Value)) -> View {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contract/fixtures/daemon/snapshot-session-groups.json");
+        let mut doc =
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap())
+                .unwrap()["node"]
+                .clone();
+        edit(&mut doc);
+        let mut v = View::new("groups");
+        v.set_size(120, 30);
+        v.sync([doc].iter());
+        v
+    }
+
+    fn groups_view() -> View {
+        groups_view_with(|_| {})
+    }
+
+    /// The sidebar's columns of each row of the screen, without its border.
+    fn sidebar_rows(v: &View, rows: usize) -> Vec<String> {
+        v.plain(120, rows)
+            .lines()
+            .map(|l| l.chars().take(SIDEBAR - 1).collect::<String>())
+            .collect()
+    }
+
+    /// REQ-669, REQ-671: a row for each group, its workspaces two columns further in, `vacío` for
+    /// a group with none, `sin grupo` over what is in none, no `carpetas`, and the numbers
+    /// following the workspaces that are drawn.
+    #[test]
+    fn groups_are_drawn_with_their_workspaces_vacio_and_sin_grupo_and_numbers_that_follow_the_rows()
+    {
+        let rows = sidebar_rows(&groups_view(), 30);
+        assert!(rows[2].starts_with(" ▾ salesassist"), "{rows:?}");
+        assert!(
+            rows[2].trim_end().ends_with('2'),
+            "its workspaces: {}",
+            rows[2]
+        );
+        assert!(
+            rows[3].starts_with("1   ") && rows[3].contains("app"),
+            "{}",
+            rows[3]
+        );
+        assert!(
+            rows[4].starts_with("2     ↳") && rows[4].contains("feat/login"),
+            "a worktree is four columns in, two more for the group: {}",
+            rows[4]
+        );
+        assert!(rows[5].starts_with(" ▾ ideas") && rows[5].trim_end().ends_with('0'));
+        assert_eq!(rows[6].trim(), "vacío");
+        assert_eq!(rows[7].trim(), "sin grupo");
+        assert!(
+            rows[8].starts_with("3   ") && rows[8].contains("notes"),
+            "{}",
+            rows[8]
+        );
+        assert!(!rows.iter().any(|r| r.contains("carpetas")));
+        // WHERE no group exists, the sidebar is what it was
+        let t = fixture_view().plain(110, 30);
+        assert!(t.lines().nth(3).unwrap().starts_with("  carpetas"), "{t}");
+    }
+
+    /// REQ-671, REQ-672: the cursor goes over the rows that are drawn, `h` folds the group or
+    /// goes up to it, `l` opens it or goes in, `↵` toggles it, `z` folds all or opens all.
+    #[test]
+    fn the_cursor_goes_over_groups_and_workspaces_in_view_and_a_fold_keeps_it_on_the_group() {
+        let mut v = groups_view();
+        let at = |v: &View| (v.on_group.clone(), v.selected);
+        assert_eq!(at(&v), (None, 0), "it begins on the first workspace");
+        v.press(Key::Down);
+        assert_eq!(at(&v), (None, 1));
+        v.press(Key::Down);
+        assert_eq!(
+            v.on_group.as_deref(),
+            Some("00000000-0000-4000-8000-0000000000f2")
+        );
+        v.press(Key::Down);
+        assert_eq!(at(&v), (None, 2), "past `ideas` comes `notes`");
+        v.press(Key::Down);
+        assert_eq!(at(&v), (None, 2), "and it stops at the last row");
+        v.press(Key::Up);
+        v.press(Key::Up);
+        v.press(Key::Up);
+        assert_eq!(at(&v), (None, 0));
+        // h from a workspace goes up to its group, and h on the group folds it
+        v.press(Key::Left);
+        assert_eq!(
+            v.on_group.as_deref(),
+            Some("00000000-0000-4000-8000-0000000000f1")
+        );
+        assert!(v.folded.is_empty());
+        v.press(Key::Left);
+        assert_eq!(v.folded.len(), 1);
+        let rows = sidebar_rows(&v, 30);
+        assert!(rows[2].starts_with(" ▸ salesassist"), "{rows:?}");
+        assert!(
+            !rows.iter().any(|r| r.contains("feat/login")),
+            "its workspaces are not drawn"
+        );
+        // a folded group is not gone: j goes to the next row that is drawn
+        v.press(Key::Down);
+        assert_eq!(
+            v.on_group.as_deref(),
+            Some("00000000-0000-4000-8000-0000000000f2")
+        );
+        // l on a folded group opens it; l on an open one goes in to its first workspace
+        v.press(Key::Up);
+        v.press(Key::Right);
+        assert!(v.folded.is_empty());
+        v.press(Key::Right);
+        assert_eq!(at(&v), (None, 0));
+        // ↵ on a group folds and opens it; on a workspace it still opens the workspace
+        v.press(Key::Left);
+        v.press(Key::Enter);
+        assert_eq!(v.folded.len(), 1);
+        v.press(Key::Enter);
+        assert!(v.folded.is_empty());
+        // z folds every group; again, with all folded, it opens them
+        v.press(Key::Fold);
+        assert_eq!(v.folded.len(), 2);
+        v.press(Key::Fold);
+        assert!(v.folded.is_empty());
+        // z with the cursor in a group puts it on the group's row
+        v.press(Key::Down);
+        v.press(Key::Fold);
+        assert_eq!(
+            v.on_group.as_deref(),
+            Some("00000000-0000-4000-8000-0000000000f1")
+        );
+    }
+
+    /// REQ-670: a folded group says, at the right, what runs and each kind of attention, the most
+    /// urgent first, with the number when it is over one, three kinds and `+n` for the rest.
+    #[test]
+    fn a_folded_group_says_what_runs_and_what_waits_in_it() {
+        let attention =
+            |kind: &str, node: &str| serde_json::json!({"kind": kind, "node": node, "rev": 3});
+        let mut v = groups_view_with(|doc| {
+            let list = doc["workspaces"].as_array_mut().unwrap();
+            list[0]["working"] = true.into();
+            list[0]["attention"] = serde_json::json!([
+                attention("permission", "n1"),
+                attention("question", "n2"),
+                attention("plan", "n3"),
+                attention("ci_failed", "n4"),
+                attention("merged", "n5"),
+            ]);
+            list[1]["removing"] = true.into();
+            list[1]["attention"] = serde_json::json!([attention("permission", "n6")]);
+        });
+        v.set_now(0);
+        v.press(Key::Left); // from the first workspace up to its group
+        v.press(Key::Left); // fold it
+        let row = sidebar_rows(&v, 30)[2].clone();
+        assert!(row.contains("▸ salesass"), "{row}");
+        assert!(row.trim_end().ends_with("⠋2 !2 ? ◆ +2"), "{row}");
+        // when it is open, only how many it holds
+        v.press(Key::Enter);
+        assert!(sidebar_rows(&v, 30)[2].trim_end().ends_with('2'));
+        // a group with nothing to say says nothing: `ideas` is empty and folded
+        v.press(Key::Enter);
+        v.press(Key::Down);
+        v.press(Key::Enter);
+        let ideas = sidebar_rows(&v, 30)
+            .into_iter()
+            .find(|r| r.contains("▸ ideas"))
+            .unwrap();
+        assert_eq!(ideas.trim_end(), " ▸ ideas");
+        // the place of the panels says the same, kind by kind
+        let t = v.plain(120, 30);
+        assert!(
+            t.lines().next().unwrap().contains("ideas") && t.contains("vacío"),
+            "{t}"
+        );
+    }
+
+    /// REQ-671 (RISK-80): while the cursor is on a group's row, no key acts on a workspace: none
+    /// opens a question, a box, a pane or sends a command.
+    #[test]
+    fn no_key_acts_on_a_workspace_from_a_group_row() {
+        let mut v = groups_view();
+        v.press(Key::Left);
+        assert!(v.on_group.is_some() && v.selected_id().is_none());
+        for key in [
+            Key::Repeat,
+            Key::Sync,
+            Key::Worktree,
+            Key::Project,
+            Key::Review,
+            Key::Close,
+            Key::Changes,
+            Key::Tree,
+            Key::NewPane,
+            Key::NewProgram,
+            Key::SplitRow,
+            Key::SplitCol,
+            Key::Full,
+            Key::Next,
+            Key::CopyCmd,
+            Key::DismissAll,
+            Key::Back,
+        ] {
+            let after = v.press(key);
+            assert_eq!(after, After::Continue, "{key:?}");
+            assert!(v.manage.is_none(), "{key:?} asked a question");
+            assert!(
+                v.worktree.is_none() && v.project.is_none() && v.prs.is_none(),
+                "{key:?}"
+            );
+            assert!(
+                v.changes.is_none() && !v.tree_on && v.opened.is_none(),
+                "{key:?}"
+            );
+            assert!(
+                v.take_asks().is_empty(),
+                "{key:?} asked the daemon for something"
+            );
+            assert_eq!(v.level(), Level::Workspaces, "{key:?}");
+        }
+        assert_eq!(v.mode, Mode::Workspaces);
+        assert!(v.on_group.is_some(), "the cursor did not move");
+    }
+
+    /// REQ-671: a long list moves just far enough to keep the cursor in view, and a click finds the
+    /// same rows the drawing shows.
+    #[test]
+    fn the_list_moves_to_keep_the_cursor_in_view_and_a_click_finds_the_row_drawn() {
+        let mut v = groups_view();
+        v.set_size(120, 12); // room for five rows: 12 - 7
+        for _ in 0..7 {
+            v.press(Key::Down);
+        }
+        assert_eq!(v.selected, 2, "the last workspace");
+        let rows = sidebar_rows(&v, 12);
+        assert!(
+            rows[2].contains("feat/login") && rows[3].contains("ideas"),
+            "{rows:?}"
+        );
+        assert!(rows[6].contains("notes"), "the last row is drawn: {rows:?}");
+        assert!(!rows.iter().any(|r| r.contains("▾ salesassist")));
+        // a click on the row drawn fourth is `ideas`, not the fourth of the whole list
+        v.click(5, 3, 120, 12);
+        assert_eq!(
+            v.on_group.as_deref(),
+            Some("00000000-0000-4000-8000-0000000000f2")
+        );
+        assert!(
+            v.folded.contains("00000000-0000-4000-8000-0000000000f2"),
+            "a click folds it"
+        );
+    }
+
+    /// REQ-672, REQ-674: a click on a group's row folds it, and a group the session no longer
+    /// lists is forgotten, with the cursor that was on its row.
+    #[test]
+    fn a_click_folds_a_group_and_a_group_that_is_gone_is_forgotten() {
+        let mut v = groups_view();
+        v.click(5, 2, 120, 30);
+        assert!(v.folded.contains("00000000-0000-4000-8000-0000000000f1"));
+        assert_eq!(
+            v.on_group.as_deref(),
+            Some("00000000-0000-4000-8000-0000000000f1")
+        );
+        v.click(5, 2, 120, 30);
+        assert!(v.folded.is_empty(), "a second click opens it");
+        // the daemon deletes `ideas`, which this terminal had folded with the cursor on it
+        for _ in 0..3 {
+            v.press(Key::Down);
+        }
+        v.press(Key::Enter);
+        assert_eq!(v.folded.len(), 1);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contract/fixtures/daemon/snapshot-session-groups.json");
+        let mut doc =
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap())
+                .unwrap()["node"]
+                .clone();
+        doc["groups"] = serde_json::json!([{"id": "00000000-0000-4000-8000-0000000000f1", "name": "salesassist"}]);
+        doc["rev"] = 99.into();
+        v.sync([doc].iter());
+        assert!(v.folded.is_empty() && v.on_group.is_none());
+    }
+
+    /// REQ-671, REQ-673: «avisos» says the group before the workspace, and going to a workspace of a
+    /// folded group opens the group.
+    #[test]
+    fn avisos_says_the_group_and_going_to_a_workspace_opens_its_group() {
+        let mut v = groups_view_with(|doc| {
+            doc["workspaces"][1]["attention"] = serde_json::json!([
+                {"kind": "permission", "node": "00000000-0000-4000-8000-0000000000c2", "rev": 3}
+            ]);
+        });
+        v.press(Key::Left);
+        v.press(Key::Left);
+        assert_eq!(v.folded.len(), 1);
+        assert_eq!(
+            v.avisos().len(),
+            1,
+            "a folded group hides nothing from avisos"
+        );
+        assert_eq!(v.avisos()[0].1, "salesassist › app: feat/login");
+        v.press(Key::Avisos);
+        v.press(Key::Enter);
+        assert!(v.folded.is_empty(), "its group opened");
+        assert_eq!((v.on_group.clone(), v.selected), (None, 1));
     }
 
     #[test]
