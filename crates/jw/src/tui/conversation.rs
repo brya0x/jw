@@ -16,6 +16,7 @@ use contract::conversation::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::agents;
+use super::erase;
 use super::field::{self, Field, Look, Mark};
 use super::fold;
 use super::older::{self, Older};
@@ -458,14 +459,8 @@ impl Editor {
     }
 
     /// Where the word before `at` starts: spaces are skipped, then the word.
-    fn word_start(&self, mut at: usize) -> usize {
-        while at > 0 && self.chars[at - 1].is_whitespace() {
-            at -= 1;
-        }
-        while at > 0 && !self.chars[at - 1].is_whitespace() {
-            at -= 1;
-        }
-        at
+    fn word_start(&self, at: usize) -> usize {
+        erase::word_start(&self.chars, at)
     }
 
     /// Where the word after `at` ends.
@@ -2466,7 +2461,7 @@ impl Ui {
                         }
                     }
                     KeyCode::Backspace => {
-                        l.filter.pop();
+                        erase::back(&mut l.filter, ev);
                         l.at = 0;
                     }
                     KeyCode::Char(c) if !ev.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -6066,5 +6061,50 @@ mod tests {
         ui.unfolded.insert(99);
         ui.sync(&conv);
         assert!(ui.unfolded.iter().all(|k| *k != 99));
+    }
+
+    /// Option-backspace in the composer, whichever way the terminal sends it (REQ-670).
+    #[test]
+    fn the_composer_takes_a_word_with_every_encoding_of_option_and_ctrl_backspace() {
+        let (alt, ctrl) = (KeyModifiers::ALT, KeyModifiers::CONTROL);
+        let word = [
+            (KeyCode::Backspace, alt),
+            (KeyCode::Backspace, ctrl),
+            (KeyCode::Backspace, alt | ctrl),
+            (KeyCode::Char('h'), alt | ctrl),
+            (KeyCode::Char('\x08'), alt),
+            (KeyCode::Char('\x08'), ctrl),
+            (KeyCode::Char('\x08'), alt | ctrl),
+        ];
+        for (code, mods) in word {
+            let mut e = Editor::default();
+            e.set("uno dos tres");
+            e.edit(&erase::canonical(key(code, mods)));
+            assert_eq!(e.text(), "uno dos ", "{code:?} {mods:?}");
+        }
+        let mut e = Editor::default();
+        e.set("uno dos");
+        e.edit(&erase::canonical(key(
+            KeyCode::Char('\x08'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(e.text(), "uno do", "BS alone is one character");
+        e.edit(&erase::canonical(key(KeyCode::Char('h'), ctrl)));
+        assert_eq!(e.text(), "uno do", "ctrl-h alone is not a word");
+    }
+
+    #[test]
+    fn option_backspace_takes_a_word_of_the_filter_of_a_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/resume");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.listed(&saved(40), &conv);
+        type_in(&mut ui, &conv, "zz yy");
+        row_of(&frame(&ui, &conv).1, "Nada coincide.");
+        let erase = erase::canonical(key(KeyCode::Backspace, KeyModifiers::ALT));
+        ui.key(&conv, &erase);
+        ui.key(&conv, &erase);
+        row_of(&frame(&ui, &conv).1, "1 de 40");
     }
 }

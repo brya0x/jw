@@ -30,6 +30,7 @@ mod changes;
 mod clip;
 mod conversation;
 mod diff_lines;
+pub(crate) mod erase;
 mod field;
 mod fileview;
 mod fold;
@@ -2104,7 +2105,13 @@ impl View {
         let Some(p) = self.project.as_mut() else {
             return After::Continue;
         };
-        match p.press(ev.code) {
+        let act = if erase::is_word(&ev) {
+            p.erase_word();
+            project::Act::Stay
+        } else {
+            p.press(ev.code)
+        };
+        match act {
             project::Act::Stay => After::Continue,
             project::Act::Close => {
                 self.project = None;
@@ -2122,7 +2129,13 @@ impl View {
             return After::Continue;
         };
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
-        match picker.press(ev.code, ctrl, &is_open) {
+        let pick = if erase::is_word(&ev) {
+            picker.erase_word();
+            open::Pick::Stay
+        } else {
+            picker.press(ev.code, ctrl, &is_open)
+        };
+        match pick {
             open::Pick::Stay => After::Continue,
             open::Pick::Close => {
                 self.picker = None;
@@ -2153,7 +2166,12 @@ impl View {
         let Some(t) = self.worktree.as_mut() else {
             return After::Continue;
         };
-        let made = t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL));
+        let made = if erase::is_word(&ev) {
+            t.erase_word();
+            open::Make::Stay
+        } else {
+            t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL))
+        };
         if t.wants_list() {
             self.worktree_asks.push(t.repo.clone());
         }
@@ -2322,7 +2340,11 @@ impl View {
         let Some(question) = self.manage.take() else {
             return After::Continue;
         };
-        let (next, act) = question.press(ev.code);
+        let (next, act) = if erase::is_word(&ev) {
+            (Some(question.erase_word()), None)
+        } else {
+            question.press(ev.code)
+        };
         self.manage = next;
         if self.manage.is_none() {
             self.surface_ask();
@@ -2629,6 +2651,7 @@ impl View {
     /// A key at the keyboard: typed into the pane, or (after the leader, or when no pane is
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
+        let ev = erase::canonical(ev);
         self.flash.clear();
         self.selection = None;
         self.unlight_conversations();
@@ -4011,7 +4034,7 @@ impl View {
                 KeyCode::Up => t.sel = t.sel.saturating_sub(1),
                 KeyCode::Backspace => {
                     let mut text = text;
-                    text.pop();
+                    erase::back(&mut text, &ev);
                     ask_find = Some(text.clone());
                     t.filter = Some(text);
                 }
@@ -12089,5 +12112,29 @@ mod tests {
         let docs: Vec<_> = fixture_docs();
         v.sync(docs.iter());
         assert!(!v.convs.contains_key(CONV) && !v.conv_ui.contains_key(CONV));
+    }
+
+    /// What the shell of a pane gets for each encoding of option-backspace and ctrl-backspace
+    /// (REQ-672): `esc DEL`, which zsh, bash and fish take as «delete the word before».
+    #[test]
+    fn every_encoding_of_option_backspace_reaches_a_shell_as_esc_del() {
+        let (alt, ctrl) = (KeyModifiers::ALT, KeyModifiers::CONTROL);
+        for (code, mods) in [
+            (KeyCode::Backspace, alt),
+            (KeyCode::Backspace, ctrl),
+            (KeyCode::Backspace, alt | ctrl),
+            (KeyCode::Char('h'), alt | ctrl),
+            (KeyCode::Char('\x08'), alt),
+            (KeyCode::Char('\x08'), ctrl),
+        ] {
+            let ev = erase::canonical(key(code, mods));
+            assert_eq!(
+                bytes_of(&ev).as_deref(),
+                Some("\x1b\x7f"),
+                "{code:?} {mods:?}"
+            );
+        }
+        let plain = erase::canonical(key(KeyCode::Char('\x08'), KeyModifiers::NONE));
+        assert_eq!(bytes_of(&plain).as_deref(), Some("\x7f"));
     }
 }
