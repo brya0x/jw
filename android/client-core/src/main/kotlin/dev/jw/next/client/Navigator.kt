@@ -66,6 +66,37 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Make a group; [reply] gets its id. */
+    fun createGroup(name: String, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Make a group and put the repository of [workspace] in it: the id of the group is read from the first reply, not guessed (REQ-698). */
+    fun createGroupWith(name: String, workspace: Id, reply: (Result<Unit>) -> Unit) {
+        createGroup(name) { made ->
+            made.fold({ group -> moveToGroup(workspace, group, reply) }, { reply(Result.failure(it)) })
+        }
+    }
+
+    fun renameGroup(group: Id, name: String, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Delete a group: its workspaces stay open and belong to none. */
+    fun deleteGroup(group: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Put the repository of [workspace] in [group], or in none when it is null. */
+    fun moveToGroup(workspace: Id, group: Id?, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Swap a group with its neighbour: [delta] is -1 (up) or 1 (down). */
+    fun moveGroup(group: Id, delta: Int, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Name a pane (empty: the automatic name). */
     fun renamePane(pane: Id, name: String, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -252,6 +283,10 @@ data class ClientState(
     val draft: Draft? = null,
     /** The tab of Avisos that shows. */
     val avisosTab: AvisosTab = AvisosTab.Alertas,
+    /** The groups that are folded on this phone, for the PC it is connected to (REQ-700). */
+    val folded: Set<Id> = emptySet(),
+    /** The chip of Avisos: null for every alert, [NO_GROUP], or a group's id (REQ-699). */
+    val avisosFilter: Id? = null,
 )
 
 /** Lines [from] to [to] (from 1) of the file [path] of a workspace, as a reference for the agent (REQ-639). */
@@ -270,8 +305,34 @@ class Navigator(private val source: NodeSource) {
         val target = pane ?: ws?.panes?.firstOrNull()?.id
         var seen = markNode(s.seen, id)
         if (target != null) seen = markNode(seen, target)
-        return ClientState(Screen.Workspace(id, target), seen, id, listOf(id) + s.recent.filter { it != id }.take(RECENT - 1))
+        // The workspace's group opens, so that the list shows where it is on the way back (REQ-697).
+        val group = source.session().workspaces.firstOrNull { it.id == id }?.group
+        return ClientState(
+            Screen.Workspace(id, target), seen, id, listOf(id) + s.recent.filter { it != id }.take(RECENT - 1),
+            folded = group?.let { s.folded - it } ?: s.folded, avisosFilter = s.avisosFilter,
+        )
     }
+
+    /** A tap on the row of a group folds it or opens it (REQ-697). */
+    fun toggleGroup(s: ClientState, group: Id): ClientState =
+        s.copy(folded = if (group in s.folded) s.folded - group else s.folded + group)
+
+    /**
+     * A group the PC no longer lists is forgotten (REQ-700), folded or chosen in Avisos, once the PC
+     * has sent its session: until then, between its hello and the document, the session is an empty
+     * stand-in (no id, no epoch) and what was folded is still the person's.
+     */
+    fun forgetUnlisted(s: ClientState): ClientState {
+        val session = source.session()
+        if (source.epoch.isEmpty() || session.id.isEmpty() || session.epoch != source.epoch) return s
+        val listed = session.groups.map { it.id }.toSet()
+        val folded = if (listed.containsAll(s.folded)) s.folded else s.folded.filter { it in listed }.toSet()
+        val filter = s.avisosFilter?.takeIf { it == NO_GROUP || it in listed }
+        return if (folded == s.folded && filter == s.avisosFilter) s else s.copy(folded = folded, avisosFilter = filter)
+    }
+
+    /** The chip of Avisos that is pressed (REQ-699). */
+    fun filterAvisos(s: ClientState, by: Id?): ClientState = s.copy(avisosFilter = by)
 
     fun selectPane(s: ClientState, pane: Id): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s

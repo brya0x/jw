@@ -28,6 +28,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.jw.next.client.Aviso
 import dev.jw.next.client.AvisosTab
+import dev.jw.next.client.avisoChips
+import dev.jw.next.client.filtered
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.JobsMark
 import dev.jw.next.client.Navigator
@@ -104,7 +106,11 @@ internal fun AvisosBody(
             }) { set(nav.openAvisos(state, AvisosTab.Trabajos)) }
         }
         when (state.avisosTab) {
-            AvisosTab.Alertas -> AlertsList(alerts, nav, state, set)
+            AvisosTab.Alertas -> Column(Modifier.fillMaxSize()) {
+                // The chips filter the alerts by group, WHERE the PC has groups; the bell counts all (REQ-699).
+                if (session.groups.isNotEmpty()) AvisoChips(avisoChips(session, alerts), state.avisosFilter) { set(nav.filterAvisos(state, it)) }
+                AlertsList(alerts.filtered(state.avisosFilter), nav, state, set)
+            }
             AvisosTab.Trabajos -> JobsList(jobs.running, jobs.ended, now, open)
         }
     }

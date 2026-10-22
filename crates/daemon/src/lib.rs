@@ -14,6 +14,7 @@ mod files;
 mod git;
 mod github;
 mod grouping;
+mod groups;
 mod highlight;
 mod history;
 mod integration;

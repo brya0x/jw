@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · grupos de workspaces</title>
+<style>
+/* the tokens of tui.html and mobile.html: One Dark */
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:22px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.note{max-width:920px}
+.row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none;display:inline-block}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.c-chip{background:var(--blue);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}.c-chipm{background:var(--magenta);color:var(--bg);font-weight:700}
+.c-cur{background:var(--fg);color:var(--bg)}
+.ctl{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0;align-items:center}
+.ctl fieldset{border:1px solid #2f3440;border-radius:8px;padding:6px 10px 8px;margin:0;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.ctl legend{font-size:11px;color:var(--mut);padding:0 4px}
+button,select{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer}
+button:hover,select:hover{border-color:var(--blue)}
+label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
+.tag-idea{display:inline-block;background:var(--magenta);color:var(--bg);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.tag-opt{display:inline-block;background:#2f3440;color:var(--ink);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+/* the phone: 390 px, as in jobs-mobile.html */
+.phone{position:relative;width:390px;height:780px;background:var(--bg);border:1px solid var(--line);border-radius:36px;overflow:hidden;display:flex;flex-direction:column;font:13.5px/1.4 var(--mono);color:var(--fg)}
+.sbr{display:flex;justify-content:space-between;padding:10px 22px 4px;color:var(--dim);font-size:11px}
+.screen{flex:1;display:flex;flex-direction:column;min-height:0}
+.hd{display:flex;align-items:center;gap:10px;padding:8px 14px 6px}
+.hd b{font-size:15px;color:#e6e9ef}.hd .sub{color:var(--dim);font-size:11px}.hd .sp1{flex:1}
+.ib{position:relative;background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;padding:4px 6px}
+.ib .bdg{position:absolute;top:-2px;right:-2px;background:var(--yellow);color:var(--bg);border-radius:8px;font-size:10px;padding:0 5px;font-weight:700}
+.list{flex:1;overflow:auto;padding:0 0 8px}
+.sec{color:var(--dim);font-size:11px;padding:12px 14px 4px;letter-spacing:.04em}
+.gh{display:flex;align-items:center;gap:8px;width:100%;min-height:50px;padding:6px 14px;background:#232830;border:0;border-top:1px solid #2d323c;border-left:3px solid transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer;margin-top:6px}
+.gh[aria-current]{background:var(--sel);border-left-color:var(--blue)}
+.gh .chev{width:14px;color:var(--dim)}.gh .gn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6e9ef;font-weight:700}
+.gh .cnt{color:var(--dim);font-size:11.5px}.gh .sm{display:flex;gap:7px;font-size:12px;white-space:nowrap}
+.rh{color:var(--dim);font-size:11px;padding:6px 14px 0 30px}
+.row1{display:flex;align-items:center;gap:8px;width:100%;min-height:50px;padding:6px 14px;background:none;border:0;border-left:3px solid transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.row1.in{padding-left:28px}.row1.wt{padding-left:40px}.row1.in.wt{padding-left:40px}.row1.dis{opacity:.55}
+.row1[aria-current]{background:var(--sel);border-left-color:var(--blue)}
+.row1 .o{width:14px}.row1 .nm{flex:1;min-width:0}
+.row1 .nm b{color:#e6e9ef;font-weight:700;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row1 .nm span{color:var(--dim);font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row1 .mk{font-size:12px;min-width:34px;text-align:right}
+.tag{font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.emp{color:var(--dim);font-size:12px;padding:12px 14px 12px 28px;font-style:italic}
+.newg{display:block;width:calc(100% - 28px);margin:14px;min-height:44px;background:none;border:1px dashed var(--line);border-radius:10px;color:var(--dim);font:inherit;cursor:pointer}
+.legend{color:var(--dim);font-size:11px;padding:6px 14px}
+.tabs{display:flex;gap:6px;padding:4px 14px 8px}
+.tab{flex:1;min-height:38px;background:#222630;border:1px solid var(--line);border-radius:10px;color:var(--dim);font:inherit;font-size:12.5px;cursor:pointer}
+.tab[aria-selected="true"]{color:#e6e9ef;border-color:var(--blue);background:var(--sel)}
+.tab .cnt2{color:var(--yellow);margin-left:4px}
+.chips{display:flex;gap:6px;padding:0 14px 8px;overflow-x:auto}
+.chip{flex:none;min-height:32px;background:#222630;border:1px solid var(--line);border-radius:16px;color:var(--dim);font:inherit;font-size:12px;padding:0 12px;cursor:pointer;white-space:nowrap}
+.chip[aria-pressed="true"]{color:#e6e9ef;border-color:var(--blue);background:var(--sel)}
+.alr{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;padding:8px 14px;background:none;border:0;border-bottom:1px solid #2d323c;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.alr .g{width:16px;text-align:center}.alr .tt{flex:1;min-width:0}.alr .tt b{display:block;color:#e6e9ef;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.alr .tt span{color:var(--dim);font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{color:var(--dim);padding:22px 14px;font-size:12.5px}
+.status{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sel);font-size:11.5px;color:var(--dim)}
+.status .chipb{background:var(--blue);color:var(--bg);font-weight:700;padding:0 6px;border-radius:3px}.status .sp1{flex:1}
+.back{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none}.back.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:82%;overflow:auto;background:var(--panel);border-radius:14px 14px 0 0;padding:8px 14px 18px;border-top:1px solid var(--line)}
+.sheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 10px}
+.sheet h3{margin:4px 0 6px;font-size:14px;color:#e6e9ef}.sheet p{margin:4px 0;color:var(--fg);font-size:12.5px}
+.act{display:flex;justify-content:space-between;align-items:center;width:100%;min-height:48px;margin:6px 0;background:#2a2f3a;border:1px solid var(--line);border-radius:10px;color:var(--fg);font:inherit;cursor:pointer;text-align:left;padding:8px 14px}
+.act.red{color:var(--red);border-color:#6b3a40}.act.cur{border-color:var(--blue)}.act small{color:var(--dim);font-size:11px}
+.act2{display:flex;gap:8px}.act2 .act{flex:1;justify-content:center}
+.inp{width:100%;min-height:44px;background:#1c2027;border:1px solid var(--line);border-radius:10px;color:#e6e9ef;font:inherit;padding:0 12px;margin:6px 0}
+.inp:focus{outline:none;border-color:var(--blue)}
+.err{color:var(--red);font-size:12px;margin:4px 0}
+.cancel{display:block;text-align:center;color:var(--dim);padding:10px;cursor:pointer}
+#toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:7px 13px;border-radius:16px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86%;text-align:center}
+#toast.on{opacity:1}
+</style></head><body>
+<h1>jw · grupos de workspaces</h1>
+<p class="note">Prototipo para aprobar antes del spec. Un <b>grupo</b> es un nivel de organización por encima de los workspaces, dentro de <b>una sola sesión</b> del daemon: reúne los repos, worktrees y carpetas de un mismo producto (por ejemplo <code>salesassist</code> con <code>design-studio</code>, <code>jitsubai</code> y una carpeta suelta). Es solo una forma de ordenar y resumir: <b>no cierra, no mueve ni cambia nada en el disco</b>. La terminal y el teléfono de abajo leen el mismo estado: lo que hagas en uno se ve en el otro. Los avisos de los hijos suben a la fila del grupo cuando está plegado.</p>
+
+<div class="ctl">
+  <fieldset><legend><span class="tag-opt">decisión</span>lo que está abierto (ver «Para decidir»)</legend>
+    <label>pertenencia <select id="o-unit"><option value="repo">por repositorio (recomendado)</option><option value="ws">por workspace</option></select></label>
+    <label>grupo plegado <select id="o-sum"><option value="kinds">un símbolo por tipo (recomendado)</option><option value="top">el más urgente y el total</option></select></label>
+    <label>borrar grupo con workspaces <select id="o-del"><option value="release">los suelta (recomendado)</option><option value="block">pide vaciarlo antes</option></select></label>
+    <label>plegado <select id="o-coll"><option value="client">cada cliente el suyo (recomendado)</option><option value="shared">compartido por el daemon</option></select></label>
+  </fieldset>
+  <fieldset><legend><span class="tag-opt">para probar</span>casos, no decisiones</legend>
+    <label>barra lateral <select id="f-sb"><option value="28">28 (hoy)</option><option value="34">34</option></select></label>
+    <label>pantalla <select id="f-cols"><option value="100">100 columnas</option><option value="72">72 (estrecha)</option></select></label>
+    <label><input type="checkbox" id="f-long"> nombres largos</label>
+    <button data-b="empty">sin grupos (como hoy)</button>
+    <button data-b="reset">reiniciar</button>
+  </fieldset>
+  <fieldset><legend>simular</legend>
+    <button data-b="perm">pide permiso</button>
+    <button data-b="ci">CI falla</button>
+    <button data-b="done">un agente termina</button>
+    <button data-b="job">quitar worktree (trabajo 6 s)</button>
+    <button data-b="newwt">worktree nuevo desde la fila</button>
+    <button data-b="reopen">cerrar y reabrir la fila</button>
+  </fieldset>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p class="note" style="max-width:800px">Teclas (el sidebar tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · el número a la izquierda de cada workspace es solo una etiqueta (hoy tampoco salta) · <kbd>h</kbd> pliega el grupo (o sube al grupo desde un hijo) · <kbd>l</kbd> abre · <kbd>↵</kbd> pliega o abre un grupo, entra a un workspace · <kbd>z</kbd> pliega o abre todos · <kbd>g</kbd> mueve el workspace a un grupo · <kbd>G</kbd> grupo nuevo · <kbd>r</kbd> renombra el grupo · <kbd>x</kbd> borra el grupo · <kbd>J</kbd><kbd>K</kbd> baja y sube el grupo (o el repo dentro de su grupo) · <kbd>a</kbd> avisos. Ninguna lleva Alt.</p>
+  </div>
+  <div>
+    <div class="phone" id="phone">
+      <div class="sbr"><span>9:41</span><span>LTE · 92%</span></div>
+      <div class="screen" id="screen"></div>
+      <div class="back" id="back"><div class="sheet" id="sheet"></div></div>
+      <div id="toast"></div>
+    </div>
+    <p class="note" style="max-width:390px">Teléfono: toca la fila de un grupo para plegarla; mantén pulsado (o clic derecho aquí) un grupo o un workspace para su hoja.</p>
+  </div>
+</div>
+
+<h2><span class="tag-idea">IDEA</span>La fábrica: un grupo abierto como un panel de todos sus agentes</h2>
+<p class="note">Propuesta aparte: no cambia nada de lo de arriba y se puede descartar sin tocar el resto. Un grupo se abre como una tabla de solo lectura de sus workspaces: qué hace el agente de cada uno, qué espera de ti, el PR y el CI, y hace cuánto. Responder (un permiso, una pregunta) sigue siendo entrar al workspace. Se lee del mismo estado, así que no añade nada al daemon. <kbd>Tab</kbd> o <kbd>1</kbd>…<kbd>9</kbd> cambia de grupo · <kbd>j</kbd><kbd>k</kbd> · <kbd>↵</kbd> va a ese workspace en la terminal de arriba. (La tecla para abrirla desde el sidebar queda por decidir.)</p>
+<div class="term" tabindex="0" id="fterm"><pre id="fscr"></pre></div>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>Nombre: «grupo».</b> Es la palabra del usuario; <code>project</code> ya es la configuración <code>.jw.toml</code> de un repo, y «espacio» se confunde con workspace («espacio de trabajo»). «Producto» es demasiado estrecho (un grupo puede ser un cliente, un equipo o «ideas»). <code>grouping.rs</code> del daemon ordena por repositorio: se queda como está, y el spec dirá «ordenado por repositorio» para eso y «grupo» solo para lo nuevo.</li>
+  <li><b>Un workspace está en un solo grupo, o en ninguno.</b> El sidebar es un árbol: una fila, un cursor, una selección; con varios grupos la misma fila saldría dos veces y sus avisos se contarían dos veces. Si hace falta cruzar, se hace con otro grupo, no con etiquetas.</li>
+  <li><b>La pertenencia es del repositorio</b> (por defecto): al mover una raíz o un worktree se mueve el repositorio entero, y un worktree nuevo nace en el grupo de su repositorio. Una carpeta que no es un repo se mueve sola. El grupo se guarda con la ruta del proyecto, así que cerrar y reabrir un workspace lo devuelve a su grupo (prueba «cerrar y reabrir la fila»). Con la otra opción cada workspace tiene el suyo, y un repo puede quedar partido: en cada grupo sale con su nombre encima, como un repo sin raíz abierta.</li>
+  <li><b>El sidebar:</b> los grupos en su orden, cada uno con sus repos (raíz y worktrees, como hoy) dos columnas más adentro que hoy; los workspaces sin grupo al final bajo <code>sin grupo</code>. <b>Sin ningún grupo no cambia nada</b>: el sidebar es el de hoy, con <code>carpetas</code>. Los encabezados de repo no se resaltan; la fila de un grupo sí, y lleva su cursor.</li>
+  <li><b>Plegar:</b> <kbd>↵</kbd> en el grupo, <kbd>h</kbd> pliega, <kbd>l</kbd> abre, <kbd>z</kbd> todos. Con el cursor en un hijo, <kbd>h</kbd> sube al grupo. Plegar un grupo con el cursor dentro lleva el cursor a su fila. Ir a un workspace por un aviso abre su grupo. Los números dibujados siguen lo que se ve (los hijos de un grupo plegado no tienen número) y no son teclas.</li>
+  <li><b>La fila de un grupo plegado resume a sus hijos:</b> <span class="c-blue">⠋2</span> es lo que corre (agentes trabajando y trabajos, como el spinner del workspace), y después un símbolo por tipo de aviso, del más urgente al menos, con su cuenta si pasa de uno: <span class="c-red">!</span> permiso, <span class="c-yellow">?</span> pregunta, <span class="c-mag">◆</span> plan, <span class="c-red">✗</span> CI. Abierto, el grupo solo lleva el número de sus workspaces: los avisos están en cada fila.</li>
+  <li><b>Crear:</b> <kbd>G</kbd> pide el nombre y crea un grupo vacío; <kbd>g</kbd> en un workspace abre la lista de grupos (con <kbd>1</kbd>…<kbd>9</kbd>, <kbd>0</kbd> sin grupo y <kbd>n</kbd> para uno nuevo que ya lo contiene). El nombre no puede estar vacío ni repetido (sin distinguir mayúsculas) ni pasar de 40 letras; si es largo, se corta con <code>…</code>.</li>
+  <li><b>Renombrar</b> es <kbd>r</kbd> sobre la fila del grupo (sobre un worktree sigue siendo renombrar el worktree). <b>Reordenar</b> con <kbd>J</kbd> y <kbd>K</kbd>: sobre un grupo lo sube o baja entre los grupos; sobre un workspace mueve su repositorio dentro de su grupo (para cambiar de grupo, <kbd>g</kbd>).</li>
+  <li><b>Borrar un grupo</b> es <kbd>x</kbd> sobre su fila y pregunta antes. <b>Los workspaces no se cierran:</b> pasan a «sin grupo». Un grupo vacío se borra sin más razones que la pregunta. (Con la otra opción, un grupo con workspaces dice cuántos tiene y no se borra hasta vaciarlo.)</li>
+  <li><b>Avisos</b> (<kbd>a</kbd>) sigue con sus dos pestañas, alertas y trabajos; cada alerta dice <code>grupo › workspace</code> a la derecha. <code>avisos N</code> cuenta todo, como hoy: un grupo plegado no oculta nada. En el teléfono, la pantalla de avisos tiene un filtro por grupo y la campana cuenta lo mismo.</li>
+  <li><b>Teléfono:</b> Home lleva una fila por grupo (plegable, con el mismo resumen) y los workspaces dentro; <b>mover a un grupo…</b> es una entrada más de la hoja de cada workspace (la de hoy, con su variante por tipo), y la hoja del grupo renombra, sube, baja y borra. Lo de plegado es de cada cliente: plegar en el teléfono no pliega la terminal.</li>
+  <li><b>Casos que muestra:</b> un grupo vacío (<code>ideas</code>); una carpeta de otra ruta en el mismo grupo (<code>design studio</code>, en Documents); un repo sin raíz abierta con su encabezado (<code>api-gateway</code>); un grupo plegado con avisos (<code>infra</code>); nombres largos y la barra a 34 columnas; la pantalla estrecha.</li>
+  <li><b>Costo en el contrato:</b> el daemon guarda <code>groups: [{id, name}]</code> en la sesión y cada workspace dice su <code>group</code> (opcional): campos nuevos, el envelope no cambia. Crear, renombrar, mover, ordenar y borrar son comandos del daemon; <code>jw</code> los tendrá también como CLI (<code>jw group …</code>) y <code>jw ls</code> dirá el grupo, para que un agente pueda ordenar el trabajo. Los grupos son personales: no van en <code>.jw.toml</code> del repo.</li>
+</ul>
+
+<h2>Para decidir</h2>
+<ul class="note">
+  <li><b>El nombre.</b> Recomiendo <b>grupo</b> (arriba). Alternativas: «espacio» (choca con workspace), «producto» (estrecho). «Fábrica» queda solo para la idea de arriba.</li>
+  <li><b>Un grupo por workspace, o varios.</b> Recomiendo <b>uno</b>: árbol simple, avisos contados una vez, el cursor sin ambigüedad. Con varios haría falta una vista plana y dibujar filas repetidas.</li>
+  <li><b>Unidad de pertenencia: repo o workspace</b> (selector «pertenencia»). Recomiendo <b>repo</b>, guardado con la ruta del proyecto: mover un repo es una acción, un worktree nuevo no cae «sin grupo», y cerrar y reabrir lo recuerda sin más. Por workspace se puede partir un repo entre grupos, pero un worktree nuevo toma el grupo de la fila desde donde se crea y la pertenencia hay que guardarla por ruta (por id se perdería al reabrir). Se prueba con «worktree nuevo desde la fila» y «cerrar y reabrir la fila».</li>
+  <li><b>Borrar un grupo con workspaces.</b> Recomiendo <b>soltarlos</b> a «sin grupo», con la pregunta diciendo cuántos son: el grupo es solo organización y nada se pierde. Exigir vaciarlo es más seguro y más pesado.</li>
+  <li><b>La fila de un grupo plegado.</b> Recomiendo <b>un símbolo por tipo</b> (hasta tres tipos y <code>+n</code>): dice qué espera sin abrir. «El más urgente y el total» ocupa menos y sirve en 28 columnas con nombres largos.</li>
+  <li><b>Dónde vive el plegado.</b> Recomiendo <b>en cada cliente</b>, como el registro de lo visto: plegar en el teléfono no debe plegar la terminal ante la que estás sentado. En el daemon sería un campo más y un cambio que llega a todos.</li>
+  <li><b>Los números.</b> Los números dibujados siguen lo que se ve (REQ-223): plegar un grupo renumera lo que queda debajo, y no son teclas, como hoy. Recomiendo no añadir un salto por número.</li>
+  <li><b>Las teclas.</b> <kbd>g</kbd> y <kbd>G</kbd> (grupo), <kbd>r</kbd>/<kbd>x</kbd> sobre la fila del grupo, <kbd>h</kbd>/<kbd>l</kbd> para plegar, <kbd>J</kbd>/<kbd>K</kbd> para ordenar: están libres en el sidebar, pero <kbd>J</kbd> <kbd>K</kbd> son «intercambiar panel» en el nivel de paneles (es la misma idea: mover hacia abajo o arriba) y <kbd>z</kbd> se eligió para «todos» porque <kbd>H</kbd>/<kbd>L</kbd> también son de paneles. Si prefieres no repetir letras, la alternativa es <kbd>[</kbd> y <kbd>]</kbd> para ordenar.</li>
+  <li><b>Sin grupo.</b> Recomiendo <b>al final y solo con encabezado cuando existe algún grupo</b>: quien no use grupos no ve nada nuevo.</li>
+  <li><b>La fábrica (idea).</b> Recomiendo <b>dejarla para después</b> de los grupos: no necesita nada del daemon, y se decide mejor cuando haya grupos de verdad con agentes en cada uno. Si sí, es solo lectura: responder sigue siendo entrar al workspace.</li>
+  <li><b>Qué se hace con lo que ya había:</b> nada. Los workspaces actuales empiezan «sin grupo» y el sidebar es idéntico al de hoy hasta que se crea el primer grupo. Leí tu ejemplo como el repo <code>design-studio</code> y una carpeta <code>design studio</code> (los dos nombres se parecen): si era una errata, la carpeta suelta del prototipo sobra y no cambia nada.</li>
+</ul>
+
+<script>
+const SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const now=()=>performance.now();
+const spin=()=>SPIN[Math.floor(now()/110)%SPIN.length];
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const $=id=>document.getElementById(id);
+const ROWS=30;
+
+/* ---------- the model: pure, no drawing */
+// the same marks as tui.rs `mark()`: rank = urgency, 0 first
+const KINDS={
+  perm:{g:'!',c:'c-red',rank:0,txt:'pide permiso',word:'permiso'},
+  ask:{g:'?',c:'c-yellow',rank:1,txt:'pregunta',word:'pregunta'},
+  plan:{g:'◆',c:'c-mag',rank:2,txt:'plan listo',word:'plan'},
+  ci:{g:'✗',c:'c-red',rank:3,txt:'CI roja',word:'CI'},
+  done:{g:'✓',c:'c-green',rank:4,txt:'terminó',word:'terminó'},
+  merged:{g:'⚑',c:'c-cyan',rank:5,txt:'PR integrado',word:'integrado'},
+};
+const opt={unit:'repo',sum:'kinds',del:'release',coll:'client'};
+const fx={sb:28,cols:100,long:false};
+let M,nid,ngr,mem,col,rot,jobs;
+const wsById=id=>M.ws.find(w=>w.id===id);
+const grById=id=>M.groups.find(g=>g.id===id);
+const label=w=>w.kind==='worktree'?(fx.long&&w.blong||w.branch):(fx.long&&w.long||w.name);
+const gname=g=>fx.long&&g.long||g.name;
+const colOf=c=>opt.coll==='shared'?col.tui:col[c];
+
+function seed(empty){
+  nid=1;ngr=5;mem={};rot=0;jobs=[];col={tui:new Set(),phone:new Set(['g4'])};
+  col.tui.add('g4');
+  const G=id=>empty?null:id;
+  M={groups:empty?[]:[
+    {id:'g1',name:'salesassist',long:'salesassist-platform-monorepo-eu'},
+    {id:'g2',name:'jw'},{id:'g3',name:'ideas'},{id:'g4',name:'infra'}],ws:[]};
+  const W=o=>M.ws.push(Object.assign({id:nid++,att:[],working:false,removing:false,failed:false,panes:1,pr:null,d:{},ago:'',branch:'',group:null,repo:null},o));
+  W({name:'sales-assist',repo:'sales-assist',kind:'root',branch:'main',path:'~/ws/sales-assist',group:G('g1'),panes:2,working:true,d:{work:'refactor del carrito'},ago:'4 s'});
+  W({name:'design-studio',long:'design-studio-marketing-site',repo:'design-studio',kind:'root',branch:'main',path:'~/ws/design-studio',group:G('g1'),att:['ask'],d:{ask:'¿Tailwind v4 o dejo el CSS?'},ago:'2 min'});
+  W({name:'design-studio',repo:'design-studio',kind:'worktree',branch:'feat/theme',blong:'feat/new-checkout-flow-with-stripe-elements',path:'~/ws/design-studio-wt/theme',group:G('g1'),panes:2,att:['perm'],d:{perm:'npm run build'},ago:'40 s'});
+  W({name:'design-studio',repo:'design-studio',kind:'worktree',branch:'fix/export-pdf',path:'~/ws/design-studio-wt/export',group:G('g1'),att:['plan'],d:{plan:'5 pasos para el PDF'},ago:'11 min'});
+  W({name:'jitsubai',repo:'jitsubai',kind:'root',branch:'main',path:'~/ws/jitsubai',group:G('g1'),ago:'1 h'});
+  W({name:'jitsubai',repo:'jitsubai',kind:'worktree',branch:'feat/api-v2',path:'~/ws/jitsubai-wt/api-v2',group:G('g1'),working:true,pr:{n:58,ci:'ok'},d:{work:'migración 0042'},ago:'9 s'});
+  W({name:'design studio',kind:'folder',path:'~/Documents/design studio',group:G('g1'),panes:0,ago:'3 d'});
+  W({name:'jw',repo:'jw',kind:'root',branch:'main',path:'~/ws/jw',group:G('g2'),ago:'20 min'});
+  W({name:'jw',repo:'jw',kind:'worktree',branch:'feat/workspace-groups',path:'~/ws/jw-wt/workspace-groups',group:G('g2'),panes:3,working:true,d:{work:'prototipo de grupos'},ago:'2 s'});
+  W({name:'jw',repo:'jw',kind:'worktree',branch:'feat/jobs-system',path:'~/ws/jw-wt/jobs-system',group:G('g2'),att:['merged'],pr:{n:57,ci:'merged'},d:{merged:'PR #57 integrado'},ago:'1 h'});
+  W({name:'terraform',repo:'terraform',kind:'root',branch:'main',path:'~/infra/terraform',group:G('g4'),att:['ci'],pr:{n:12,ci:'fail'},d:{ci:'plan (eu-west)'},ago:'6 min'});
+  W({name:'terraform',repo:'terraform',kind:'worktree',branch:'fix/vpc-peering',path:'~/infra/terraform-wt/vpc',group:G('g4'),att:['perm'],d:{perm:'terraform apply'},ago:'1 min'});
+  W({name:'dotfiles',kind:'folder',path:'~/dotfiles',panes:1,ago:'2 d'});
+  W({name:'scratch',kind:'folder',path:'~/tmp/scratch',panes:0,ago:'5 d'});
+  W({name:'api-gateway',repo:'api-gateway',kind:'worktree',branch:'feat/rate-limit',path:'~/ws/api-gateway-wt/rate',panes:1,ago:'3 h'});
+}
+
+// consecutive blocks of one repository, its root first; a folder that is not a repository is a block of its own
+function blocksOf(list){
+  const out=[],idx=new Map();
+  list.forEach(w=>{
+    if(w.repo){if(!idx.has(w.repo)){idx.set(w.repo,out.length);out.push([])}out[idx.get(w.repo)].push(w)}
+    else out.push([w]);
+  });
+  out.forEach(b=>b.sort((a,c)=>(c.kind==='root')-(a.kind==='root')));
+  return out.filter(b=>b[0].repo).concat(out.filter(b=>!b[0].repo));   // loose folders last, as REQ-219
+}
+const members=gid=>M.ws.filter(w=>w.group===gid);
+// the rows of a list of workspaces, as side.rs: a heading before a worktree whose root is not just before it,
+// `carpetas` before the first loose folder when something comes before it
+function listRows(list,ind,loose){
+  const rows=[];let prev=null,seen=false;
+  blocksOf(list).flat().forEach(w=>{
+    if(w.kind==='worktree'&&!(prev&&prev.repo===w.repo))rows.push({t:'head',text:w.repo,ind});
+    if(loose&&w.kind==='folder'&&!seen){seen=true;if(prev)rows.push({t:'head',text:'carpetas',ind})}
+    rows.push({t:'ws',w,ind});prev=w;
+  });
+  return rows;
+}
+function buildRows(client){
+  const rows=[],c=colOf(client),any=M.groups.length>0;
+  M.groups.forEach(g=>{
+    const m=members(g.id),open=!c.has(g.id);
+    rows.push({t:'group',g,n:m.length,open});
+    if(!open)return;
+    if(!m.length)rows.push({t:'empty',ind:2});else rows.push(...listRows(m,2,false));
+  });
+  const un=M.ws.filter(w=>!w.group);
+  if(any&&un.length)rows.push({t:'head',text:'sin grupo',ind:1,top:true});
+  rows.push(...listRows(un,any?2:0,!any));
+  return rows;
+}
+const sideRows=()=>buildRows('tui');
+// what a group's children say, in one place
+function summary(gid){
+  const m=members(gid),cnt={};
+  m.forEach(w=>w.att.forEach(k=>cnt[k]=(cnt[k]||0)+1));
+  const kinds=Object.keys(cnt).sort((a,b)=>KINDS[a].rank-KINDS[b].rank);
+  return {run:m.filter(w=>w.working||w.removing).length,cnt,kinds,total:kinds.reduce((s,k)=>s+cnt[k],0),n:m.length};
+}
+function sumPieces(gid){
+  const s=summary(gid),out=[];
+  if(s.run)out.push({t:'spin',n:s.run});
+  if(opt.sum==='top'){if(s.kinds.length)out.push({t:'k',k:s.kinds[0],n:s.total,force:true})}
+  else{
+    s.kinds.slice(0,3).forEach(k=>out.push({t:'k',k,n:s.cnt[k]}));
+    const rest=s.kinds.slice(3).reduce((a,k)=>a+s.cnt[k],0);
+    if(rest)out.push({t:'more',n:rest});
+  }
+  return out;
+}
+const pieceText=p=>p.t==='spin'?spin()+p.n:p.t==='more'?'+'+p.n:KINDS[p.k].g+((p.n>1||p.force)?p.n:'');
+const pieceCls=p=>p.t==='spin'?'c-blue':p.t==='more'?'c-dim':KINDS[p.k].c;
+const alertsAll=()=>{
+  const gi=g=>M.groups.findIndex(x=>x.id===g);
+  return M.ws.flatMap(w=>w.att.map(k=>({w,k}))).sort((a,b)=>KINDS[a.k].rank-KINDS[b.k].rank||gi(a.w.group)-gi(b.w.group));
+};
+const groupOf=w=>w.group?grById(w.group):null;
+const where=w=>{const g=groupOf(w);return g?gname(g):'sin grupo'};
+
+// operations: each returns '' when done, or the reason it was not
+function validName(name,except){
+  name=name.trim();
+  if(!name)return 'el grupo necesita un nombre';
+  if([...name].length>40)return 'el nombre pasa de 40 letras';
+  if(M.groups.some(g=>g.id!==except&&g.name.toLowerCase()===name.toLowerCase()))return 'ya hay un grupo «'+name+'»';
+  return '';
+}
+function addGroup(name){const e=validName(name);if(e)return {err:e};const g={id:'g'+ngr++,name:name.trim()};M.groups.push(g);return {g}}
+function renameGroup(id,name){const e=validName(name,id);if(e)return e;grById(id).name=name.trim();return ''}
+const unitSet=w=>opt.unit==='repo'&&w.repo?M.ws.filter(x=>x.repo===w.repo):[w];
+function moveWs(w,gid,client){
+  const set=unitSet(w);set.forEach(x=>x.group=gid);
+  if(gid)colOf(client).delete(gid);
+  return set;
+}
+function deleteGroup(id){
+  const m=members(id);
+  if(opt.del==='block'&&m.length)return {err:`«${gname(grById(id))}» tiene ${m.length} workspace${m.length>1?'s':''}: sácalos antes`};
+  m.forEach(w=>w.group=null);
+  M.groups=M.groups.filter(g=>g.id!==id);col.tui.delete(id);col.phone.delete(id);
+  return {released:m.length};
+}
+function moveGroup(id,d){
+  const i=M.groups.findIndex(g=>g.id===id),j=i+d;
+  if(j<0||j>=M.groups.length)return false;
+  [M.groups[i],M.groups[j]]=[M.groups[j],M.groups[i]];return true;
+}
+// a repository's block moves among the blocks of its own group; the slots in the list stay where they were
+function moveBlock(w,d){
+  const slots=[],list=[];
+  M.ws.forEach((x,i)=>{if(x.group===w.group){slots.push(i);list.push(x)}});
+  const bl=blocksOf(list),bi=bl.findIndex(b=>b.includes(w)),bj=bi+d;
+  if(bj<0||bj>=bl.length)return false;
+  [bl[bi],bl[bj]]=[bl[bj],bl[bi]];
+  bl.flat().forEach((x,k)=>{M.ws[slots[k]]=x});
+  return true;
+}
+function newWorktree(from){
+  if(!from.repo)return {err:'una carpeta que no es un repositorio no tiene worktrees'};
+  const n=M.ws.filter(x=>x.repo===from.repo&&x.kind==='worktree').length+1;
+  const w={id:nid++,name:from.repo,repo:from.repo,kind:'worktree',branch:'feat/nuevo-'+n,path:from.path+'-wt/nuevo-'+n,group:from.group,att:[],working:false,removing:false,failed:false,panes:1,pr:null,d:{},ago:'ahora'};
+  const last=M.ws.map((x,i)=>x.repo===from.repo?i:-1).filter(i=>i>=0).pop();
+  M.ws.splice(last+1,0,w);
+  return {w};
+}
+const memKey=w=>opt.unit==='repo'&&w.repo?'repo:'+w.repo:'path:'+w.path;
+function closeReopen(w){
+  const k=memKey(w),at=M.ws.indexOf(w);
+  mem[k]=w.group;M.ws.splice(at,1);                        // closed: what remains is the group, by repository or by path
+  const back=Object.assign({},w,{id:nid++,group:null,att:[]});
+  back.group=k in mem?(grById(mem[k])?mem[k]:null):null;     // reopened: the daemon looks the key up
+  M.ws.splice(at,0,back);
+  return back;
+}
+function normalizeUnit(){                                    // going to «por repositorio»: a split repo takes its root's group
+  M.ws.filter(w=>w.repo).forEach(w=>{const r=M.ws.find(x=>x.repo===w.repo&&x.kind==='root')||M.ws.find(x=>x.repo===w.repo);w.group=r.group});
+}
+
+/* ---------- cell grid */
+function Scr(id){
+  return {id,cols:0,rows:0,g:[],
+    reset(c,r){this.cols=c;this.rows=r;this.g=Array.from({length:r},()=>Array.from({length:c},()=>[' ','']))},
+    put(r,c,t,cls){for(const ch of [...t]){if(r<0||r>=this.rows||c<0||c>=this.cols)return;this.g[r][c]=[ch,cls||''];c++}},
+    fill(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<this.cols&&r>=0&&r<this.rows)this.g[r][c+i]=[' ',cls||'']},
+    tint(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<this.cols){const x=this.g[r][c+i];x[1]=(x[1]+' '+cls).trim()}},
+    paint(){
+      const out=this.g.map(row=>{let s='',cur=null,buf='';
+        for(const [ch,cl] of row){if(cl!==cur){if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);buf='';cur=cl}buf+=ch}
+        if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);return s});
+      $(this.id).innerHTML=out.join('\n');
+    }};
+}
+const T=Scr('scr'),F=Scr('fscr');
+const clip=(s,n)=>{s=[...String(s)];return n<=0?'':s.length<=n?s.join(''):s.slice(0,Math.max(0,n-1)).join('')+'…'};
+const fmtS=ms=>{const s=ms/1000;return s<10?s.toFixed(1).replace('.',',')+' s':Math.round(s)+' s'};
+
+/* ---------- state of the screens */
+let ui;
+function resetUi(){ui={sel:{t:'g',id:'g1'},lastIdx:0,mode:'nav',buf:'',inp:null,pick:0,ask:null,flash:'',fcls:'',av:0,tab:'alertas',avi:0,top:0}}
+let ph,fac;
+function resetPh(){ph={screen:'home',tab:'alertas',filter:'all',sel:null,sheet:null}}
+const selKey=r=>r.t==='group'?'g:'+r.g.id:'w:'+r.w.id;
+const curKey=()=>ui.sel.t==='none'?'':ui.sel.t+':'+ui.sel.id;
+const selRows=()=>sideRows().filter(r=>r.t==='group'||r.t==='ws');
+const toSel=r=>r.t==='group'?{t:'g',id:r.g.id}:{t:'w',id:r.w.id};
+function fixSel(){
+  const rows=selRows(),k=curKey(),i=rows.findIndex(r=>selKey(r)===k);
+  if(i>=0){ui.lastIdx=i;return}
+  if(ui.sel.t==='w'){const w=wsById(ui.sel.id);if(w&&w.group){const j=rows.findIndex(r=>r.t==='group'&&r.g.id===w.group);if(j>=0){ui.sel=toSel(rows[j]);ui.lastIdx=j;return}}}
+  const r=rows[Math.min(ui.lastIdx,rows.length-1)];
+  ui.sel=r?toSel(r):{t:'none'};
+}
+function selWs(){return ui.sel.t==='w'?wsById(ui.sel.id):null}
+function selGroup(){return ui.sel.t==='g'?grById(ui.sel.id):null}
+function say(t,cls){ui.flash=t;ui.fcls=cls||'c-green'}
+function reveal(w,client){if(w.group)colOf(client).delete(w.group)}
+function goTo(w,client){reveal(w,client);ui.sel={t:'w',id:w.id}}
+
+/* ---------- the terminal */
+function drawTui(){
+  fixSel();
+  const S=T,SB=fx.sb,COLS=fx.cols;S.reset(COLS,ROWS);
+  const rows=sideRows(),avail=ROWS-8;
+  for(let r=0;r<ROWS-1;r++)S.put(r,SB-1,'│',ui.mode==='nav'?'c-blue':'c-dim');
+  S.put(0,1,'jw','c-bold c-dim');
+  // scroll the list so that the cursor row is seen
+  const si=rows.findIndex(r=>(r.t==='group'||r.t==='ws')&&selKey(r)===curKey());
+  if(si<ui.top)ui.top=si;if(si>=ui.top+avail)ui.top=si-avail+1;
+  if(ui.top<0||rows.length<=avail)ui.top=0;
+  let n=0;rows.slice(0,ui.top).forEach(r=>{if(r.t==='ws')n++});
+  rows.slice(ui.top,ui.top+avail).forEach((r,k)=>{
+    const y=2+k,on=r.t!=='head'&&r.t!=='empty'&&selKey(r)===curKey();
+    if(r.t==='head'){S.put(y,2+r.ind,clip(r.text,SB-5-r.ind),'c-dim');return}
+    if(r.t==='empty'){S.put(y,4,'vacío','c-dim');return}
+    if(r.t==='group'){
+      const editing=ui.mode==='input'&&ui.inp.kind==='rename'&&ui.inp.id===r.g.id;
+      S.put(y,1,r.open?'▾':'▸','c-dim');
+      const pieces=r.open?[]:sumPieces(r.g.id);
+      const txt=r.open?String(r.n):pieces.map(pieceText).join(' ');
+      const w=[...txt].length,room=SB-2-3-(w?w+1:0);
+      if(editing)S.put(y,3,clip(ui.buf+'▏',room),'c-yellow');
+      else S.put(y,3,clip(gname(r.g),room),'c-bold');
+      if(r.open)S.put(y,SB-3-w,txt,'c-dim');
+      else{let c=SB-2-w;pieces.forEach(p=>{const t=pieceText(p);S.put(y,c,t,pieceCls(p));c+=[...t].length+1})}
+      if(on)S.tint(y,0,SB-1,'c-sel'),S.tint(y,3,room,'c-blue');
+      return;
+    }
+    const w=r.w,ind=r.ind,wt=w.kind==='worktree',dot=(wt?6:2)+ind,at=(wt?8:4)+ind;
+    n++;if(n<=9)S.put(y,0,String(n),'c-dim');
+    if(wt)S.put(y,4+ind,'↳','c-dim');
+    S.put(y,dot,w.panes?'●':'○',w.panes?'c-green':'c-dim');
+    const tag=w.pr?'⎇#'+w.pr.n:'',tw=tag?[...tag].length+1:0,nameW=SB-6-at-tw;
+    const ncls=w.removing?'c-dim':on?'c-blue c-bold':!w.panes?'c-dim':'';
+    S.put(y,at,clip(label(w),nameW),ncls);
+    if(tag)S.put(y,SB-6-tw+1,tag,'c-cyan');
+    if(w.att.length){const k=KINDS[w.att[0]];S.put(y,SB-5,k.g,k.c);if(w.att.length>1)S.put(y,SB-4,String(w.att.length-1),'c-dim')}
+    if(w.working)S.put(y,SB-3,spin(),'c-blue');
+    if(w.removing)S.put(y,SB-2,spin(),'c-blue');else if(w.failed)S.put(y,SB-2,'✗','c-red');
+    if(on)S.tint(y,0,SB-1,'c-sel');
+  });
+  if(ui.top>0)S.put(1,SB-3,'▲','c-dim');if(rows.length>ui.top+avail)S.put(ROWS-6,SB-3,'▼','c-dim');
+  if(!rows.length)S.put(2,2,'sin workspaces · ^␣ o abre una carpeta','c-dim');
+  S.put(ROWS-5,1,clip('! permiso  ? pregunta',SB-3),'c-dim');S.put(ROWS-4,1,clip('◆ plan   ✗ CI   ⠋ corre',SB-3),'c-dim');
+  S.put(ROWS-3,1,clip('g mover · G grupo nuevo',SB-3),'c-dim');S.put(ROWS-2,1,clip('h l plegar · J K orden',SB-3),'c-dim');
+  drawMain(S);
+  if(ui.mode==='pick')drawPick(S);
+  if(ui.mode==='avisos')drawAvisos(S);
+  drawBar(S);
+  S.paint();
+}
+function drawMain(S){
+  const SB=fx.sb,px=SB+1,COLS=fx.cols,pw=COLS-px-1;
+  const w=selWs(),g=selGroup();
+  if(w){
+    const gg=groupOf(w);
+    S.put(0,px+1,clip((gg?gname(gg)+' › ':'')+label(w),pw-2),'c-bold');
+    S.put(1,px+1,clip(w.path,pw-2),'c-dim');
+    if(w.kind!=='folder'&&w.branch)S.put(2,px+1,clip('⎇ '+w.branch+(w.pr?'  #'+w.pr.n+' '+({ok:'CI ✓',fail:'CI ✗',merged:'integrado'}[w.pr.ci]):''),pw-2),'c-cyan');
+    S.put(4,px+1,'$ git status','c-green');S.put(5,px+1,'  nothing to commit, working tree clean','c-dim');
+    let y=7;
+    if(w.working){S.put(y,px+1,clip(spin()+' Claude trabaja · '+(w.d.work||''),pw-2),'c-blue');y++}
+    w.att.forEach(k=>{S.put(y,px+1,clip(KINDS[k].g+' '+KINDS[k].txt+(w.d[k]?' · '+w.d[k]:''),pw-2),KINDS[k].c);y++});
+    if(!w.panes)S.put(y+1,px+1,'sin paneles · ↵ y luego n abre uno','c-dim');
+  }else if(g){
+    const s=summary(g.id),m=members(g.id),repos=new Set(m.map(x=>x.repo||x.path)).size;
+    S.put(0,px+1,clip(gname(g),pw-8),'c-bold');S.put(0,px+1+Math.min([...gname(g)].length,pw-8)+2,'grupo','c-dim');
+    if(!m.length){
+      S.put(2,px+1,'vacío','c-dim');S.put(4,px+1,'sitúate en un workspace y pulsa g para traerlo aquí','c-dim');
+    }else{
+      S.put(2,px+1,`${m.length} workspace${m.length>1?'s':''} · ${repos} repositorio${repos>1?'s':''}/carpeta${repos>1?'s':''}`,'c-dim');
+      let y=4;
+      if(s.run){S.put(y,px+1,spin()+' '+s.run+' corriendo','c-blue');y++}
+      s.kinds.forEach(k=>{S.put(y,px+1,KINDS[k].g+' '+s.cnt[k]+' '+KINDS[k].word,KINDS[k].c);y++});
+      if(!s.run&&!s.kinds.length)S.put(y,px+1,'nada espera algo de ti','c-dim');
+    }
+    S.put(ROWS-8,px+1,'↵ pliega · r renombra · x borra · J K sube o baja','c-dim');
+  }
+  if(ui.mode==='input'&&ui.inp.kind!=='rename'){
+    const t=ui.inp.kind==='new'?'nuevo grupo: ':`nuevo grupo con «${ui.inp.name}»: `;
+    S.fill(ROWS-3,px,COLS-px-1,'c-box');S.put(ROWS-3,px+1,clip(t+ui.buf+'▏',COLS-px-3),'c-yellow c-box');
+  }
+  if(ui.mode==='ask'){
+    S.fill(ROWS-3,px,COLS-px-1,'c-box');S.put(ROWS-3,px+1,clip(ui.ask.text,COLS-px-3),'c-yellow c-box');
+  }
+}
+function pickItems(){
+  const w=selWs();
+  return [...M.groups.map((g,i)=>({k:String(i+1),gid:g.id,t:gname(g),cur:w.group===g.id})),{k:'0',gid:null,t:'sin grupo',cur:!w.group},{k:'n',gid:'new',t:'grupo nuevo…'}];
+}
+function drawPick(S){
+  const w=selWs(),set=unitSet(w),items=pickItems(),px=fx.sb+3,W=Math.min(52,fx.cols-px-2),H=items.length+6,r0=2;
+  for(let r=0;r<H;r++)S.fill(r0+r,px,W,'c-box');
+  S.put(r0,px,'┌'+'─'.repeat(W-2)+'┐','c-dim c-box');
+  for(let r=1;r<H-1;r++){S.put(r0+r,px,'│','c-dim c-box');S.put(r0+r,px+W-1,'│','c-dim c-box')}
+  S.put(r0+H-1,px,'└'+'─'.repeat(W-2)+'┘','c-dim c-box');
+  S.put(r0,px+2,clip(' mover «'+label(w)+'» ',W-4),'c-bold c-box');
+  const sc=set.length>1?`el repositorio ${w.repo}: ${set.length} workspaces`:'solo este workspace';
+  S.put(r0+1,px+2,clip(sc,W-4),'c-dim c-box');
+  items.forEach((it,i)=>{
+    const y=r0+3+i,on=i===ui.pick,bg=on?'c-sel':'c-box';
+    S.fill(y,px+1,W-2,bg);S.put(y,px+2,it.k,'c-dim '+bg);
+    S.put(y,px+5,clip(it.t,W-12),(on?'c-bold ':'')+bg);
+    if(it.cur)S.put(y,px+W-4,'✓','c-green '+bg);
+  });
+  S.put(r0+H-2,px+2,clip('↵ mueve · 1…9 0 n directo · esc',W-4),'c-dim c-box');
+}
+function drawAvisos(S){
+  const W=Math.min(70,fx.cols-fx.sb-4),H=18,c0=fx.sb+2,r0=2;
+  for(let r=0;r<H;r++)S.fill(r0+r,c0,W,'c-box');
+  S.put(r0,c0,'┌'+'─'.repeat(W-2)+'┐','c-dim c-box');
+  for(let r=1;r<H-1;r++){S.put(r0+r,c0,'│','c-dim c-box');S.put(r0+r,c0+W-1,'│','c-dim c-box')}
+  S.put(r0+H-1,c0,'└'+'─'.repeat(W-2)+'┘','c-dim c-box');
+  S.put(r0,c0+2,' avisos ','c-bold c-box');
+  const al=alertsAll(),run=jobs.filter(j=>j.state==='running');
+  const t1=` alertas${al.length?' '+al.length:''} `,t2=` trabajos${run.length?' ⠋'+run.length:jobs.length?' '+jobs.length:''} `;
+  S.put(r0+1,c0+2,t1,ui.tab==='alertas'?'c-chip':'c-dim c-box');S.put(r0+1,c0+3+t1.length,t2,ui.tab==='trabajos'?'c-chip':'c-dim c-box');
+  S.put(r0+2,c0+1,'─'.repeat(W-2),'c-dim c-box');
+  const list=ui.tab==='alertas'?al:jobs;
+  if(ui.avi>=list.length)ui.avi=Math.max(0,list.length-1);
+  if(!list.length)S.put(r0+4,c0+3,ui.tab==='alertas'?'nada espera algo de ti':'nada corre ni ha corrido','c-dim c-box');
+  list.slice(0,H-6).forEach((a,k)=>{
+    const y=r0+3+k,on=k===ui.avi,bg=on?'c-sel':'c-box';S.fill(y,c0+1,W-2,bg);
+    if(ui.tab==='alertas'){
+      const kd=KINDS[a.k],right=where(a.w)+' › '+a.w.repo,rw=Math.min([...right].length,W-30);
+      S.put(y,c0+2,kd.g,kd.c+' '+bg);
+      S.put(y,c0+4,clip(label(a.w)+' · '+kd.txt,W-rw-9),(on?'c-bold ':'')+bg);
+      S.put(y,c0+W-2-rw,clip(right,rw),'c-dim '+bg);
+    }else{
+      const g=a.state==='running'?[spin(),'c-blue']:[a.state==='done'?'✓':'✗',a.state==='done'?'c-green':'c-red'];
+      S.put(y,c0+2,g[0],g[1]+' '+bg);S.put(y,c0+4,clip(a.title,W-20),(on?'c-bold ':'')+bg);
+      const tm=a.state==='running'?fmtS(now()-a.start):fmtS(a.dur);S.put(y,c0+W-2-[...tm].length,tm,'c-dim '+bg);
+    }
+  });
+}
+function drawBar(S){
+  const SB=fx.sb,COLS=fx.cols,y=ROWS-1;S.fill(y,0,COLS,'c-sel');
+  const chipOf={nav:selGroup()?' GRUPO ':' WORKSPACE ',input:' NOMBRE ',pick:' MOVER ',ask:' PREGUNTA ',avisos:' AVISOS '};
+  const chip=chipOf[ui.mode],ccls=ui.mode==='ask'?'c-chipy':ui.mode==='pick'||ui.mode==='input'?'c-chipy':ui.mode==='avisos'?'c-chipm':'c-chip';
+  S.put(y,0,chip,ccls);
+  const hints={nav:selGroup()?'↵ pliega · h l · r renombra · x borra · J K orden · G nuevo':'j k · g mover · G grupo · ↵ entrar · a avisos',
+    input:'↵ acepta · esc cancela',pick:'j k ↵ · 1…9 · 0 sin grupo · n nuevo · esc',ask:'y sí · n no',avisos:'Tab alertas/trabajos · ↵ ir · x descartar · esc'};
+  const run=jobs.filter(j=>j.state==='running').length,av=alertsAll().length;
+  let right=[];
+  if(run)right.push([spin()+' '+run+' trabajo'+(run>1?'s':''),'c-blue']);
+  if(av)right.push([`avisos ${av}`,'c-yellow']);
+  let rw=0;right.forEach(([t])=>rw+=[...t].length+1);
+  const room=COLS-chip.length-rw-3;
+  if(ui.flash&&ui.mode!=='avisos')S.put(y,chip.length+1,clip(ui.flash,room),ui.fcls+' c-sel');
+  else S.put(y,chip.length+1,clip(hints[ui.mode],room),'c-dim c-sel');
+  let c=COLS-1;[...right].reverse().forEach(([t,cl])=>{c-=[...t].length+1;S.put(y,c,t,cl+' c-sel')});
+}
+
+/* ---------- terminal keys */
+function selectedRowIndex(){const k=curKey();return selRows().findIndex(r=>selKey(r)===k)}
+function move(d){const rows=selRows(),i=selectedRowIndex(),j=Math.max(0,Math.min(rows.length-1,i+d));ui.sel=toSel(rows[j])}
+function toggle(g,client,open){const c=colOf(client);if(open===undefined)open=c.has(g);open?c.delete(g):c.add(g)}
+function openPick(){const w=selWs();if(!w){say('g mueve un workspace: sitúate en uno','c-yellow');return}ui.mode='pick';ui.pick=Math.max(0,pickItems().findIndex(i=>i.cur))}
+function doMove(w,gid){
+  const set=moveWs(w,gid,'tui');ui.sel={t:'w',id:w.id};ui.mode='nav';
+  const dest=gid?gname(grById(gid)):'sin grupo';
+  say((set.length>1?`${label(w)} y ${set.length-1} más`:label(w))+' → '+dest);
+}
+function onTermKey(e){
+  const k=e.key;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const done=()=>{drawAll();e.preventDefault()};
+  if(ui.mode==='input'){
+    if(k==='Escape'){ui.mode='nav';ui.inp=null;say('')}
+    else if(k==='Enter'){commitInput()}
+    else if(k==='Backspace')ui.buf=[...ui.buf].slice(0,-1).join('');
+    else if(k.length===1&&[...ui.buf].length<45)ui.buf+=k;
+    return done();
+  }
+  if(ui.mode==='ask'){
+    if(k==='y'){ui.ask.run();ui.ask=null}
+    else if(k==='n'||k==='Escape'){ui.mode='nav';ui.ask=null;say('')}
+    return done();
+  }
+  if(ui.mode==='pick'){
+    const items=pickItems(),pickIt=it=>{
+      if(it.gid==='new'){ui.mode='input';ui.inp={kind:'newwith',name:label(selWs()),id:selWs().id};ui.buf=''}
+      else doMove(selWs(),it.gid)};
+    if(k==='Escape'){ui.mode='nav'}
+    else if(k==='j'||k==='ArrowDown')ui.pick=Math.min(items.length-1,ui.pick+1);
+    else if(k==='k'||k==='ArrowUp')ui.pick=Math.max(0,ui.pick-1);
+    else if(k==='Enter')pickIt(items[ui.pick]);
+    else{const it=items.find(i=>i.k===k);if(it)pickIt(it)}
+    return done();
+  }
+  if(ui.mode==='avisos'){
+    const list=ui.tab==='alertas'?alertsAll():jobs;
+    if(k==='Tab'||k==='ArrowRight'||k==='ArrowLeft'){ui.tab=ui.tab==='alertas'?'trabajos':'alertas';ui.avi=0}
+    else if(k==='Escape')ui.mode='nav';
+    else if(k==='j'||k==='ArrowDown')ui.avi=Math.min(list.length-1,ui.avi+1);
+    else if(k==='k'||k==='ArrowUp')ui.avi=Math.max(0,ui.avi-1);
+    else if(k==='Enter'){const a=list[ui.avi];if(a){const w=ui.tab==='alertas'?a.w:wsById(a.target);if(w){goTo(w,'tui');ui.mode='nav'}}}
+    else if(k==='x'){const a=list[ui.avi];if(a&&ui.tab==='alertas')a.w.att.splice(a.w.att.indexOf(a.k),1);else if(a&&a.state!=='running')jobs.splice(jobs.indexOf(a),1)}
+    return done();
+  }
+  ui.flash='';
+  const w=selWs(),g=selGroup();
+  if(k==='j'||k==='ArrowDown')move(1);
+  else if(k==='k'||k==='ArrowUp')move(-1);
+  else if(k==='h'||k==='ArrowLeft'){
+    if(g)toggle(g.id,'tui',false);
+    else if(w&&w.group)ui.sel={t:'g',id:w.group};
+  }
+  else if(k==='l'||k==='ArrowRight'){
+    if(g){if(colOf('tui').has(g.id))toggle(g.id,'tui',true);else{const m=selRows();const i=selectedRowIndex();if(m[i+1]&&m[i+1].t==='ws'&&m[i+1].w.group===g.id)ui.sel=toSel(m[i+1])}}
+  }
+  else if(k==='Enter'){
+    if(g)toggle(g.id,'tui');
+    else if(w){w.att=[];say('entra a '+label(w)+' (como hoy)','c-dim')}
+  }
+  else if(k==='z'){
+    const c=colOf('tui');if(M.groups.some(x=>!c.has(x.id)))M.groups.forEach(x=>c.add(x.id));else c.clear();
+  }
+  else if(k==='g')openPick();
+  else if(k==='G'){ui.mode='input';ui.inp={kind:'new'};ui.buf=''}
+  else if(k==='r'){
+    if(g){ui.mode='input';ui.inp={kind:'rename',id:g.id};ui.buf=g.name}
+    else say('renombra el worktree (como hoy)','c-dim');
+  }
+  else if(k==='x'){
+    if(g){
+      const m=members(g.id);
+      if(opt.del==='block'&&m.length)say(`«${gname(g)}» tiene ${m.length} workspace${m.length>1?'s':''}: sácalos antes (g)`,'c-yellow');
+      else{
+        const text=m.length?`¿borrar el grupo «${gname(g)}»? sus ${m.length} workspace${m.length>1?'s pasan':' pasa'} a sin grupo · y borra · n no`:`¿borrar el grupo vacío «${gname(g)}»? · y borra · n no`;
+        ui.mode='ask';ui.ask={text,run:()=>{const r=deleteGroup(g.id);ui.mode='nav';say(r.released?`grupo borrado · ${r.released} a sin grupo`:'grupo borrado')}};
+      }
+    }else say('cierra el workspace (como hoy)','c-dim');
+  }
+  else if(k==='J'||k==='K'){
+    const d=k==='J'?1:-1;
+    if(g){if(!moveGroup(g.id,d))say(d>0?'ya es el último grupo':'ya es el primero','c-yellow')}
+    else if(w&&!w.repo)say('una carpeta va al final y no se ordena','c-yellow');
+    else if(w){if(!moveBlock(w,d))say(d>0?'ya es el último de su grupo':'ya es el primero de su grupo','c-yellow')}
+  }
+  else if(k==='a'){ui.mode='avisos';ui.avi=0;ui.tab=alertsAll().length?'alertas':jobs.length?'trabajos':'alertas'}
+  done();
+}
+function commitInput(){
+  const inp=ui.inp,name=ui.buf;
+  if(inp.kind==='rename'){const e=renameGroup(inp.id,name);if(e){say(e,'c-red');return}ui.mode='nav';ui.inp=null;say('grupo renombrado «'+name.trim()+'»');return}
+  const r=addGroup(name);if(r.err){say(r.err,'c-red');return}
+  ui.mode='nav';
+  if(inp.kind==='new'){ui.sel={t:'g',id:r.g.id};say('grupo «'+r.g.name+'» creado · vacío')}
+  else{const w=wsById(inp.id);doMove(w,r.g.id)}
+  ui.inp=null;
+}
+
+/* ---------- the idea: the factory of a group */
+function agentText(w){
+  const k=w.att.slice().sort((a,b)=>KINDS[a].rank-KINDS[b].rank)[0];
+  if(k)return {t:KINDS[k].txt+(w.d[k]?' · '+w.d[k]:''),c:KINDS[k].c,g:KINDS[k].g};
+  if(w.removing)return {t:'quitándose',c:'c-blue',g:spin()};
+  if(w.working)return {t:'trabaja · '+(w.d.work||''),c:'c-blue',g:spin()};
+  return {t:w.panes?'inactivo':'sin paneles',c:'c-dim',g:'○'};
+}
+function drawFactory(){
+  const S=F,COLS=100,R=17;S.reset(COLS,R);
+  if(!M.groups.length){S.put(1,2,'IDEA','c-chipm');S.put(3,2,'no hay grupos: la fábrica es de un grupo (G en el sidebar lo crea)','c-dim');S.paint();return}
+  if(!grById(fac.g))fac.g=M.groups[0].id;
+  S.put(0,1,' IDEA ','c-chipm');S.put(0,9,'fábrica','c-bold');
+  let c=19;
+  M.groups.forEach((g,i)=>{const t=` ${i+1} ${clip(gname(g),16)} `;S.put(0,c,t,g.id===fac.g?'c-chip':'c-dim');c+=[...t].length+1});
+  const m=blocksOf(members(fac.g)).flat(),s=summary(fac.g);
+  S.put(2,2,`${m.length} workspace${m.length!==1?'s':''}`,'c-dim');
+  let x=2+[...`${m.length} workspaces`].length+3;
+  [['trabajan',s.run,'c-blue'],...s.kinds.map(k=>[KINDS[k].word,s.cnt[k],KINDS[k].c])].forEach(([t,n,cl])=>{if(!n)return;const tx=`${n} ${t}`;S.put(2,x,tx,cl);x+=[...tx].length+3});
+  S.put(4,2,'workspace','c-dim');S.put(4,36,'agente','c-dim');S.put(4,74,'PR','c-dim');S.put(4,92,'hace','c-dim');
+  S.put(5,1,'─'.repeat(COLS-2),'c-line c-dim');
+  if(!m.length)S.put(7,2,'grupo vacío','c-dim');
+  if(fac.sel>=m.length)fac.sel=Math.max(0,m.length-1);
+  m.forEach((w,i)=>{
+    const y=6+i;if(y>=R-3)return;
+    const a=agentText(w),on=i===fac.sel;
+    S.put(y,1,a.g,a.c);
+    S.put(y,3,clip(w.kind==='worktree'?w.repo+' ↳ '+label(w):label(w),31),w.panes?'':'c-dim');
+    S.put(y,36,clip(a.t,36),a.c);
+    if(w.pr)S.put(y,74,'⎇#'+w.pr.n+' '+({ok:'CI ✓',fail:'CI ✗',merged:'integrado'}[w.pr.ci]),w.pr.ci==='fail'?'c-red':w.pr.ci==='ok'?'c-green':'c-cyan');
+    S.put(y,92,w.ago,'c-dim');
+    if(on)S.tint(y,0,COLS,'c-sel');
+  });
+  S.put(R-2,2,'solo lectura · responder un permiso o una pregunta es entrar al workspace (↵)','c-dim');
+  S.paint();
+}
+function onFacKey(e){
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const k=e.key,m=blocksOf(members(fac.g)).flat();
+  if(k==='j'||k==='ArrowDown')fac.sel=Math.min(m.length-1,fac.sel+1);
+  else if(k==='k'||k==='ArrowUp')fac.sel=Math.max(0,fac.sel-1);
+  else if(k==='Tab'){const i=M.groups.findIndex(g=>g.id===fac.g);fac.g=M.groups[(i+(e.shiftKey?-1:1)+M.groups.length)%M.groups.length].id;fac.sel=0}
+  else if(/^[1-9]$/.test(k)&&M.groups[+k-1]){fac.g=M.groups[+k-1].id;fac.sel=0}
+  else if(k==='Enter'&&m[fac.sel]){goTo(m[fac.sel],'tui');ui.mode='nav';drawAll();$('term').focus()}
+  else return;
+  drawAll();e.preventDefault();
+}
+
+/* ---------- the phone */
+const unseenAtt=w=>w.att.length;
+function sumHtml(gid){
+  return sumPieces(gid).map(p=>{const t=pieceText(p);return p.t==='spin'?`<span class="c-blue"><span class="sp">${SPIN[0]}</span>${p.n}</span>`:`<span class="${pieceCls(p)}">${esc(t)}</span>`}).join('');
+}
+function homeHtml(){
+  const total=alertsAll().length,c=colOf('phone'),any=M.groups.length>0;
+  let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span><button class="ib" data-go="avisos">🔔${total?`<span class="bdg">${total}</span>`:''}</button><button class="ib">⚙</button></div><div class="list" id="plist">`;
+  const rows=buildRows('phone');
+  h+=`<div class="sec">${any?'GRUPOS · '+M.groups.length+' · ':''}WORKSPACES · ${M.ws.length}</div>`;
+  rows.forEach(r=>{
+    if(r.t==='group'){
+      h+=`<button class="gh" data-g="${r.g.id}" ${ph.sel==='g:'+r.g.id?'aria-current="true"':''}><span class="chev">${r.open?'▾':'▸'}</span><span class="gn">${esc(gname(r.g))}</span>${r.open?`<span class="cnt">${r.n}</span>`:`<span class="sm">${sumHtml(r.g.id)}</span>`}</button>`;
+    }else if(r.t==='empty')h+=`<div class="emp">vacío · mantén pulsado un workspace y elige «mover a un grupo…»</div>`;
+    else if(r.t==='head')h+=`<div class="${r.top?'sec':'rh'}">${esc(r.text)}</div>`;
+    else{
+      const w=r.w,wt=w.kind==='worktree',det=(w.kind==='root'?'raíz':wt?'worktree':'carpeta')+(w.panes?` · ${w.panes} panel${w.panes>1?'es':''}`:'')+(wt?'':w.path&&w.kind==='folder'?' · '+w.path:'');
+      const at=w.att[0]?`<span class="${KINDS[w.att[0]].c}">${KINDS[w.att[0]].g}${w.att.length>1?w.att.length:''}</span>`:'';
+      const sp=w.removing?`<span class="c-blue sp">${SPIN[0]}</span>`:w.working?`<span class="c-blue sp">${SPIN[0]}</span>`:'';
+      h+=`<button class="row1 ${r.ind?'in':''} ${wt?'wt':''} ${w.removing?'dis':''}" data-ws="${w.id}" ${ph.sel==='w:'+w.id?'aria-current="true"':''}><span class="o ${w.panes?'c-green':'c-dim'}">${wt?'↳':'●'}</span><span class="nm"><b>${esc(label(w))}</b><span>${esc(det)}${w.removing?' · quitando…':''}</span></span><span class="tag">${w.kind==='root'?'raíz':w.kind==='folder'?'carpeta':'wt'}</span><span class="mk">${at} ${sp}</span></button>`;
+    }
+  });
+  h+=`<button class="newg" data-act="newgrp">＋ grupo nuevo</button><div class="legend">toca un grupo para plegarlo · mantén pulsado para sus acciones</div></div>`;
+  return h;
+}
+function avisosHtml(){
+  const al=alertsAll(),run=jobs.filter(j=>j.state==='running');
+  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div><b>avisos</b><br><span class="sub">lo que espera algo de ti · lo que corre</span></div></div>`;
+  h+=`<div class="tabs"><button class="tab" aria-selected="${ph.tab==='alertas'}" data-tab="alertas">alertas${al.length?`<span class="cnt2">${al.length}</span>`:''}</button><button class="tab" aria-selected="${ph.tab==='trabajos'}" data-tab="trabajos">trabajos${run.length?` <span class="c-blue"><span class="sp">${SPIN[0]}</span> ${run.length}</span>`:jobs.length?` <span class="c-dim">${jobs.length}</span>`:''}</button></div>`;
+  if(ph.tab==='alertas'){
+    if(ph.filter!=='all'&&!grById(ph.filter)&&ph.filter!=='none')ph.filter='all';
+    const cnt=g=>al.filter(a=>(a.w.group||'none')===g).length;
+    h+=`<div class="chips"><button class="chip" aria-pressed="${ph.filter==='all'}" data-f="all">todos ${al.length}</button>${M.groups.map(g=>`<button class="chip" aria-pressed="${ph.filter===g.id}" data-f="${g.id}">${esc(clip(gname(g),14))} ${cnt(g.id)}</button>`).join('')}${M.groups.length&&al.some(a=>!a.w.group)?`<button class="chip" aria-pressed="${ph.filter==='none'}" data-f="none">sin grupo ${cnt('none')}</button>`:''}</div><div class="list">`;
+    const shown=al.filter(a=>ph.filter==='all'||(a.w.group||'none')===ph.filter);
+    h+=shown.length?shown.map(a=>`<button class="alr" data-alert="${a.w.id}:${a.k}"><span class="g ${KINDS[a.k].c}">${KINDS[a.k].g}</span><span class="tt"><b>${esc(label(a.w)+' · '+KINDS[a.k].txt)}</b><span>${esc(where(a.w)+' › '+(a.w.repo||a.w.name)+(a.w.d[a.k]?' · '+a.w.d[a.k]:''))}</span></span><span class="c-dim">›</span></button>`).join(''):'<div class="empty">nada espera algo de ti</div>';
+  }else{
+    h+=`<div class="list">`+(jobs.length?jobs.map(j=>`<div class="alr"><span class="g ${j.state==='running'?'c-blue':j.state==='done'?'c-green':'c-red'}">${j.state==='running'?`<span class="sp">${SPIN[0]}</span>`:j.state==='done'?'✓':'✗'}</span><span class="tt"><b>${esc(j.title)}</b><span>${j.state==='running'?'corriendo':'terminado en '+fmtS(j.dur)}</span></span></div>`).join(''):'<div class="empty">nada corre ni ha corrido</div>');
+  }
+  return h+'</div>';
+}
+function renderPhone(){
+  const l=$('plist'),st=l?l.scrollTop:0;
+  const run=jobs.filter(j=>j.state==='running').length;
+  $('screen').innerHTML=(ph.screen==='avisos'?avisosHtml():homeHtml())+`<div class="status"><span class="chipb">${ph.screen==='avisos'?'AVISOS':'WORKSPACES'}</span><span>wifi · conectado</span><span class="sp1"></span>${run?`<span class="c-blue"><span class="sp">${SPIN[0]}</span> ${run}</span>`:''}</div>`;
+  const l2=$('plist');if(l2)l2.scrollTop=st;
+}
+function sheetHtml(){
+  const s=ph.sheet;if(!s)return'';
+  if(s.k==='ws'){
+    const w=wsById(s.id),set=unitSet(w),g=groupOf(w);
+    const sub=opt.unit==='repo'&&w.repo?(set.length>1?`mueve la raíz y sus ${set.length-1} worktree${set.length>2?'s':''} (${set.length} en total)`:`mueve el repositorio ${w.repo}`):'mueve solo este workspace';
+    const mv=`<button class="act" data-act="mv"><span>mover a un grupo…<br><small>${esc(g?'ahora en «'+gname(g)+'» · ':'ahora sin grupo · ')+sub}</small></span><span>›</span></button>`;
+    const rest=w.kind==='root'?['worktree nuevo','worktrees existentes','configuración del proyecto','quitar el workspace']:w.kind==='folder'?['quitar la carpeta']:['renombrar','worktrees existentes','configuración del proyecto','cerrar el workspace','quitar el worktree'];
+    return `<div class="grab"></div><h3>${esc(label(w))}</h3>${mv}${rest.map(t=>`<button class="act ${/quitar/.test(t)?'red':''}" data-act="noop">${t}</button>`).join('')}<span class="cancel" data-act="close">cerrar</span>`;
+  }
+  if(s.k==='move'){
+    const w=wsById(s.id),set=unitSet(w);
+    const sub=opt.unit==='repo'&&w.repo&&set.length>1?`Se mueven la raíz y sus worktrees: ${set.length} workspaces.`:'Se mueve solo este workspace.';
+    let h=`<div class="grab"></div><h3>mover «${esc(label(w))}»</h3><p class="c-dim">${sub}</p>`;
+    h+=M.groups.map(g=>`<button class="act ${w.group===g.id?'cur':''}" data-act="to" data-to="${g.id}"><span>${esc(gname(g))}</span><span class="c-green">${w.group===g.id?'✓':''}</span></button>`).join('');
+    h+=`<button class="act ${!w.group?'cur':''}" data-act="to" data-to=""><span>sin grupo</span><span class="c-green">${!w.group?'✓':''}</span></button>`;
+    if(s.newName===undefined)h+=`<button class="act" data-act="mvnew"><span>＋ grupo nuevo…</span></button>`;
+    else h+=`<input class="inp" id="inp" placeholder="nombre del grupo" value="${esc(s.newName)}" maxlength="45">${s.err?`<div class="err">${esc(s.err)}</div>`:''}<button class="act" data-act="mvcreate"><span>crear y mover</span></button>`;
+    return h+`<span class="cancel" data-act="close">cancelar</span>`;
+  }
+  if(s.k==='grp'){
+    const g=grById(s.id),m=members(g.id),i=M.groups.indexOf(g);
+    if(s.confirm){
+      const blocked=opt.del==='block'&&m.length;
+      return `<div class="grab"></div><h3>borrar «${esc(gname(g))}»</h3><p>${blocked?`Tiene ${m.length} workspace${m.length>1?'s':''}: sácalos antes con «mover a un grupo…».`:m.length?`Sus ${m.length} workspace${m.length>1?'s':''} no se cierran: pasan a «sin grupo».`:'Está vacío.'}</p>${blocked?'':`<button class="act red" data-act="gdel">× borrar el grupo</button>`}<span class="cancel" data-act="close">cancelar</span>`;
+    }
+    return `<div class="grab"></div><h3>${esc(gname(g))}</h3><p class="c-dim">${m.length} workspace${m.length!==1?'s':''}</p><input class="inp" id="inp" value="${esc(s.name!==undefined?s.name:g.name)}" maxlength="45">${s.err?`<div class="err">${esc(s.err)}</div>`:''}<button class="act" data-act="gren"><span>guardar el nombre</span></button><div class="act2"><button class="act" data-act="gup" ${i===0?'disabled style="opacity:.4"':''}>↑ subir</button><button class="act" data-act="gdown" ${i===M.groups.length-1?'disabled style="opacity:.4"':''}>↓ bajar</button></div><button class="act red" data-act="gask">borrar el grupo…</button><span class="cancel" data-act="close">cerrar</span>`;
+  }
+  if(s.k==='newgrp')return `<div class="grab"></div><h3>grupo nuevo</h3><p class="c-dim">Un grupo reúne workspaces de un mismo producto. Empieza vacío.</p><input class="inp" id="inp" placeholder="nombre del grupo" value="${esc(s.name||'')}" maxlength="45">${s.err?`<div class="err">${esc(s.err)}</div>`:''}<button class="act" data-act="gnew"><span>crear</span></button><span class="cancel" data-act="close">cancelar</span>`;
+  return'';
+}
+function setSheet(s){ph.sheet=s;$('sheet').innerHTML=sheetHtml();$('back').classList.toggle('on',!!s);const i=$('inp');if(i&&typeof i.focus==='function')i.focus()}
+let toastT;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2400)}
+let lp={timer:0,fired:false};
+function phoneMenu(el,swallow){
+  const g=el.closest('[data-g]'),w=el.closest('[data-ws]');
+  if(g){ph.sel='g:'+g.dataset.g;lp.fired=swallow;setSheet({k:'grp',id:g.dataset.g});renderPhone()}
+  else if(w){const x=wsById(+w.dataset.ws);if(x.removing){toast('se está quitando');return}ph.sel='w:'+x.id;lp.fired=swallow;setSheet({k:'ws',id:x.id});renderPhone()}
+}
+function onPhoneClick(t){
+  if(lp.fired){lp.fired=false;return}
+  const go=t.closest('[data-go]');if(go){ph.screen=go.dataset.go;return drawAll()}
+  const tb=t.closest('[data-tab]');if(tb){ph.tab=tb.dataset.tab;return drawAll()}
+  const fl=t.closest('[data-f]');if(fl){ph.filter=fl.dataset.f;return drawAll()}
+  const al=t.closest('[data-alert]');if(al){const [id,k]=al.dataset.alert.split(':'),w=wsById(+id);reveal(w,'phone');w.att.splice(w.att.indexOf(k),1);ph.sel='w:'+w.id;ph.screen='home';toast('abre «'+label(w)+'»');return drawAll()}
+  const gh=t.closest('[data-g]');if(gh){toggle(gh.dataset.g,'phone');ph.sel='g:'+gh.dataset.g;return drawAll()}
+  const wr=t.closest('[data-ws]');if(wr){const w=wsById(+wr.dataset.ws);if(w.removing){toast('se está quitando');return}ph.sel='w:'+w.id;w.att=[];return drawAll()}
+  if(t.closest('.back')&&!t.closest('.sheet')){setSheet(null);return}
+  const b=t.closest('[data-act]');if(!b)return;
+  const a=b.dataset.act,s=ph.sheet,val=()=>($('inp')?$('inp').value:'');
+  if(a==='close')setSheet(null);
+  else if(a==='noop'){setSheet(null);toast('como hoy')}
+  else if(a==='newgrp')setSheet({k:'newgrp'});
+  else if(a==='gnew'){const r=addGroup(val());if(r.err)setSheet({k:'newgrp',name:val(),err:r.err});else{setSheet(null);toast('grupo «'+r.g.name+'» creado')}}
+  else if(a==='mv')setSheet({k:'move',id:s.id});
+  else if(a==='mvnew')setSheet({k:'move',id:s.id,newName:''});
+  else if(a==='mvcreate'){const r=addGroup(val());if(r.err)setSheet({k:'move',id:s.id,newName:val(),err:r.err});else{const w=wsById(s.id);moveWs(w,r.g.id,'phone');setSheet(null);toast(label(w)+' → '+r.g.name)}}
+  else if(a==='to'){const w=wsById(s.id),gid=b.dataset.to||null,set=moveWs(w,gid,'phone');setSheet(null);toast((set.length>1?label(w)+' y '+(set.length-1)+' más':label(w))+' → '+(gid?gname(grById(gid)):'sin grupo'))}
+  else if(a==='gren'){const e=renameGroup(s.id,val());if(e)setSheet({k:'grp',id:s.id,name:val(),err:e});else{setSheet(null);toast('grupo renombrado')}}
+  else if(a==='gup'){moveGroup(s.id,-1);setSheet({k:'grp',id:s.id})}
+  else if(a==='gdown'){moveGroup(s.id,1);setSheet({k:'grp',id:s.id})}
+  else if(a==='gask')setSheet({k:'grp',id:s.id,confirm:true});
+  else if(a==='gdel'){const r=deleteGroup(s.id);setSheet(null);toast(r.released?`grupo borrado · ${r.released} a sin grupo`:'grupo borrado')}
+  drawAll();
+}
+
+/* ---------- controls and loop */
+function startJob(w){
+  if(w.removing)return;
+  const j={title:'quitar worktree '+label(w),target:w.id,state:'running',start:now(),dur:0};
+  jobs.unshift(j);w.removing=true;
+  setTimeout(()=>{j.state='done';j.dur=now()-j.start;const at=M.ws.indexOf(w);if(at>=0)M.ws.splice(at,1);drawAll()},6000);
+}
+function pickTarget(){const l=M.ws.filter(w=>!w.removing);rot=(rot+1)%l.length;return l[rot]}
+function onControl(b){
+  const w=selWs();
+  if(b==='reset'){seed(false);resetUi();resetPh();fac={g:'g1',sel:0}}
+  else if(b==='empty'){seed(true);resetUi();resetPh();fac={g:null,sel:0}}
+  else if(b==='perm'){const x=pickTarget();x.att.push('perm');x.d.perm='cargo test --workspace';x.ago='ahora'}
+  else if(b==='ci'){const x=pickTarget();x.att.push('ci');x.d.ci='test (api)';x.ago='ahora'}
+  else if(b==='done'){const x=pickTarget();x.att.push('done');x.d.done='listo para revisar';x.ago='ahora'}
+  else if(b==='job'){const x=w&&w.kind==='worktree'?w:M.ws.find(y=>y.kind==='worktree'&&!y.removing);if(x)startJob(x)}
+  else if(b==='newwt'){if(!w){say('sitúate en un workspace','c-yellow')}else{const r=newWorktree(w);if(r.err)say(r.err,'c-yellow');else{ui.sel={t:'w',id:r.w.id};reveal(r.w,'tui');say('worktree nuevo en '+where(r.w))}}}
+  else if(b==='reopen'){if(w){const k=memKey(w),back=closeReopen(w);ui.sel={t:'w',id:back.id};say('reabierto: vuelve a «'+where(back)+'» (recuerda por '+(k.startsWith('repo')?'repositorio':'ruta')+')')}}
+  drawAll();
+}
+function drawAll(){drawTui();renderPhone();drawFactory()}
+function tick(){drawTui();drawFactory();if(typeof document.querySelectorAll==='function')document.querySelectorAll('.sp').forEach(e=>e.textContent=spin())}
+
+if(typeof document.addEventListener==='function'){
+  $('term').addEventListener('keydown',onTermKey);
+  $('fterm').addEventListener('keydown',onFacKey);
+  document.addEventListener('click',e=>{const t=e.target;
+    if(!t.closest)return;
+    if(t.closest('.ctl')){const b=t.dataset.b;if(b){onControl(b)}return}
+    if(t.closest('#phone'))onPhoneClick(t)});
+  document.addEventListener('pointerdown',e=>{const r=e.target.closest&&e.target.closest('#plist [data-g],#plist [data-ws]');if(r){clearTimeout(lp.timer);lp.fired=false;lp.timer=setTimeout(()=>phoneMenu(r,true),550)}});
+  document.addEventListener('pointerup',()=>{clearTimeout(lp.timer);setTimeout(()=>{lp.fired=false},0)});
+  document.addEventListener('contextmenu',e=>{const r=e.target.closest&&e.target.closest('#plist [data-g],#plist [data-ws]');if(r){e.preventDefault();phoneMenu(r,false)}});
+  const sel=(id,fn)=>$(id).addEventListener('change',()=>{fn($(id).value);drawAll()});
+  sel('o-unit',v=>{opt.unit=v;if(v==='repo'){normalizeUnit();say('cada repositorio toma el grupo de su raíz','c-dim')}});
+  sel('o-sum',v=>opt.sum=v);sel('o-del',v=>opt.del=v);
+  sel('o-coll',v=>{opt.coll=v});
+  sel('f-sb',v=>fx.sb=+v);sel('f-cols',v=>fx.cols=+v);
+  $('f-long').addEventListener('change',()=>{fx.long=$('f-long').checked;drawAll()});
+}
+seed(false);resetUi();resetPh();fac={g:'g1',sel:0};
+drawAll();
+if(typeof setInterval==='function'&&typeof window!=='undefined'){setInterval(tick,110);$('term').focus()}
+</script></body></html>

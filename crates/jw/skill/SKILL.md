@@ -17,7 +17,10 @@ by its id (or the start of it) or its title.
 ## Look
 
 - `{bin} ls [--json]` the workspaces: name, kind, branch, how many panes, the most urgent mark
-  (`permission`, `question`, `plan`, `ci_failed`, `shell_done`, `screen`, `agent_done`, `merged`).
+  (`permission`, `question`, `plan`, `ci_failed`, `shell_done`, `screen`, `agent_done`, `merged`)
+  and, last, the name of its group (`-` when it has none).
+- `{bin} group ls [--json]` the groups the person made, in the order they are shown, with how many
+  workspaces each has.
 - `{bin} pane ls <workspace> [--json]` its panes: id, title, the program running in it, and
   `claude` or `codex` when that is an agent.
 - `{bin} read <workspace> [--pane P] [--lines N]` what the pane shows now (the agent's pane when
@@ -53,6 +56,13 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   say); its setup runs there first. It prints the workspace's id and path, and on stderr what it
   copied and the ports it gave. With `--task` it opens `claude` and hands it the text, as `prompt`
   does.
+- `{bin} group new <name>` makes a group (a name of up to 40 characters, not another group's) and
+  prints its id. `{bin} group rename <group> <name>` renames it and `{bin} group rm <group>`
+  deletes it: its workspaces stay open and belong to none. A group is named by its id or exactly by
+  its name, without regard to case.
+- `{bin} group move <workspace> [<group>]` puts the workspace's repository (its root and every
+  worktree) in the group, or out of every group when none is named. A group only gathers
+  workspaces of one product; it closes nothing.
 - `{bin} pane open <workspace> [--split right|down] [--of P] [--] [program words]` opens a pane
   (a shell when no program is given) and prints its id.
 - `{bin} pane close <workspace> <pane> [--force]` closes a pane. It refuses your own pane and the
@@ -70,3 +80,4 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   as a message and does not answer anything; still, tell the person what waits.
 - A worktree is a git worktree: its branch and files are the person's work. Do not remove
   worktrees; leave that to them.
+- Groups are the person's own way of ordering their work: change them only when asked.
