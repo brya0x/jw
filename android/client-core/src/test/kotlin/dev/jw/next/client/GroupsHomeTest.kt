@@ -157,7 +157,7 @@ class GroupsHomeTest {
 
     @Test
     fun foldingATapOpeningAWorkspaceAndForgettingAGroupThePcNoLongerLists() {
-        val pc = Pc("e", session)
+        val pc = Pc(session.epoch, session)
         val nav = Navigator(pc)
         var s = nav.toggleGroup(ClientState(), f1)
         assertEquals(setOf(f1), s.folded)
@@ -169,10 +169,18 @@ class GroupsHomeTest {
         s = nav.openWorkspace(s, login.id)
         assertEquals(setOf(f2), s.folded)
         assertEquals(f1, s.avisosFilter, "the chip is kept")
-        // a group the PC no longer lists is forgotten, once it has said hello
+        // a group the PC no longer lists is forgotten, once it has sent its session
         pc.now = session.copy(groups = listOf(Group(f1, "salesassist")))
-        assertEquals(emptySet(), nav.pruneFolded(s).folded)
-        assertEquals(setOf(f2), Navigator(Pc("", pc.now)).pruneFolded(s).folded, "before hello the session is empty: nothing is forgotten")
+        assertEquals(emptySet(), nav.forgetUnlisted(s).folded)
+        assertEquals(setOf(f2), Navigator(Pc("", pc.now)).forgetUnlisted(s).folded, "before hello nothing is forgotten")
+        // between the hello and the document the session is a stand-in with no id and no groups
+        val standIn = Node.Session("", 1, "", 0, emptyList(), "sin PC", emptyList())
+        assertEquals(setOf(f2), Navigator(Pc(session.epoch, standIn)).forgetUnlisted(s).folded, "the epoch is known, the session is not")
+        // the chip of a group that is gone goes back to all, and «sin grupo» stays
+        val chosen = s.copy(avisosFilter = f2)
+        assertEquals(null, nav.forgetUnlisted(chosen).avisosFilter)
+        assertEquals(NO_GROUP, nav.forgetUnlisted(s.copy(avisosFilter = NO_GROUP)).avisosFilter)
+        assertEquals(f1, nav.forgetUnlisted(s.copy(avisosFilter = f1)).avisosFilter)
     }
 
     @Test

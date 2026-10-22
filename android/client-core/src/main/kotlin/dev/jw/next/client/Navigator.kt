@@ -318,13 +318,17 @@ class Navigator(private val source: NodeSource) {
         s.copy(folded = if (group in s.folded) s.folded - group else s.folded + group)
 
     /**
-     * A group the PC no longer lists is forgotten (REQ-678), once the PC has said hello: before it
-     * the session is empty and what was folded is still the person's.
+     * A group the PC no longer lists is forgotten (REQ-678), folded or chosen in Avisos, once the PC
+     * has sent its session: until then, between its hello and the document, the session is an empty
+     * stand-in (no id, no epoch) and what was folded is still the person's.
      */
-    fun pruneFolded(s: ClientState): ClientState {
-        if (source.epoch.isEmpty() || s.folded.isEmpty()) return s
-        val listed = source.session().groups.map { it.id }.toSet()
-        return if (listed.containsAll(s.folded)) s else s.copy(folded = s.folded.filter { it in listed }.toSet())
+    fun forgetUnlisted(s: ClientState): ClientState {
+        val session = source.session()
+        if (source.epoch.isEmpty() || session.id.isEmpty() || session.epoch != source.epoch) return s
+        val listed = session.groups.map { it.id }.toSet()
+        val folded = if (listed.containsAll(s.folded)) s.folded else s.folded.filter { it in listed }.toSet()
+        val filter = s.avisosFilter?.takeIf { it == NO_GROUP || it in listed }
+        return if (folded == s.folded && filter == s.avisosFilter) s else s.copy(folded = folded, avisosFilter = filter)
     }
 
     /** The chip of Avisos that is pressed (REQ-677). */
