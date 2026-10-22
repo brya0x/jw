@@ -40,6 +40,7 @@ mod sync;
 mod tail;
 mod textfile;
 mod transcript;
+mod views;
 mod workspaces;
 mod worktrees;
 

@@ -248,7 +248,7 @@ pub enum Cmd {
     Cancel {
         workspace: Id,
     },
-    /// Swap the places of two panes of a workspace in its layout.
+    /// Swap the places of two panes, or views, of a workspace in its layout.
     SwapPanes {
         a: Id,
         b: Id,
@@ -307,6 +307,27 @@ pub enum Cmd {
     },
     ClosePane {
         pane: Id,
+    },
+    /// Open the diff or the viewer of a workspace as a leaf of its layout and reply `{view}`:
+    /// the diff is one (it is only found when there is one), a viewer gets `path` as a tab.
+    /// It is put where a view of its kind was closed last, else beside `beside` (a pane or a
+    /// view) along `dir`, else at the right edge of the whole layout with half of it.
+    OpenView {
+        workspace: Id,
+        kind: ViewKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        beside: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dir: Option<SplitDir>,
+    },
+    /// Close a view, or with `path` one tab of a viewer (the last tab closes it); its place is
+    /// kept for the next `open_view`.
+    CloseView {
+        view: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// Type into a pane: raw text as the terminal would receive it.
     Write {
@@ -601,10 +622,14 @@ pub struct Workspace {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub panes: Vec<PaneSummary>,
-    /// How the panes are laid out: a tree whose leaves are exactly `panes`. Absent from a
-    /// daemon that does not keep one: the client lays them out itself.
+    /// How the panes are laid out: a tree whose leaves are exactly `panes` and `views` (N163).
+    /// Absent from a daemon that does not keep one: the client lays them out itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<Layout>,
+    /// The diff and the viewer that are leaves of `layout` beside the panes (REQ-684); absent
+    /// when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewSummary>,
     /// The workspace reviews a pull request (REQ-583).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<Review>,
@@ -1083,6 +1108,27 @@ pub struct WorkspaceSummary {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// What a view shows: the changes of the workspace, or files to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewKind {
+    Diff,
+    Viewer,
+}
+
+/// A leaf of a workspace's layout that is not a terminal (N163, REQ-684): it has no process, so
+/// «a pane is a terminal» holds. What a view draws a client reads for itself (`open_diff`,
+/// `read_file`); the daemon keeps that it is there, where, and the files a viewer has open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewSummary {
+    pub id: Id,
+    pub kind: ViewKind,
+    pub title: String,
+    /// A viewer's tabs: paths relative to the workspace, at most 8, the oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

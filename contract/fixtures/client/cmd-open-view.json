@@ -1,0 +1,12 @@
+{
+  "t": "cmd",
+  "id": "c12",
+  "cmd": {
+    "cmd": "open_view",
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "kind": "viewer",
+    "path": "docs/spec.md",
+    "beside": "00000000-0000-4000-8000-0000000000d1",
+    "dir": "col"
+  }
+}

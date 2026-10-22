@@ -224,6 +224,23 @@ fn a_pull_request_is_a_worktree_at_its_head_that_compares_against_its_base() {
     // it is a workspace that says it is a review, with the one panel
     let w = r.summary(&id, |w| w["pane_count"] == 1);
     assert_eq!(w["review"], json!({"pr": 7, "base": "main"}));
+    // its diff is a view at the right of the agent's panel (REQ-691)
+    r.client.open(&id).unwrap();
+    assert!(
+        r.client
+            .wait_until(WAIT, |c| c
+                .nodes
+                .get(&id)
+                .is_some_and(|n| n["views"][0]["kind"] == "diff"))
+            .unwrap()
+    );
+    let agent = r.client.nodes[&id]["panes"][0]["id"].clone();
+    let diff = r.client.nodes[&id]["views"][0]["id"].clone();
+    let layout = r.client.nodes[&id]["layout"].clone();
+    assert_eq!(layout["t"], "split");
+    assert_eq!(layout["dir"], "row");
+    assert_eq!(layout["a"]["pane"], agent);
+    assert_eq!(layout["b"]["pane"], diff);
     // the file that briefs it says what the pull request says
     let file = r.sb.dir.join("state/reviews/app-pr-7.md");
     let text = std::fs::read_to_string(&file).unwrap();

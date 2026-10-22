@@ -37,6 +37,13 @@ pub struct Workspace {
     pub layout: Option<contract::Layout>,
     #[serde(skip)]
     pub attention: Vec<Own>,
+    /// The diff and the viewers that are leaves of `layout` beside the panes. Not saved: a
+    /// restart drops them (REQ-692).
+    #[serde(skip)]
+    pub views: Vec<View>,
+    /// Where each kind of view was last closed, to put the next one back. Not saved.
+    #[serde(skip)]
+    pub places: std::collections::HashMap<contract::ViewKind, crate::layout::Place>,
     /// The worktree was there before jwn knew of it (N99): its setup is not run (REQ-536).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub adopted: bool,
@@ -51,6 +58,18 @@ pub struct Workspace {
     #[serde(skip)]
     pub github: Option<crate::github::Pr>,
 }
+
+/// A leaf of a workspace's layout that is not a terminal (N163).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View {
+    pub id: Id,
+    pub kind: contract::ViewKind,
+    /// A viewer's tabs, relative paths, the oldest first, at most `MAX_TABS`.
+    pub files: Vec<String>,
+}
+
+/// The tabs a viewer keeps (REQ-640).
+pub const MAX_TABS: usize = 8;
 
 /// A worktree's block of 100 ports: its slot and the names the settings gave to offsets in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

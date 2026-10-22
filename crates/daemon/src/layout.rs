@@ -5,6 +5,9 @@
 //! Only the shape is kept here. Panes come and go in many places (a new one, a closed one, one
 //! whose shell would not start after a restart), so `reconcile` brings any tree to agree with the
 //! panes there are instead of every place keeping it up to date.
+//!
+//! Since N163 a leaf is a pane or a view (the diff, a viewer): `reconcile_views` keeps both, and
+//! a pane that has no place goes beside the last *pane*, never inside a view's room.
 
 use std::collections::HashSet;
 
@@ -190,17 +193,36 @@ fn prune(tree: Layout, keep: &HashSet<&str>, seen: &mut HashSet<String>) -> Opti
 /// Bring `tree` to agree with `ids`: none when there are no panes, the default one when there is
 /// no tree, else the tree without the panes that are gone, with each that has none split off the
 /// last one (beside it when it is alone, below it when it is not: how the default tree grows).
+#[cfg(test)]
 pub fn reconcile(tree: Option<Layout>, ids: &[Id]) -> Option<Layout> {
+    reconcile_views(tree, ids, &[])
+}
+
+/// `reconcile` for a tree whose leaves are the panes `ids` and the views `views`: no tree when
+/// there are no panes (a view needs a pane to sit beside), a pane without a place goes off the
+/// last pane, and a view without one goes at the right edge with half.
+pub fn reconcile_views(tree: Option<Layout>, ids: &[Id], views: &[Id]) -> Option<Layout> {
     if ids.is_empty() {
         return None;
     }
-    let keep: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    let keep: HashSet<&str> = ids.iter().chain(views).map(String::as_str).collect();
+    let panes: HashSet<&str> = ids.iter().map(String::as_str).collect();
     let mut seen = HashSet::new();
-    let Some(mut tree) = tree.and_then(|t| prune(t, &keep, &mut seen)) else {
-        return default_tree(ids);
+    let pruned = tree.and_then(|t| prune(t, &keep, &mut seen));
+    let mut tree = match pruned {
+        Some(t) if leaves(&t).iter().any(|l| panes.contains(l)) => t,
+        _ => {
+            // The default tree has every pane; only the views still have no place.
+            seen = ids.iter().cloned().collect();
+            default_tree(ids)?
+        }
     };
     for id in ids.iter().filter(|id| !seen.contains(*id)) {
-        let last = leaves(&tree).last().map(|l| (*l).to_owned());
+        let last = leaves(&tree)
+            .into_iter()
+            .rev()
+            .find(|l| panes.contains(l))
+            .map(str::to_owned);
         let dir = if matches!(tree, Layout::Pane { .. }) {
             SplitDir::Row
         } else {
@@ -210,16 +232,150 @@ pub fn reconcile(tree: Option<Layout>, ids: &[Id]) -> Option<Layout> {
             tree = split(tree, &last, id, dir);
         }
     }
+    for id in views.iter().filter(|id| !seen.contains(*id)) {
+        tree = edge(tree, id, 500);
+    }
     Some(tree)
 }
 
+/// The tree with `new` at its right edge, taking `share` thousandths of the whole width.
+pub fn edge(tree: Layout, new: &str, share: u16) -> Layout {
+    Layout::Split {
+        dir: SplitDir::Row,
+        ratio: 1000 - share.clamp(MIN_RATIO, MAX_RATIO),
+        a: Box::new(tree),
+        b: Box::new(leaf(new)),
+    }
+}
+
+/// Which side of what it sits beside a leaf is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Above,
+    Below,
+}
+
+/// Where a view was, so the next one of its kind can come back: the leaves of what took its room,
+/// the side it was on, and its share in thousandths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub beside: Vec<String>,
+    pub side: Side,
+    pub share: u16,
+}
+
+/// Where `id` is: beside the leaves of its sibling. None when it is the whole tree or not in it.
+pub fn place_of(tree: &Layout, id: &str) -> Option<Place> {
+    let Layout::Split { dir, ratio, a, b } = tree else {
+        return None;
+    };
+    let is = |n: &Layout| matches!(n, Layout::Pane { pane } if pane == id);
+    let own = |sibling: &Layout, side: Side, share: u16| Place {
+        beside: leaves(sibling).into_iter().map(str::to_owned).collect(),
+        side,
+        share,
+    };
+    if is(a) {
+        let side = if *dir == SplitDir::Row {
+            Side::Left
+        } else {
+            Side::Above
+        };
+        return Some(own(b, side, *ratio));
+    }
+    if is(b) {
+        let side = if *dir == SplitDir::Row {
+            Side::Right
+        } else {
+            Side::Below
+        };
+        return Some(own(a, side, 1000 - *ratio));
+    }
+    place_of(a, id).or_else(|| place_of(b, id))
+}
+
+/// The tree with `new` on `side` of the part of it whose leaves are exactly `beside`, taking
+/// `share` thousandths of what the two make; the tree as it was, as an `Err`, when no part of it
+/// has those leaves (the panes were swapped, closed or made since).
+pub fn insert(
+    tree: Layout,
+    beside: &[String],
+    new: &str,
+    side: Side,
+    share: u16,
+) -> Result<Layout, Layout> {
+    let want: HashSet<&str> = beside.iter().map(String::as_str).collect();
+    fn go(tree: Layout, want: &HashSet<&str>, new: &str, side: Side, share: u16) -> (Layout, bool) {
+        let have: HashSet<&str> = leaves(&tree).into_iter().collect();
+        if &have == want {
+            let share = share.clamp(MIN_RATIO, MAX_RATIO);
+            let (dir, view_first) = match side {
+                Side::Left => (SplitDir::Row, true),
+                Side::Right => (SplitDir::Row, false),
+                Side::Above => (SplitDir::Col, true),
+                Side::Below => (SplitDir::Col, false),
+            };
+            let (a, b, ratio) = if view_first {
+                (leaf(new), tree, share)
+            } else {
+                (tree, leaf(new), 1000 - share)
+            };
+            let tree = Layout::Split {
+                dir,
+                ratio,
+                a: Box::new(a),
+                b: Box::new(b),
+            };
+            return (tree, true);
+        }
+        match tree {
+            Layout::Pane { .. } => (tree, false),
+            Layout::Split { dir, ratio, a, b } => {
+                let (a, done) = go(*a, want, new, side, share);
+                let (b, done) = if done {
+                    (*b, true)
+                } else {
+                    go(*b, want, new, side, share)
+                };
+                (
+                    Layout::Split {
+                        dir,
+                        ratio,
+                        a: Box::new(a),
+                        b: Box::new(b),
+                    },
+                    done,
+                )
+            }
+        }
+    }
+    match go(tree, &want, new, side, share) {
+        (tree, true) => Ok(tree),
+        (tree, false) => Err(tree),
+    }
+}
+
+/// The tree without the leaves that are not in `keep`, a split that loses a side being its other.
+pub fn retain(tree: Layout, keep: &[Id]) -> Option<Layout> {
+    let keep: HashSet<&str> = keep.iter().map(String::as_str).collect();
+    prune(tree, &keep, &mut HashSet::new())
+}
+
 /// Whether `reconcile` would leave the tree as it is.
+#[cfg(test)]
 pub fn agrees(tree: &Option<Layout>, ids: &[Id]) -> bool {
+    agrees_views(tree, ids, &[])
+}
+
+/// `agrees` for a tree of panes `ids` and views `views`.
+pub fn agrees_views(tree: &Option<Layout>, ids: &[Id], views: &[Id]) -> bool {
     match tree {
         None => ids.is_empty(),
         Some(t) => {
             let mut have = leaves(t);
-            let mut want: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let mut want: Vec<&str> = ids.iter().chain(views).map(String::as_str).collect();
             have.sort_unstable();
             want.sort_unstable();
             have == want && ratios_in_range(t)
@@ -456,5 +612,112 @@ mod tests {
         assert_eq!(reconcile(Some(t.clone()), &ids(&["a", "b"])), Some(t));
         assert!(agrees(&None, &[]));
         assert!(!agrees(&None, &ids(&["a"])));
+    }
+
+    fn col(a: Layout, b: Layout) -> Layout {
+        Layout::Split {
+            dir: SplitDir::Col,
+            ratio: 500,
+            a: Box::new(a),
+            b: Box::new(b),
+        }
+    }
+
+    #[test]
+    fn a_view_survives_reconcile_and_a_pane_without_a_place_goes_beside_the_last_pane() {
+        // shell | claude | diff: the diff is the last leaf, and a new pane must not cut it.
+        let tree = Some(edge(row(leaf("a"), leaf("b")), "diff", 500));
+        let kept = reconcile_views(tree.clone(), &ids(&["a", "b"]), &ids(&["diff"])).unwrap();
+        assert_eq!(Some(kept.clone()), tree);
+        let grown = reconcile_views(tree, &ids(&["a", "b", "c"]), &ids(&["diff"])).unwrap();
+        assert_eq!(
+            grown,
+            edge(row(leaf("a"), col(leaf("b"), leaf("c"))), "diff", 500)
+        );
+        assert!(agrees_views(
+            &Some(grown),
+            &ids(&["a", "b", "c"]),
+            &ids(&["diff"])
+        ));
+    }
+
+    #[test]
+    fn a_view_with_no_place_goes_at_the_edge_and_no_pane_means_no_tree() {
+        let tree = reconcile_views(Some(leaf("a")), &ids(&["a"]), &ids(&["v"])).unwrap();
+        assert_eq!(tree, edge(leaf("a"), "v", 500));
+        assert_eq!(reconcile_views(Some(tree), &[], &ids(&["v"])), None);
+        // a tree of views alone is made again from the panes
+        let only = reconcile_views(Some(leaf("v")), &ids(&["a"]), &ids(&["v"])).unwrap();
+        assert_eq!(only, edge(leaf("a"), "v", 500));
+    }
+
+    #[test]
+    fn edge_takes_the_share_asked_for_in_range() {
+        assert_eq!(
+            edge(leaf("a"), "v", 300),
+            Layout::Split {
+                dir: SplitDir::Row,
+                ratio: 700,
+                a: Box::new(leaf("a")),
+                b: Box::new(leaf("v")),
+            }
+        );
+        let Layout::Split { ratio, .. } = edge(leaf("a"), "v", 0) else {
+            panic!("a split")
+        };
+        assert_eq!(ratio, 900);
+    }
+
+    #[test]
+    fn a_place_is_the_whole_sibling_so_a_view_comes_back_where_it_was() {
+        // diff at the edge of shell | claude, closed, reopened: the tree is the same.
+        let before = edge(row(leaf("a"), leaf("b")), "d", 400);
+        let place = place_of(&before, "d").unwrap();
+        assert_eq!(place.beside, ["a", "b"]);
+        assert_eq!(place.side, Side::Right);
+        assert_eq!(place.share, 400);
+        let closed = retain(before.clone(), &ids(&["a", "b"])).unwrap();
+        assert_eq!(closed, row(leaf("a"), leaf("b")));
+        let back = insert(closed, &place.beside, "d", place.side, place.share).unwrap();
+        assert_eq!(back, before);
+    }
+
+    #[test]
+    fn a_place_on_the_left_or_below_keeps_its_side_and_share() {
+        let before = row(leaf("d"), col(leaf("a"), leaf("b")));
+        let place = place_of(&before, "d").unwrap();
+        assert_eq!((place.side, place.share), (Side::Left, 500));
+        let before = col(row(leaf("a"), leaf("b")), leaf("d"));
+        let place = place_of(&before, "d").unwrap();
+        assert_eq!((place.beside, place.side), (ids(&["a", "b"]), Side::Below));
+        assert_eq!(place_of(&leaf("d"), "d"), None);
+        assert_eq!(place_of(&leaf("a"), "d"), None);
+    }
+
+    #[test]
+    fn a_place_whose_neighbours_are_gone_does_not_insert() {
+        let tree = row(leaf("a"), leaf("b"));
+        let err = insert(tree.clone(), &ids(&["a", "z"]), "d", Side::Right, 500).unwrap_err();
+        assert_eq!(err, tree);
+        // the order the leaves are listed in does not matter, and a deeper part is found
+        let deep = col(leaf("x"), row(leaf("a"), leaf("b")));
+        let got = insert(deep, &ids(&["b", "a"]), "d", Side::Below, 250).unwrap();
+        let Layout::Split { b, .. } = got else {
+            panic!("a split")
+        };
+        let Layout::Split { dir, ratio, .. } = *b else {
+            panic!("a split")
+        };
+        assert_eq!((dir, ratio), (SplitDir::Col, 750));
+    }
+
+    #[test]
+    fn retain_drops_the_leaves_it_is_not_given_and_the_neighbour_takes_the_room() {
+        let tree = edge(row(leaf("a"), leaf("b")), "d", 500);
+        assert_eq!(
+            retain(tree.clone(), &ids(&["a", "b"])),
+            Some(row(leaf("a"), leaf("b")))
+        );
+        assert_eq!(retain(tree, &ids(&["d"])), Some(leaf("d")));
     }
 }
