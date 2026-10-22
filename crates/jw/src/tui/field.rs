@@ -8,8 +8,14 @@ use contract::PaneInput;
 
 use super::{Grid, Rgb, STOP, Style, clip, look};
 
-/// Rows of text the field grows to before it shows the end of the line only.
+/// Rows of text a shell pane's field grows to before it shows a window of them that follows the cursor.
 pub const MAX_TEXT_ROWS: usize = 5;
+/// The composer's limit never goes below this (REQ-703)...
+const MIN_LIMIT: usize = 5;
+/// ...and leaves the list this many rows.
+const LIST_KEEPS: usize = 4;
+/// The foot row and the line of work with the blank row over it, which the limit counts whether or not a turn runs.
+const FOOT_AND_WORK: usize = 3;
 /// Rows of the band that are not text: a free one over the chips, the chips, a free one between them and the text, and a free one under the text.
 const AROUND: usize = 4;
 /// The send mark, at the right of the first row of text.
@@ -52,10 +58,51 @@ pub fn row_starts(chars: &[char], width: usize, cursor: usize) -> Vec<usize> {
     starts
 }
 
+/// The rows of text a field of a pane `ih` rows high grows to before it scrolls (REQ-703): a
+/// third of the pane, at least five, and at most what leaves the list four rows; never below one.
+pub fn limit(ih: usize) -> usize {
+    let room = ih.saturating_sub(FOOT_AND_WORK + AROUND + LIST_KEEPS);
+    (ih / 3).max(MIN_LIMIT).min(room).max(1)
+}
+
+/// Where a window of `limit` rows begins in a text of `rows` rows whose cursor is on row `cursor`:
+/// the `offset` it had, moved the least that puts the cursor in view (REQ-704).
+pub fn window_start(rows: usize, limit: usize, cursor: usize, offset: usize) -> usize {
+    let last = rows.saturating_sub(limit);
+    let mut at = offset.min(last);
+    if cursor < at {
+        at = cursor;
+    } else if cursor >= at + limit {
+        at = cursor + 1 - limit;
+    }
+    at.min(last)
+}
+
+/// The rows of the text a field shows when the text has more than fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Window {
+    /// How many rows it shows at most.
+    pub limit: usize,
+    /// Where it was: with it the window moves the least that shows the cursor (the composer's,
+    /// which remembers it); without, it begins as far down as the cursor allows (a shell pane's).
+    pub offset: Option<usize>,
+}
+
+impl Window {
+    /// The shell pane's: five rows, following the cursor (REQ-256).
+    pub const FOLLOW: Window = Window {
+        limit: MAX_TEXT_ROWS,
+        offset: None,
+    };
+}
+
 /// The text of the field wrapped to its rows, and where the cursor is in them.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Field {
     rows: Vec<String>,
+    /// The row of the whole text the first of `rows` is, and how many rows the whole text has.
+    first: usize,
+    total: usize,
     cursor: (usize, usize),
     /// The cells (row, column) that a selection covers.
     selected: Vec<(usize, usize)>,
@@ -80,9 +127,11 @@ impl Field {
     pub fn new(input: Option<&PaneInput>, screen: Option<(&str, usize)>, iw: usize) -> Field {
         let width = text_width(iw);
         match (input, screen) {
-            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[]),
+            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[], Window::FOLLOW),
             (None, Some((line, col))) => Field {
                 rows: vec![line.to_owned()],
+                first: 0,
+                total: 1,
                 cursor: (0, col),
                 selected: Vec::new(),
                 lit: Vec::new(),
@@ -90,6 +139,8 @@ impl Field {
             },
             (None, None) => Field {
                 rows: vec![String::new()],
+                first: 0,
+                total: 1,
                 cursor: (0, 0),
                 selected: Vec::new(),
                 lit: Vec::new(),
@@ -99,12 +150,13 @@ impl Field {
     }
 
     /// The field of a line the person edits here, with the characters `sel` (from, to) selected
-    /// and the `marks` in their colours.
+    /// and the `marks` in their colours, showing the rows `window` says.
     pub fn selecting(
         input: &PaneInput,
         sel: Option<(usize, usize)>,
         marks: &[Mark],
         iw: usize,
+        window: Window,
     ) -> Field {
         wrap(
             &input.text,
@@ -112,7 +164,14 @@ impl Field {
             text_width(iw),
             sel,
             marks,
+            window,
         )
+    }
+
+    /// The row of the whole text that the first row shown is: the offset a window that
+    /// remembers keeps for the next frame.
+    pub fn first_row(&self) -> usize {
+        self.first
     }
 
     /// The character of the text that is at `col` of the shown row `row`: none past the end of the row.
@@ -248,14 +307,15 @@ pub fn stop_at(ix: usize, iw: usize) -> usize {
 }
 
 /// `text` broken into rows of `width` characters (and at its own line breaks), the cursor
-/// placed at its offset, and at most `MAX_TEXT_ROWS` rows kept: the last ones, or those that
-/// hold the cursor when it is further up.
+/// placed at its offset, and at most `window.limit` rows kept: those the window says, or, with no
+/// offset, the last ones, or those that hold the cursor when it is further up.
 fn wrap(
     text: &str,
     cursor: usize,
     width: usize,
     sel: Option<(usize, usize)>,
     marks: &[Mark],
+    window: Window,
 ) -> Field {
     let mut rows = vec![String::new()];
     let mut starts = vec![0];
@@ -296,22 +356,29 @@ fn wrap(
         }
         at = (rows.len() - 1, rows.last().map_or(0, |r| r.chars().count()));
     }
-    let start = rows.len().saturating_sub(MAX_TEXT_ROWS).min(at.0);
-    let kept: Vec<String> = rows.into_iter().skip(start).take(MAX_TEXT_ROWS).collect();
+    let total = rows.len();
+    let limit = window.limit;
+    let start = match window.offset {
+        Some(offset) => window_start(total, limit, at.0, offset),
+        None => total.saturating_sub(limit).min(at.0),
+    };
+    let kept: Vec<String> = rows.into_iter().skip(start).take(limit).collect();
     Field {
         rows: kept,
+        first: start,
+        total,
         cursor: (at.0 - start, at.1),
         selected: selected
             .into_iter()
             .filter_map(|(r, c)| r.checked_sub(start).map(|r| (r, c)))
-            .filter(|(r, _)| *r < MAX_TEXT_ROWS)
+            .filter(|(r, _)| *r < limit)
             .collect(),
         lit: lit
             .into_iter()
             .filter_map(|(r, c, k)| r.checked_sub(start).map(|r| (r, c, k)))
-            .filter(|(r, ..)| *r < MAX_TEXT_ROWS)
+            .filter(|(r, ..)| *r < limit)
             .collect(),
-        starts: starts.into_iter().skip(start).take(MAX_TEXT_ROWS).collect(),
+        starts: starts.into_iter().skip(start).take(limit).collect(),
     }
 }
 
@@ -394,12 +461,138 @@ mod tests {
         assert_eq!((top.rows.len(), top.cursor), (MAX_TEXT_ROWS, (0, 1)));
     }
 
+    /// REQ-703: a third of the pane, at least five, and what leaves the list four rows.
+    #[test]
+    fn the_limit_is_a_third_of_the_pane_at_least_five_and_leaves_the_list_four_rows() {
+        for (ih, want) in [
+            (36, 12),
+            (30, 10),
+            (24, 8),
+            (18, 6),
+            (16, 5),
+            (15, 4),
+            (12, 1),
+            (11, 1),
+            (8, 1),
+            (0, 1),
+        ] {
+            assert_eq!(limit(ih), want, "a pane {ih} rows high");
+        }
+        for ih in 12..80 {
+            let (foot, work) = (1, 2);
+            assert!(
+                ih >= foot + AROUND + limit(ih) + work + LIST_KEEPS,
+                "the list keeps four rows at {ih}"
+            );
+        }
+    }
+
+    /// REQ-704: the offset moves the least that shows the cursor, and stays inside the text.
+    #[test]
+    fn the_window_moves_the_least_that_shows_the_cursor_and_stays_inside_the_text() {
+        // rows 0..14, a window of 8
+        assert_eq!(window_start(14, 8, 3, 0), 0, "inside: it stays");
+        assert_eq!(
+            window_start(14, 8, 7, 0),
+            0,
+            "the last row of the window: it stays"
+        );
+        assert_eq!(window_start(14, 8, 8, 0), 1, "one below: one row");
+        assert_eq!(
+            window_start(14, 8, 13, 0),
+            6,
+            "far below: the cursor is the last row"
+        );
+        assert_eq!(
+            window_start(14, 8, 2, 6),
+            2,
+            "above: the cursor is the first row"
+        );
+        assert_eq!(
+            window_start(14, 8, 6, 6),
+            6,
+            "the first row of the window: it stays"
+        );
+        assert_eq!(window_start(14, 8, 5, 6), 5, "one above: one row");
+        assert_eq!(window_start(14, 8, 10, 6), 6, "inside after a move down");
+        assert_eq!(window_start(6, 8, 5, 3), 0, "a text that fits begins at 0");
+        assert_eq!(
+            window_start(10, 8, 9, 6),
+            2,
+            "an offset past the end is clamped"
+        );
+        assert_eq!(window_start(10, 4, 0, 99), 0, "and the cursor still shows");
+        assert_eq!(window_start(1, 1, 0, 0), 0);
+    }
+
+    /// REQ-704: with an offset the cursor walks inside the window and the text does not slide.
+    #[test]
+    fn a_window_with_an_offset_keeps_its_rows_while_the_cursor_moves_inside_it() {
+        let w = text_width(30);
+        let text = "x".repeat(w * 14);
+        let at = |cursor: usize, offset: usize| {
+            Field::selecting(
+                &input(&text, cursor as u32),
+                None,
+                &[],
+                30,
+                Window {
+                    limit: 8,
+                    offset: Some(offset),
+                },
+            )
+        };
+        let top = at(0, 0);
+        assert_eq!(
+            (top.rows.len(), top.first_row(), top.total, top.cursor),
+            (8, 0, 14, (0, 0))
+        );
+        let down = at(w * 7 + 2, 0);
+        assert_eq!(
+            (down.first_row(), down.cursor),
+            (0, (7, 2)),
+            "the cursor reaches the last row and the text has not moved"
+        );
+        let past = at(w * 8, 0);
+        assert_eq!(
+            (past.first_row(), past.cursor),
+            (1, (7, 0)),
+            "one row, at the edge"
+        );
+        // at the end of a full last row the cursor is on a new, empty one: 15 rows
+        let end = at(w * 14, 0);
+        assert_eq!((end.total, end.first_row()), (15, 7));
+        assert_eq!(
+            end.starts.len(),
+            8,
+            "the starts are those of the rows shown"
+        );
+        assert_eq!(end.starts[0], w * 7);
+        let back = at(w * 3, 6);
+        assert_eq!((back.first_row(), back.cursor), (3, (0, 0)));
+    }
+
+    /// REQ-708: the shell's field keeps five rows and follows the cursor, the same text with no offset.
+    #[test]
+    fn a_field_with_no_offset_follows_the_cursor_as_the_shells_does() {
+        let w = text_width(30);
+        let text = "x".repeat(w * 14);
+        let mid = Field::selecting(&input(&text, (w * 7) as u32), None, &[], 30, Window::FOLLOW);
+        assert_eq!((mid.rows.len(), mid.first_row(), mid.cursor.0), (5, 7, 0));
+    }
+
     #[test]
     fn a_selection_is_the_cells_of_its_characters_across_rows_and_line_breaks() {
         let w = text_width(30);
         let text = format!("{}ab\ncd", "x".repeat(w));
         let from = w;
-        let f = Field::selecting(&input(&text, 0), Some((from, from + 4)), &[], 30);
+        let f = Field::selecting(
+            &input(&text, 0),
+            Some((from, from + 4)),
+            &[],
+            30,
+            Window::FOLLOW,
+        );
         assert_eq!(f.selected, [(1, 0), (1, 1), (2, 0)]);
     }
 
@@ -428,7 +621,17 @@ mod tests {
         ] {
             let chars: Vec<char> = text.chars().collect();
             for cursor in 0..=chars.len() {
-                let drawn = wrap(text, cursor, width, None, &[]);
+                let drawn = wrap(
+                    text,
+                    cursor,
+                    width,
+                    None,
+                    &[],
+                    Window {
+                        limit: usize::MAX,
+                        offset: None,
+                    },
+                );
                 assert_eq!(
                     row_starts(&chars, width, cursor),
                     drawn.starts,

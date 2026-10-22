@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::agents;
 use super::erase;
-use super::field::{self, Field, Look, Mark};
+use super::field::{self, Field, Look, Mark, Window};
 use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
@@ -574,6 +574,9 @@ pub struct Ui {
     most: Cell<usize>,
     /// The characters a row of the field held in the last frame, for ↑ and ↓ (0 before the first).
     text_width: Cell<usize>,
+    /// The row of the text the window of the field began at in the last frame (REQ-704); only the
+    /// draw stores it, so every place that reads the field sees the rows the draw showed.
+    offset: Cell<usize>,
     /// What a drag of the mouse covers in the list, and the drag while the button is down
     /// (REQ-461).
     sel: Option<select::Selection>,
@@ -1523,7 +1526,7 @@ impl Ui {
         }
     }
 
-    fn field(&self, conv: &Conversation, iw: usize) -> Field {
+    fn field(&self, conv: &Conversation, (iw, ih): (usize, usize)) -> Field {
         self.text_width.set(field::text_width(iw));
         Field::selecting(
             &PaneInput {
@@ -1533,6 +1536,10 @@ impl Ui {
             self.editor.selection(),
             &self.marks(conv),
             iw,
+            Window {
+                limit: field::limit(ih),
+                offset: Some(self.offset.get()),
+            },
         )
     }
 
@@ -1551,7 +1558,8 @@ impl Ui {
             return;
         }
         self.now.set(now_ms);
-        let field = self.field(conv, iw);
+        let field = self.field(conv, (iw, ih));
+        self.offset.set(field.first_row());
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         let lines = self.lines(conv, iw - 2);
         let rows = self.list_rows(&geo, lines.len());
@@ -2716,7 +2724,7 @@ impl Ui {
         if self.pop.is_some() || iw < 12 || ih < 8 {
             return false;
         }
-        let geo = self.geo(conv, (iy, ih), self.field(conv, iw).band_rows());
+        let geo = self.geo(conv, (iy, ih), self.field(conv, (iw, ih)).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
         if !(rows.top..rows.bottom).contains(&y) || !(ix..ix + iw).contains(&x) {
             return false;
@@ -2772,7 +2780,7 @@ impl Ui {
         if self.pop.is_some() || conv.ask.is_some() || iw < 12 || ih < 8 {
             return false;
         }
-        let field = self.field(conv, iw);
+        let field = self.field(conv, (iw, ih));
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         let first = geo.band.0 + Field::FIRST_TEXT;
         let text_x = ix + 1 + field::PROMPT;
@@ -2797,7 +2805,7 @@ impl Ui {
         if self.pull.is_none() || iw < 12 || ih < 8 {
             return;
         }
-        let geo = self.geo(conv, (iy, ih), self.field(conv, iw).band_rows());
+        let geo = self.geo(conv, (iy, ih), self.field(conv, (iw, ih)).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
         let (head, edge) = if y < rows.top {
             (
@@ -2850,7 +2858,7 @@ impl Ui {
             return;
         }
         self.scroll_by(up, 1);
-        let geo = self.geo(conv, (iy, ih), self.field(conv, iw).band_rows());
+        let geo = self.geo(conv, (iy, ih), self.field(conv, (iw, ih)).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
         let (line, col) = if up {
             (rows.start, 0)
@@ -2907,7 +2915,7 @@ impl Ui {
             return None;
         }
         let node = conv.head.id.clone();
-        let field = self.field(conv, iw);
+        let field = self.field(conv, (iw, ih));
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         // The strip of the checklist opens and closes with a click.
         if self.pop.is_none() && geo.todo_rows > 0 && y == iy {
@@ -3657,6 +3665,142 @@ mod tests {
         for c in text.chars() {
             assert_eq!(press(ui, conv, KeyCode::Char(c)), None);
         }
+    }
+
+    /// A pane 24 rows high: the composer's limit is 8 (REQ-703).
+    const SMALL: (usize, usize, usize, usize) = (2, 1, 96, 24);
+
+    fn frame_in(ui: &Ui, conv: &Conversation, inner: (usize, usize, usize, usize)) -> Vec<String> {
+        let mut g = Grid::new(100, 60);
+        ui.draw(&mut g, conv, inner, &[], true, 0);
+        g.rows_plain()
+    }
+
+    /// Fourteen short lines, `l01` to `l14`, with the cursor at the end, drawn once.
+    fn fourteen_lines() -> (Ui, Conversation) {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let text: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
+        ui.editor.set(&text.join("\n"));
+        frame_in(&ui, &conv, SMALL);
+        (ui, conv)
+    }
+
+    /// The row of the text the cursor is on: lines are four characters (`l01\n`).
+    fn cursor_line(ui: &Ui) -> usize {
+        ui.editor.cursor() / 4
+    }
+
+    /// REQ-703, REQ-704: moving down from the top keeps the cursor moving inside the window and slides the text only at its edge.
+    #[test]
+    fn moving_down_from_the_top_walks_the_cursor_inside_the_window_and_slides_at_the_edge() {
+        let (mut ui, conv) = fourteen_lines();
+        assert_eq!(
+            (cursor_line(&ui), ui.offset.get()),
+            (13, 6),
+            "typed at the end: the window shows the last eight rows"
+        );
+        for _ in 0..13 {
+            press(&mut ui, &conv, KeyCode::Up);
+            frame_in(&ui, &conv, SMALL);
+        }
+        assert_eq!((cursor_line(&ui), ui.offset.get()), (0, 0));
+        for line in 1..=7 {
+            press(&mut ui, &conv, KeyCode::Down);
+            let rows = frame_in(&ui, &conv, SMALL);
+            assert_eq!(
+                (cursor_line(&ui), ui.offset.get()),
+                (line, 0),
+                "the cursor moves and the text does not"
+            );
+            assert!(
+                rows.iter().any(|r| r.contains("l01")) && rows.iter().any(|r| r.contains("l08"))
+            );
+            assert!(!rows.iter().any(|r| r.contains("l09")));
+        }
+        press(&mut ui, &conv, KeyCode::Down);
+        let rows = frame_in(&ui, &conv, SMALL);
+        assert_eq!(
+            (cursor_line(&ui), ui.offset.get()),
+            (8, 1),
+            "at the edge: one row"
+        );
+        assert!(rows.iter().any(|r| r.contains("l09")) && !rows.iter().any(|r| r.contains("l01")));
+        // and back up: it slides again only when the cursor is above the first row
+        for _ in 0..7 {
+            press(&mut ui, &conv, KeyCode::Up);
+            frame_in(&ui, &conv, SMALL);
+            assert_eq!(ui.offset.get(), 1);
+        }
+        press(&mut ui, &conv, KeyCode::Up);
+        frame_in(&ui, &conv, SMALL);
+        assert_eq!((cursor_line(&ui), ui.offset.get()), (0, 0));
+    }
+
+    /// REQ-705, REQ-682: ↑ on the first row of the text still scrolls the list, whatever the window shows.
+    #[test]
+    fn up_on_the_first_row_of_the_text_still_scrolls_the_list_and_not_on_the_first_of_the_window() {
+        let (mut ui, conv) = fourteen_lines();
+        for _ in 0..13 {
+            press(&mut ui, &conv, KeyCode::Up);
+            frame_in(&ui, &conv, SMALL);
+        }
+        for _ in 0..9 {
+            press(&mut ui, &conv, KeyCode::Down);
+            frame_in(&ui, &conv, SMALL);
+        }
+        assert_eq!((cursor_line(&ui), ui.offset.get()), (9, 2));
+        let before = ui.scroll;
+        for _ in 0..2 {
+            press(&mut ui, &conv, KeyCode::Up);
+            frame_in(&ui, &conv, SMALL);
+        }
+        assert_eq!(
+            ui.scroll, before,
+            "the cursor was on the window's first row, not the text's"
+        );
+        assert_eq!(cursor_line(&ui), 7);
+    }
+
+    /// REQ-703: the limit does not change when a turn starts, so the band does not jump.
+    #[test]
+    fn the_band_has_the_same_rows_whether_or_not_a_turn_runs() {
+        let mut ui = Ui::default();
+        let text: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
+        ui.editor.set(&text.join("\n"));
+        let idle = idle();
+        let mut working = idle.clone();
+        working.status = ConvStatus::Streaming;
+        let band = |c: &Conversation| {
+            let rows = frame_in(&ui, c, SMALL);
+            (row_of(&rows, "l07"), row_of(&rows, "l14"))
+        };
+        assert_eq!(band(&idle), band(&working));
+        let (first, last) = band(&idle);
+        assert_eq!(last - first, 7, "eight rows of text, the limit at 24 rows");
+    }
+
+    /// REQ-704, RISK-85: a double click after the window has moved selects the word the row shows.
+    #[test]
+    fn a_double_click_after_the_window_moved_picks_the_word_that_is_drawn() {
+        let (mut ui, conv) = fourteen_lines();
+        assert_eq!(ui.offset.get(), 6);
+        let rows = frame_in(&ui, &conv, SMALL);
+        let y = row_of(&rows, "l09");
+        let x = rows[y].chars().position(|c| c == 'l').unwrap();
+        assert!(ui.select_word_in_field(&conv, SMALL, x + 1, y));
+        let (from, to) = ui.editor.selection().expect("a word is selected");
+        assert_eq!(&ui.editor.text()[from..to], "l09");
+    }
+
+    /// REQ-704: a window stored for a taller pane is clamped when the pane is smaller.
+    #[test]
+    fn an_offset_from_a_taller_pane_is_clamped_in_a_smaller_one() {
+        let (ui, conv) = fourteen_lines();
+        assert_eq!(ui.offset.get(), 6);
+        let rows = frame_in(&ui, &conv, (2, 1, 96, 58));
+        assert_eq!(ui.offset.get(), 0, "nineteen rows fit all fourteen");
+        assert!(rows.iter().any(|r| r.contains("l01")) && rows.iter().any(|r| r.contains("l14")));
     }
 
     #[test]
