@@ -329,6 +329,8 @@ class Navigator(private val source: NodeSource) {
     /** What the jobs tab shows is seen, whenever it is on screen: a job that ends while it is open is seen too. */
     fun seeJobs(s: ClientState): ClientState {
         if (s.screen != Screen.Avisos || s.avisosTab != AvisosTab.Trabajos) return s
+        // Before the daemon has said hello there is no epoch, and a record is not emptied for it.
+        if (source.epoch.isEmpty()) return s
         val ended = jobsOf(source.session()).ended.map { it.id }
         return if (ended.toSet() == s.seen.jobs) s else s.copy(seen = s.seen.seeJobs(ended, source.epoch))
     }

@@ -634,6 +634,9 @@ pub struct View {
     /// first read, which says nothing.
     jobs_seen: HashSet<String>,
     jobs_state: Option<HashMap<String, JobState>>,
+    /// The removals this terminal began and has not said the end of: a removal that is over before
+    /// the session was read with it running is still said (REQ-658).
+    jobs_mine: HashSet<String>,
     /// The workspace opened with Enter, and which of its panes has focus. The highlight alone
     /// only previews.
     opened: Option<String>,
@@ -764,6 +767,7 @@ impl View {
             jobs_selected: 0,
             jobs_seen: HashSet::new(),
             jobs_state: None,
+            jobs_mine: HashSet::new(),
             opened: None,
             focus: 0,
             status: status.to_owned(),
@@ -1519,16 +1523,18 @@ impl View {
         let ended = |j: &&Job| {
             j.kind == JobKind::RemoveWorkspace
                 && j.state != JobState::Running
-                && self
-                    .jobs_state
-                    .as_ref()
-                    .is_some_and(|before| before.get(&j.id) == Some(&JobState::Running))
+                && (self.jobs_mine.contains(&j.id)
+                    || self
+                        .jobs_state
+                        .as_ref()
+                        .is_some_and(|before| before.get(&j.id) == Some(&JobState::Running)))
         };
-        let said = s.jobs.iter().find(|j| ended(j)).map(|j| match j.state {
-            JobState::Done => format!("quitado {} · {}", j.name, took(j.duration_ms.unwrap_or(0))),
-            _ => format!("✗ no se pudo quitar {}", j.name),
-        });
+        let told: Vec<&Job> = s.jobs.iter().filter(ended).collect();
+        let said = told.first().map(|j| removal_said(j));
+        let told: HashSet<String> = told.iter().map(|j| j.id.clone()).collect();
         self.jobs_seen.retain(|id| now.contains_key(id));
+        self.jobs_mine
+            .retain(|id| now.contains_key(id) && !told.contains(id));
         self.jobs_selected = self.jobs_selected.min(now.len().saturating_sub(1));
         self.jobs_state = Some(now);
         if let Some(said) = said {
@@ -2568,7 +2574,26 @@ impl View {
             "No se pudo cerrar el workspace"
         };
         match reply {
-            Ok(Ok(_)) if worktree => self.flash(&format!("quitando {name}…")),
+            Ok(Ok(result)) if worktree => {
+                let job = result
+                    .as_ref()
+                    .and_then(|r| r["job"].as_str())
+                    .map(str::to_owned);
+                // A clean worktree can be gone before this answer is read: then the end is what is said.
+                let over = job.as_ref().and_then(|id| {
+                    self.session
+                        .iter()
+                        .flat_map(|s| s.jobs.iter())
+                        .find(|j| j.id == *id && j.state != JobState::Running)
+                });
+                match over {
+                    Some(j) => self.flash = removal_said(j),
+                    None => {
+                        self.jobs_mine.extend(job);
+                        self.flash(&format!("quitando {name}…"));
+                    }
+                }
+            }
             Ok(Ok(_)) => self.flash("workspace cerrado · la carpeta se queda"),
             Ok(Err(e)) => self.manage_failed(failed, &e.message),
             Err(e) => self.manage_failed(failed, &e.to_string()),
@@ -5576,6 +5601,14 @@ fn took(ms: u64) -> String {
     }
 }
 
+/// What the bar says when a removal ends: green when it went, red when it did not (REQ-658).
+fn removal_said(j: &Job) -> String {
+    match j.state {
+        JobState::Done => format!("quitado {} · {}", j.name, took(j.duration_ms.unwrap_or(0))),
+        _ => format!("✗ no se pudo quitar {}", j.name),
+    }
+}
+
 /// What a job is called in the tab.
 fn job_title(j: &Job) -> String {
     match j.kind {
@@ -8422,6 +8455,63 @@ mod tests {
         );
         assert_eq!(v.flash, "✗ no se pudo quitar app: b2");
         assert!(bar(&v).contains("✗ no se pudo quitar app: b2"));
+    }
+
+    /// REQ-658: a removal that is over before the session was read with it running is said all the
+    /// same, whichever of the answer and the session comes first, and not twice.
+    #[test]
+    fn a_removal_that_was_never_seen_running_is_said_too() {
+        let ws = fixture_view().selected_id().unwrap();
+        let done = || {
+            job(
+                "j1",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b1",
+                JobState::Done,
+            )
+        };
+        let reply = |v: &mut View| {
+            v.removed(
+                "app: b1",
+                true,
+                Ok(Ok(Some(serde_json::json!({ "job": "j1" })))),
+            )
+        };
+
+        // The session already shows it done when the answer is read: the end, not `quitando…`.
+        let mut v = fixture_view();
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "", "it is not ours yet, so it says nothing");
+        reply(&mut v);
+        assert_eq!(v.flash, "quitado app: b1 · 4,2 s");
+        assert!(v.jobs_mine.is_empty());
+
+        // The answer comes first, and the session is read with the job done at once.
+        let mut v = fixture_view();
+        reply(&mut v);
+        assert_eq!(v.flash, "quitando app: b1…");
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "quitado app: b1 · 4,2 s");
+        assert!(v.jobs_mine.is_empty(), "said once");
+        v.flash.clear();
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "", "and not again");
+
+        // A refusal that is just as quick is red.
+        let mut v = fixture_view();
+        reply(&mut v);
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j1",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b1",
+                JobState::Failed,
+            )],
+        );
+        assert_eq!(v.flash, "✗ no se pudo quitar app: b1");
     }
 
     /// REQ-657: the row of a workspace being removed has a spinner and a dim name, nothing acts

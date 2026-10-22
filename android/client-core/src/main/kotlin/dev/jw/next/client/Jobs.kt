@@ -73,9 +73,13 @@ fun jobsMark(session: Node.Session, seen: Seen): JobsMark {
 /** The state each job of the session is in, to tell later which ones ended. */
 fun jobStates(session: Node.Session): Map<Id, JobState> = session.jobs.associate { it.id to it.state }
 
-/** The removals that were running in [before] and are not in [session]: what a notice says (REQ-659). */
+/**
+ * The removals that ended since [before] was taken: those that were running and are not, and those that
+ * were not there at all and are over (a clean worktree can go between two looks): what a notice says
+ * (REQ-661). A phone that has not looked yet has no [before], and says nothing of what was over when it came.
+ */
 fun endedRemovals(before: Map<Id, JobState>, session: Node.Session): List<Job> =
-    session.jobs.filter { it.kind == JobKind.RemoveWorkspace && it.state != JobState.Running && before[it.id] == JobState.Running }
+    session.jobs.filter { it.kind == JobKind.RemoveWorkspace && it.state != JobState.Running && before[it.id] != it.state }
 
 /** The notice that says how a removal ended. */
 fun Job.endNotice(): String = when (state) {

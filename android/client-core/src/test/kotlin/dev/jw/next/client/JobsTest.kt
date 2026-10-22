@@ -88,9 +88,11 @@ class JobsTest {
         assertEquals(listOf("✓ quitado app: feat/login · 4,2 s"), endedRemovals(before, done).map { it.endNotice() })
         val bad = session.copy(jobs = session.jobs.map { if (it.id == running.id) it.copy(state = JobState.Failed, detail = "x") else it })
         assertEquals(listOf("✗ no se pudo quitar app: feat/login"), endedRemovals(before, bad).map { it.endNotice() })
-        assertEquals(emptyList(), endedRemovals(emptyMap(), done), "a removal that was already over when the phone connected says nothing")
+        // One that came and went between two looks is said too; one the phone had seen end already is not said again.
+        assertEquals(listOf("✓ quitado app: feat/login · 4,2 s", "✗ no se pudo quitar app: feat/old"), endedRemovals(emptyMap(), done).map { it.endNotice() })
+        assertEquals(emptyList(), endedRemovals(jobStates(done), done))
         // A push that ends is not a removal.
-        assertEquals(emptyList(), endedRemovals(mapOf(pushed.id to JobState.Running), session))
+        assertEquals(emptyList(), endedRemovals(jobStates(session) + (pushed.id to JobState.Running), session))
     }
 
     @Test
@@ -131,6 +133,14 @@ class JobsTest {
         val alerts = nav.openAvisos(ClientState(), AvisosTab.Alertas)
         assertEquals(alerts, nav.seeJobs(alerts))
         assertEquals(emptySet(), alerts.seen.jobs)
+    }
+
+    @Test
+    fun theJobsTabDoesNotEmptyTheRecordBeforeTheDaemonHasSaidItsEpoch() {
+        val seen = Seen("e", mapOf("n" to 3L))
+        val nav = Navigator(Pc("", session))
+        val s = ClientState(Screen.Avisos, seen, avisosTab = AvisosTab.Trabajos)
+        assertEquals(s, nav.seeJobs(s))
     }
 
     @Test
