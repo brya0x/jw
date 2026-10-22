@@ -1,12 +1,31 @@
-//! The order of the session's workspaces: each repository's root and then its worktrees, then the
-//! folders that are not repositories. Every client draws the list as it comes, so they agree.
+//! The order of the session's workspaces: the groups in their order, and inside each one (and
+//! after them, for the workspaces that are in none) each repository's root and then its worktrees,
+//! then the folders that are not repositories. Every client draws the list as it comes, so they
+//! agree. (A group is the person's name for a set of workspaces; this module also orders each
+//! repository's, which is what its name meant before groups.)
 
-use contract::{WorkspaceKind, WorkspaceSummary};
+use contract::{Id, WorkspaceKind, WorkspaceSummary};
+
+/// `list` with the workspaces of each group of `order` together, in that order, and those of no
+/// group last (REQ-668); inside each, as `by_repository` says. A workspace whose group is not in
+/// `order` is in none.
+pub fn group(list: Vec<WorkspaceSummary>, order: &[Id]) -> Vec<WorkspaceSummary> {
+    let mut buckets: Vec<Vec<WorkspaceSummary>> = vec![Vec::new(); order.len() + 1];
+    for w in list {
+        let at = w
+            .group
+            .as_ref()
+            .and_then(|g| order.iter().position(|o| o == g))
+            .unwrap_or(order.len());
+        buckets[at].push(w);
+    }
+    buckets.into_iter().flat_map(by_repository).collect()
+}
 
 /// `list` with each repository's workspaces together (its root first, then its worktrees in the
 /// order they were opened), the repositories in the order their first workspace was opened, and
 /// the folders with no `project` last. A repository whose root is not open has only worktrees.
-pub fn group(list: Vec<WorkspaceSummary>) -> Vec<WorkspaceSummary> {
+fn by_repository(list: Vec<WorkspaceSummary>) -> Vec<WorkspaceSummary> {
     let mut repos: Vec<(String, Vec<WorkspaceSummary>)> = Vec::new();
     let mut loose = Vec::new();
     for w in list {
@@ -52,6 +71,7 @@ mod tests {
             review: None,
             working: false,
             removing: false,
+            group: None,
         }
     }
 
@@ -72,7 +92,7 @@ mod tests {
         ];
         // `tools` has no root open: only its worktree. `api` was first opened by a worktree, so it leads.
         assert_eq!(
-            names(group(list)),
+            names(group(list, &[])),
             ["api", "api-login", "api-fix", "tools-cli", "notes", "infra"]
         );
     }
@@ -81,7 +101,37 @@ mod tests {
     fn a_list_already_in_order_stays_as_it_is_and_an_empty_one_is_empty() {
         use WorkspaceKind::Folder;
         let list = vec![ws("a", Folder, None), ws("b", Folder, None)];
-        assert_eq!(names(group(list)), ["a", "b"]);
-        assert!(group(Vec::new()).is_empty());
+        assert_eq!(names(group(list, &[])), ["a", "b"]);
+        assert!(group(Vec::new(), &[]).is_empty());
+    }
+
+    fn in_group(mut w: WorkspaceSummary, group: &str) -> WorkspaceSummary {
+        w.group = Some(group.into());
+        w
+    }
+
+    #[test]
+    fn the_groups_come_in_their_order_each_ordered_by_repository_and_the_workspaces_of_none_last() {
+        use WorkspaceKind::{Folder, Worktree};
+        let list = vec![
+            ws("notes", Folder, None),
+            in_group(ws("b-fix", Worktree, Some("/r/b")), "g2"),
+            in_group(ws("a-fix", Worktree, Some("/r/a")), "g1"),
+            in_group(ws("loose", Folder, None), "g1"),
+            in_group(ws("a", Folder, Some("/r/a")), "g1"),
+            in_group(ws("b", Folder, Some("/r/b")), "g2"),
+            in_group(ws("gone", Folder, None), "no-such-group"),
+        ];
+        // `g2` is first, so the workspaces of `b` lead; a group that does not exist holds nobody.
+        let order = ["g2".to_owned(), "g1".to_owned()];
+        assert_eq!(
+            names(group(list.clone(), &order)),
+            ["b", "b-fix", "a", "a-fix", "loose", "notes", "gone"]
+        );
+        let order = ["g1".to_owned(), "g2".to_owned()];
+        assert_eq!(
+            names(group(list, &order)),
+            ["a", "a-fix", "loose", "b", "b-fix", "notes", "gone"]
+        );
     }
 }

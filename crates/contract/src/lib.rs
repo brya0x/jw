@@ -224,6 +224,30 @@ pub enum Cmd {
     CheckWorkspace {
         workspace: Id,
     },
+    /// Make a group (REQ-664): a name that gathers workspaces. The reply is `{group}`, its id.
+    CreateGroup {
+        name: String,
+    },
+    /// Rename a group (REQ-664).
+    RenameGroup {
+        group: Id,
+        name: String,
+    },
+    /// Delete a group (REQ-665): its workspaces stay open and belong to none.
+    DeleteGroup {
+        group: Id,
+    },
+    /// Put a workspace's repository in a group, or in none when `group` is absent (REQ-666).
+    MoveToGroup {
+        workspace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<Id>,
+    },
+    /// Swap a group with its neighbour: `delta` is -1 (up) or 1 (down) (REQ-667).
+    MoveGroup {
+        group: Id,
+        delta: i32,
+    },
     /// Give a workspace a name to be shown by; an empty name brings back the one it had
     /// (the folder's name, or `repo: branch` for a worktree). Its folder is not touched.
     RenameWorkspace {
@@ -544,6 +568,16 @@ pub struct Session {
     /// The slow things the daemon does or did, newest first; absent when there are none (REQ-647).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jobs: Vec<Job>,
+    /// The groups of workspaces, in the order they are shown; absent when there are none (REQ-662).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
+}
+
+/// A name that gathers workspaces (REQ-662): organization only, it holds nothing open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub id: Id,
+    pub name: String,
 }
 
 /// What a job is.
@@ -1079,6 +1113,9 @@ pub struct WorkspaceSummary {
     /// A worktree is being removed: nothing can be done with the workspace (REQ-651).
     #[serde(default, skip_serializing_if = "is_false")]
     pub removing: bool,
+    /// The group of the workspace's repository, when it has one (REQ-662).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<Id>,
 }
 
 fn is_false(b: &bool) -> bool {

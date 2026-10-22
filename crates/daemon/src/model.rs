@@ -1,6 +1,7 @@
 //! What the daemon remembers. Node documents are built from this; `session.json` is this.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use contract::{AttentionKind, Id, WorkspaceKind};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,13 @@ pub struct Model {
     /// with the file's `hash` at that moment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub viewed: BTreeMap<String, BTreeMap<String, String>>,
+    /// The groups of workspaces, in the order they are shown (REQ-662).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<contract::Group>,
+    /// The group of each repository, by `Workspace::group_key` (REQ-663). It outlives the
+    /// workspaces on purpose: opening one again finds its group.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub grouped: BTreeMap<String, Id>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +58,28 @@ pub struct Workspace {
     /// changes and not again while it does not. Not saved: a restart sees it afresh.
     #[serde(skip)]
     pub github: Option<crate::github::Pr>,
+}
+
+impl Workspace {
+    /// The repository the workspace belongs to: a worktree's, or a folder's own path when the
+    /// folder is a git repository's root (REQ-222).
+    pub fn project_path(&self) -> Option<String> {
+        self.project.clone().or_else(|| {
+            (self.kind == WorkspaceKind::Folder && crate::browse::is_git(Path::new(&self.path)))
+                .then(|| self.path.clone())
+        })
+    }
+
+    /// What a group is kept under (REQ-663): the repository, or the folder's own path when it
+    /// is no repository. The summary's `project` and this are the same logic, so they agree.
+    pub fn group_key(&self) -> String {
+        key_from(self.project_path(), &self.path)
+    }
+}
+
+/// The key of a workspace with that project and path (see `Workspace::group_key`).
+pub fn key_from(project: Option<String>, path: &str) -> String {
+    project.unwrap_or_else(|| path.to_owned())
 }
 
 /// A worktree's block of 100 ports: its slot and the names the settings gave to offsets in it.
@@ -153,6 +183,8 @@ impl Model {
             name: "main".into(),
             workspaces: Vec::new(),
             viewed: BTreeMap::new(),
+            groups: Vec::new(),
+            grouped: BTreeMap::new(),
         }
     }
 }
@@ -214,5 +246,23 @@ mod port_tests {
             back.adopted,
             "REQ-536: it is saved, so a restart does not run its setup"
         );
+    }
+
+    #[test]
+    fn a_session_without_groups_still_loads_and_groups_are_saved_only_when_there_are_some() {
+        let old = r#"{"session_id":"s","name":"main","workspaces":[]}"#;
+        let m: Model = serde_json::from_str(old).unwrap();
+        assert!(m.groups.is_empty() && m.grouped.is_empty(), "REQ-663");
+        let text = serde_json::to_string(&m).unwrap();
+        assert!(!text.contains("groups") && !text.contains("grouped"));
+        let mut m = m;
+        m.groups.push(contract::Group {
+            id: "g".into(),
+            name: "salesassist".into(),
+        });
+        m.grouped.insert("/r/app".into(), "g".into());
+        let back: Model = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.groups[0].name, "salesassist");
+        assert_eq!(back.grouped["/r/app"], "g");
     }
 }

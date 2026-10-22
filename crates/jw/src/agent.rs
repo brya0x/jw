@@ -1028,6 +1028,7 @@ mod tests {
             review: None,
             working: false,
             removing: false,
+            group: None,
         }
     }
 

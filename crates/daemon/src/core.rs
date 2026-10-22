@@ -11,11 +11,10 @@ use std::time::{Duration, Instant};
 use contract::patch::diff;
 use contract::{
     Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Job, JobKind, JobState, Node,
-    PaneInput, PaneSummary, PatchOp, Screen, Session, Workspace, WorkspaceKind, WorkspaceSummary,
+    PaneInput, PaneSummary, PatchOp, Screen, Session, Workspace, WorkspaceSummary,
 };
 use serde_json::Value;
 
-use crate::browse::is_git;
 use crate::diff::{self, Scope};
 use crate::history;
 use crate::model::{Model, Own};
@@ -1364,10 +1363,13 @@ impl Core {
             }
             session_attention.extend(attention.iter().cloned());
             // A folder that is a repository's root is its own project; a worktree's is its repository.
-            let project = ws.project.clone().or_else(|| {
-                (ws.kind == WorkspaceKind::Folder && is_git(Path::new(&ws.path)))
-                    .then(|| ws.path.clone())
-            });
+            let project = ws.project_path();
+            let group = self
+                .model
+                .grouped
+                .get(&crate::model::key_from(project.clone(), &ws.path))
+                .filter(|g| self.model.groups.iter().any(|x| x.id == **g))
+                .cloned();
             summaries.push(WorkspaceSummary {
                 id: ws.id.clone(),
                 name: ws.name.clone(),
@@ -1383,6 +1385,7 @@ impl Core {
                     .iter()
                     .any(|p| self.convs.get(&p.id).is_some_and(|c| c.st.works())),
                 removing: self.removing.contains(&ws.id),
+                group,
             });
             nodes.push(Node::Workspace(Workspace {
                 head: head(&ws.id, attention),
@@ -1397,11 +1400,13 @@ impl Core {
                 removing: self.removing.contains(&ws.id),
             }));
         }
+        let order: Vec<Id> = self.model.groups.iter().map(|g| g.id.clone()).collect();
         nodes.push(Node::Session(Session {
             head: head(&self.model.session_id, session_attention),
             name: self.model.name.clone(),
-            workspaces: crate::grouping::group(summaries),
+            workspaces: crate::grouping::group(summaries, &order),
             jobs: self.jobs.clone(),
+            groups: self.model.groups.clone(),
         }));
         let mut kept = Vec::new();
         for (id, e) in &self.diffs {
