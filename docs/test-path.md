@@ -137,6 +137,7 @@ Each step is typed in a pane of the terminal client run on its own state dir (`J
 | Diff of an edit (REQ-556) | allow an `Edit` | the diff in the tool row, `^O` opens it |
 | Images (REQ-407, 447) | paste a screenshot, send a photo from the phone | `[Imagen#1]`, Claude describes it |
 | `@` mentions (REQ-408) | type `@` and letters | the files of the folder, one is written in |
+| `@` from the file tree (REQ-837–842) | `^␣ t`, `space` on two rows, `@`; then `^␣ t` | `●` on each marked row, `@a @b/ ` in the agent's field with the keys there and the tree still shown, nothing sent; `t` gives the tree its keys back |
 | Suggestion (REQ-572, 573) | finish a turn, empty the field | the grey suggestion, `tab` takes it, `esc` puts it aside |
 | Advisor (REQ-570) | have Claude consult the advisor | `● Advising using …` and its answer |
 | Held session (REQ-575) | open the same session in Claude's own screen | the field says who holds it and writes nothing |
