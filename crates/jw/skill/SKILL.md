@@ -18,7 +18,9 @@ by its id (or the start of it) or its title.
 
 - `{bin} ls [--json]` the workspaces: name, kind, branch, how many panes, the most urgent mark
   (`permission`, `question`, `plan`, `ci_failed`, `shell_done`, `screen`, `agent_done`, `merged`)
-  and, last, the name of its group (`-` when it has none).
+  and, last, the name of its group (`-` when it has none). A conversation of its own (see
+  `chat new`) says `chat` where the branch goes, or `chat archivada` when it is closed; `--json`
+  gives it a `chat` object with `archived`, `active` and `last` (its last line).
 - `{bin} group ls [--json]` the groups the person made, in the order they are shown, with how many
   workspaces each has.
 - `{bin} pane ls <workspace> [--json]` its panes: id, title, the program running in it, and
@@ -63,6 +65,17 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
 - `{bin} group move <workspace> [<group>]` puts the workspace's repository (its root and every
   worktree) in the group, or out of every group when none is named. A group only gathers
   workspaces of one product; it closes nothing.
+- `{bin} chat new [--json]` makes a conversation of its own, with no repository, folder or branch of
+  the person's: an empty folder under {bin}'s state and one `claude` panel in it. It prints the
+  workspace's id and name (`conversación nueva` until its first message names it). Talk to it with
+  `prompt <id> --wait`. It is for a question or a thought that belongs to no project; use a
+  worktree for work on code.
+- `{bin} chat archive <chat>` closes its panel and keeps it (a chat with nothing said is discarded);
+  `{bin} chat resume <chat>` opens it again on the same conversation and prints the pane's id;
+  `{bin} chat rm <chat>` removes its folder (Claude's own transcript stays);
+  `{bin} chat promote <chat> <workspace> [--no-summary]` starts a new conversation in that
+  workspace, prints its pane and then a summary of the chat to start it from, and leaves the chat as
+  it was. `read` and `prompt` refuse an archived chat and say to resume it.
 - `{bin} pane open <workspace> [--split right|down] [--of P] [--] [program words]` opens a pane
   (a shell when no program is given) and prints its id.
 - `{bin} pane close <workspace> <pane> [--force]` closes a pane. It refuses your own pane and the
@@ -81,3 +94,5 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
 - A worktree is a git worktree: its branch and files are the person's work. Do not remove
   worktrees; leave that to them.
 - Groups are the person's own way of ordering their work: change them only when asked.
+- A conversation of its own is the person's too: archive or remove one you made with `chat new`,
+  not one they started, unless asked.

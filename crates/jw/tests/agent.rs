@@ -32,7 +32,9 @@ impl World {
         // Only the system's folders besides it, so that the person's own `claude` is never the one
         // a test starts.
         let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display());
-        let daemon = Some(env.start_with(&[("PATH", path)]));
+        // Where Claude's transcripts are looked for: a folder of the test's own.
+        let config = env.dir.join("claude-config").display().to_string();
+        let daemon = Some(env.start_with(&[("PATH", path), ("CLAUDE_CONFIG_DIR", config)]));
         World { env, daemon, repo }
     }
 
@@ -614,5 +616,118 @@ fn worktree_says_on_its_error_output_what_it_copied_and_what_it_did_not_and_prin
         std::fs::read_to_string(w.repo.parent().unwrap().join("app-wt/ws-1/.env")).unwrap(),
         "A=1\n"
     );
+    w.stop();
+}
+
+#[test]
+fn chat_makes_archives_resumes_and_removes_conversations_and_ls_says_which_are_chats() {
+    let w = World::new("ag-chat");
+    w.open_repo();
+    let made = w.ok(None, &["chat", "new"]);
+    let (id, name) = made.trim().split_once('\t').expect("id and name");
+    assert_eq!((id.len(), name), (36, "conversación nueva"));
+    let id = id.to_owned();
+    let json = serde_json::from_str::<Value>(&w.ok(None, &["chat", "new", "--json"])).unwrap();
+    assert_eq!(json["name"], "conversación nueva");
+    let other = json["id"].as_str().unwrap().to_owned();
+    // `ls` says `chat` where it says the branch, and the chats come last
+    let rows = w.ok(None, &["ls"]);
+    let lines: Vec<&str> = rows.lines().collect();
+    assert_eq!(lines[0], "app\tfolder\t-\t1 panes\t-\t-", "{rows}");
+    assert_eq!(lines.len(), 3, "{rows}");
+    assert!(
+        lines[1..]
+            .iter()
+            .all(|l| *l == "conversación nueva\tfolder\tchat\t1 panes\t-\t-"),
+        "{rows}"
+    );
+    let listed = w.json(&["ls", "--json"]);
+    assert!(listed[0].get("chat").is_none());
+    assert!(listed[1]["chat"]["active"].as_u64().is_some());
+    assert!(listed[1]["chat"].get("archived").is_none());
+    // what is refused is said
+    assert!(
+        w.fails(None, &["chat", "archive", "app"], 1)
+            .contains("is not a conversation of its own")
+    );
+    assert!(
+        w.fails(None, &["chat", "resume", &id], 1)
+            .contains("not archived")
+    );
+    assert!(
+        w.fails(None, &["chat", "promote", &id, "app"], 1)
+            .contains("empty")
+    );
+    assert!(
+        w.fails(None, &["chat", "rm", "app"], 1)
+            .contains("is not a conversation of its own")
+    );
+    assert!(w.fails(None, &["chat"], 2).contains("usage: jw chat new"));
+    assert!(
+        w.fails(None, &["chat", "new", "x"], 2)
+            .contains("usage: jw chat new")
+    );
+    // a chat with nothing said is discarded when it is archived, and its folder goes
+    let state = w.env.dir.join("state");
+    let folder = |id: &str| state.join("chats").join(id);
+    assert!(folder(&other).is_dir());
+    assert!(
+        w.ok(None, &["chat", "archive", &other])
+            .contains("discarded")
+    );
+    assert!(!folder(&other).exists());
+    assert_eq!(w.ok(None, &["ls"]).lines().count(), 2);
+    // one that Claude has a transcript of is kept: archived, with no panel
+    let session = {
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let saved: Value = std::fs::read_to_string(state.join("session.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or(Value::Null);
+            let found = saved["workspaces"].as_array().and_then(|all| {
+                all.iter()
+                    .find(|x| x["id"] == id.as_str())
+                    .and_then(|x| x["panes"][0]["resume"][2].as_str().map(str::to_owned))
+            });
+            if let Some(s) = found {
+                break s;
+            }
+            assert!(Instant::now() < end, "the panel has no session id");
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    };
+    let projects = w.env.dir.join("claude-config/projects/x");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(projects.join(format!("{session}.jsonl")), "{}\n").unwrap();
+    assert_eq!(w.ok(None, &["chat", "archive", &id]), "");
+    let rows = w.ok(None, &["ls"]);
+    assert!(
+        rows.contains("conversación nueva\tfolder\tchat archivada\t0 panes\t-\t-\n"),
+        "{rows}"
+    );
+    assert_eq!(
+        w.json(&["ls", "--json"])[1]["chat"]["archived"],
+        serde_json::json!(true)
+    );
+    // an archived chat has no panel to read or to prompt
+    for args in [&["read", &id][..], &["prompt", &id, "hola"]] {
+        let said = w.fails(None, args, 1);
+        assert!(
+            said.contains(&format!("archivada: jw chat resume {id}")),
+            "{said}"
+        );
+    }
+    // resuming opens a panel again, and prints its id
+    let pane = w.ok(None, &["chat", "resume", &id]);
+    assert_eq!(pane.trim().len(), 36, "{pane}");
+    assert!(
+        w.ok(None, &["ls"])
+            .contains("conversación nueva\tfolder\tchat\t1 panes\t-\t-\n")
+    );
+    // removing takes the folder and the chat
+    assert_eq!(w.ok(None, &["chat", "rm", &id]), "");
+    assert!(!folder(&id).exists());
+    assert_eq!(w.ok(None, &["ls"]), "app\tfolder\t-\t1 panes\t-\t-\n");
     w.stop();
 }
