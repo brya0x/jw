@@ -4,7 +4,9 @@
 //! `$SHELL -i -c '<program>; exec $SHELL -i'`. Nothing races the prompt (no keystrokes to
 //! lose to a slow rc file, no echo to confuse the screen), the shell still reads its rc
 //! files (`-i`), and when the program ends the same process becomes an ordinary shell, so
-//! the pane never dies with it.
+//! the pane never dies with it. Nothing marks the program as a command (the integration's hooks
+//! belong to the prompt), so until the shell that takes over shows its first prompt the pane is its
+//! screen and not a list of blocks (REQ-844).
 
 use std::path::{Path, PathBuf};
 

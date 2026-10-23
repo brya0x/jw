@@ -342,8 +342,9 @@ impl BlockStore {
         self.version
     }
 
-    /// The shell was started with the integration: its blocks exist (empty) from the start,
-    /// so a client draws blocks before the first prompt.
+    /// The shell was started with the integration and no program: its blocks exist (empty) from
+    /// the start, so a client draws blocks before the first prompt. A program started with `-c`
+    /// leaves the store as it is until the shell's first mark (REQ-844).
     pub fn integrate(&mut self) {
         self.integrated = true;
     }
@@ -547,6 +548,24 @@ mod tests {
         s.integrate();
         let (_, mode, blocks) = s.view().unwrap();
         assert!(blocks.is_empty() && mode == BlocksMode::Blocks);
+    }
+
+    #[test]
+    fn a_store_not_integrated_has_no_view_until_its_first_mark_and_then_blocks() {
+        // A pane started with a program (REQ-844): nothing integrates it at the start.
+        let mut s = BlockStore::new(80);
+        s.data(b"output of a program\n");
+        assert!(s.view().is_none(), "no prompt yet: the pane is its screen");
+        s.mark(Mark::Prompt);
+        let (_, mode, blocks) = s.view().unwrap();
+        assert!(blocks.is_empty() && mode == BlocksMode::Blocks);
+        s.mark(Mark::Command {
+            cmd: "ls".into(),
+            cwd: "/".into(),
+        });
+        s.data(b"x\n");
+        s.mark(Mark::Done(Some(0)));
+        assert_eq!(s.view().unwrap().2.len(), 1, "blocks work as in any shell");
     }
 
     fn pieces(chunks: &[&[u8]]) -> Vec<Piece> {
