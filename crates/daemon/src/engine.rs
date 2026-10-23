@@ -269,7 +269,7 @@ fn launch_of(c: &Conv) -> Launch {
     ]
     .map(str::to_owned)
     .into();
-    // The transcript exists once the first turn ended: `--resume` needs it, `--session-id` makes it.
+    // `--resume` needs the transcript and `--session-id` makes it: `start_engine` has set the flag from the disk (REQ-754).
     args.extend([
         if c.st.has_transcript {
             "--resume"
@@ -556,13 +556,18 @@ fn run_effects(core: &mut crate::core::Core, pane: &Id, fx: Vec<Effect>) {
 /// Start the engine of a conversation that has none (it is new, or its daemon restarted).
 fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::ErrorBody> {
     // A session that another `claude` has open is not written to by a second one (REQ-575).
-    let (env, session, own) = {
+    let (env, session, own, cfg_env) = {
         let core = shared.lock();
         let c = core
             .convs
             .get(pane)
             .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
-        (c.env.clone(), c.st.session.clone(), c.engine_pid)
+        (
+            c.env.clone(),
+            c.st.session.clone(),
+            c.engine_pid,
+            core.env.clone(),
+        )
     };
     if let Some(h) = crate::sessions::holder(env.as_ref(), &session, own) {
         {
@@ -580,16 +585,26 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
             ),
         ));
     }
-    let (launch, cfg_env, generation) = {
+    // The disk says whether the session has a transcript, not the flag of the conversation: the
+    // engine writes the file at the first message and the flag is on at the end of the first turn
+    // (REQ-754). The folder is the one the engine runs with, and no lock is held for the look.
+    let lookup: Vec<(String, String)> = match &env {
+        Some(e) => e.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        None => cfg_env.clone(),
+    };
+    let found = crate::launch::transcript_exists(&lookup, &session);
+    let (launch, generation) = {
         let mut core = shared.lock();
-        let cfg_env = core.env.clone();
         let c = core
             .convs
             .get_mut(pane)
             .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
         c.generation += 1;
         c.st.set_held(None);
-        (launch_of(c), cfg_env, c.generation)
+        let fx = c.st.transcript_found(found);
+        let launch = (launch_of(c), c.generation);
+        run_effects(&mut core, pane, fx);
+        launch
     };
     let exe = resolve_claude(launch.env.as_ref(), &cfg_env)
         .ok_or_else(|| err(ErrorCode::Io, "claude is not on the PATH it was typed in"))?;

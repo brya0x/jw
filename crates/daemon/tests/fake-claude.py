@@ -16,6 +16,24 @@ if os.environ.get("FAKE_PIDFILE"):
     with open(os.environ["FAKE_PIDFILE"], "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
 logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", ""))
+# With FAKE_CLAUDE_DIR the engine keeps a transcript like Claude's: `<dir>/projects/<folder>/<id>.jsonl`, written
+# at the first message; a reused `--session-id` and a `--resume` of nothing end with code 1, as they do there.
+claude_dir = os.environ.get("FAKE_CLAUDE_DIR")
+def on_disk(id):
+    projects = os.path.join(claude_dir, "projects")
+    return os.path.isdir(projects) and any(os.path.exists(os.path.join(projects, d, id + ".jsonl")) for d in os.listdir(projects))
+if claude_dir:
+    if "--session-id" in argv and on_disk(session):
+        sys.stderr.write("Error: Session ID %s is already in use.\n" % session)
+        sys.exit(1)
+    if "--resume" in argv and not on_disk(session):
+        sys.stderr.write("No conversation found with session ID: %s\n" % session)
+        sys.exit(1)
+def write_transcript(text):
+    folder = os.path.join(claude_dir, "projects", os.getcwd().replace("/", "-").replace(".", "-"))
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, session + ".jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}, ensure_ascii=False) + "\n")
 lock = threading.Lock()
 mode = ["default"]
 outputs = {}
@@ -198,6 +216,8 @@ for line in sys.stdin:
     if text.startswith("/"):
         result(0.0, turns=0)
         continue
+    if claude_dir:
+        write_transcript(text)
     if "die" in text:
         sys.stderr.write("boom\n")
         sys.stderr.flush()
