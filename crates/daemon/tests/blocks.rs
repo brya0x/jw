@@ -689,6 +689,84 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
     d.stop();
 }
 
+/// REQ-844: a program started with `-c` marks nothing, so while it runs the pane is its screen (no
+/// blocks node, which would be an empty list); the shell that takes over brings the blocks.
+#[test]
+fn a_pane_started_with_a_program_is_its_screen_until_the_shell_reaches_its_prompt() {
+    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+        return;
+    };
+    let sb = Sandbox::new();
+    let home = sb.dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut config = sb.config();
+    config.shell = Some(shell);
+    config.env = vec![
+        ("HOME".into(), home.to_string_lossy().into()),
+        ("ZDOTDIR".into(), home.to_string_lossy().into()),
+        ("skip_global_compinit".into(), "1".into()),
+    ];
+    let d = Daemon::start(config.clone()).unwrap();
+    let dir = std::fs::canonicalize(&sb.dir).unwrap().join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut c = Client::connect(&config.socket, "test").unwrap();
+    let ws = c
+        .cmd(Cmd::OpenFolder {
+            path: dir.to_string_lossy().into(),
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let pane = c
+        .cmd(Cmd::NewPane {
+            workspace: ws,
+            program: Some(vec![
+                "sh".into(),
+                "-c".into(),
+                "echo on-the-screen; sleep 4".into(),
+            ]),
+            beside: None,
+            dir: None,
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    c.open(&pane).unwrap();
+    let on_screen = |c: &Client| {
+        c.nodes.get(&pane).is_some_and(|n| {
+            n["screen"]["lines"].as_array().is_some_and(|l| {
+                l.iter()
+                    .any(|l| l.as_str().unwrap().contains("on-the-screen"))
+            })
+        })
+    };
+    assert!(
+        c.wait_until(Duration::from_secs(10), on_screen).unwrap(),
+        "{:?}",
+        c.nodes.get(&pane)
+    );
+    assert!(
+        c.nodes[&pane].get("blocks").is_none(),
+        "the program runs: the pane is its screen, not an empty list of blocks"
+    );
+    assert!(
+        c.wait_until(Duration::from_secs(15), |c| c
+            .nodes
+            .get(&pane)
+            .is_some_and(|n| n.get("blocks").is_some()))
+            .unwrap(),
+        "the program ended and the shell that took over did not bring the blocks: {:?}",
+        c.nodes.get(&pane)
+    );
+    d.stop();
+}
+
 /// REQ-250 and REQ-251: the mode follows the command the shell reports, not the 0.7 s look at
 /// the foreground. A stand-in `claude` (it draws on the normal screen, as the real one does).
 #[test]
