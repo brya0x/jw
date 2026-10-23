@@ -468,6 +468,119 @@ fn a_workspace_says_it_works_while_its_conversation_runs_a_turn() {
     r.stop();
 }
 
+fn inits(r: &Rig) -> usize {
+    log_lines(&r.log)
+        .iter()
+        .filter(|l| *l == "control initialize")
+        .count()
+}
+
+/// The names the list has: a turn's `init` may tell a skill from a command of the project, which
+/// changes a source and not the list.
+fn names(v: &Value) -> Vec<String> {
+    v["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn has_command(v: &Value, name: &str) -> bool {
+    v["commands"]
+        .as_array()
+        .is_some_and(|c| c.iter().any(|c| c["name"] == name))
+}
+
+/// REQ-756, REQ-758: the engine is asked for its commands again when `/reload-plugins` ends, and
+/// the node and `commands.json` show the answer; a conversation that never reloads is not asked.
+#[test]
+fn a_reload_asks_the_engine_for_its_commands_again_and_the_node_and_the_kept_list_show_them() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.until(&node, "the first list", |v| has_command(v, "/deploy"));
+    // an ordinary turn asks nothing
+    r.send(&node, "hola");
+    r.idle_after(&node, 1);
+    assert_eq!(inits(&r), 1, "{:?}", log_lines(&r.log));
+    assert!(!has_command(&r.conv(&node), "/ponytail:ponytail"));
+    r.send(&node, "/reload-plugins");
+    let v = r.until(&node, "the list after the reload", |v| {
+        has_command(v, "/ponytail:ponytail")
+    });
+    assert!(has_command(&v, "/ponytail:ponytail-review"));
+    assert!(has_command(&v, "/deploy"), "what was there stays");
+    assert_eq!(inits(&r), 2, "{:?}", log_lines(&r.log));
+    let file = r.sb.dir.join("state").join("commands.json");
+    wait_for("the kept list to follow", || {
+        std::fs::read_to_string(&file).is_ok_and(|t| t.contains("ponytail:ponytail-review"))
+    });
+    r.stop();
+}
+
+/// REQ-757: a second answer that fails, or that has no list, leaves the list the conversation had
+/// and says nothing.
+#[test]
+fn a_reload_whose_answer_fails_or_has_no_list_keeps_the_commands_it_had() {
+    for line in ["/reload-plugins fail", "/reload-skills nolist"] {
+        let mut r = rig();
+        let (node, _) = r.open();
+        let first = r.until(&node, "the first list", |v| has_command(v, "/deploy"));
+        let before = names(&first);
+        r.send(&node, line);
+        wait_for("the second initialize", || inits(&r) == 2);
+        // the engine answers in order: once it has replied to this one, the answer was read
+        r.send(&node, "hola");
+        let v = r.idle_after(&node, 1);
+        assert_eq!(names(&v), before, "{line}");
+        assert!(items(&v, "note").is_empty(), "{line}: {v:#}");
+        r.stop();
+    }
+}
+
+/// REQ-758: the file keeps the list of the conversation that reloaded, and one that has not does
+/// not put the old one back when it saves.
+#[test]
+fn a_conversation_that_has_not_reloaded_does_not_put_the_old_list_back_in_the_kept_file() {
+    let mut r = rig();
+    let (first, _) = r.open();
+    let pane = r
+        .cmd(Cmd::NewPane {
+            workspace: r.ws.clone(),
+            program: None,
+            beside: None,
+            dir: None,
+        })
+        .unwrap()
+        .unwrap()["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    r.pane = pane;
+    let (second, _) = r.open();
+    r.until(&second, "its list", |v| has_command(v, "/deploy"));
+    r.send(&first, "/reload-plugins");
+    r.until(&first, "the new list", |v| {
+        has_command(v, "/ponytail:ponytail")
+    });
+    let file = r.sb.dir.join("state").join("commands.json");
+    wait_for("the new list to be kept", || {
+        std::fs::read_to_string(&file).is_ok_and(|t| t.contains("ponytail:ponytail"))
+    });
+    // every save looks for the list to keep; the one that has the old one saves three times
+    for _ in 0..3 {
+        r.send(&second, "hola");
+    }
+    r.idle_after(&second, 3);
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("ponytail:ponytail"),
+        "the old list came back"
+    );
+    r.stop();
+}
+
 /// REQ-593: a conversation that is resumed before its engine starts has the `/` list that an engine
 /// gave last, so the person can complete and see the colour of a skill from the first key.
 #[test]
