@@ -106,14 +106,14 @@ pub enum Manage {
         current: Option<String>,
         cursor: usize,
     },
-    /// `A`: the archived conversations of their own, the most recent first (REQ-808).
+    /// `A`: the archived conversations of their own, the most recent first (REQ-821).
     Archived {
         chats: Vec<(String, String)>,
         cursor: usize,
     },
-    /// `d` in `Archived`: its folder goes with it; Claude's own transcript stays (REQ-808).
+    /// `d` in `Archived`: its folder goes with it; Claude's own transcript stays (REQ-821).
     DeleteChat { workspace: String, name: String },
-    /// `P` on a conversation: the workspaces to take it to as a new conversation (REQ-809).
+    /// `P` on a conversation: the workspaces to take it to as a new conversation (REQ-822).
     ChatTo {
         chat: String,
         name: String,

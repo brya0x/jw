@@ -48,10 +48,10 @@ import kotlinx.coroutines.delay
 
 private val Gutter = 16.dp
 
-/** How long a conversation just made, resumed or promoted is waited for before the phone stops (REQ-815). */
+/** How long a conversation just made, resumed or promoted is waited for before the phone stops (REQ-828). */
 private const val CHAT_OPEN_WAIT_MS = 50_000L
 
-/** The row of a live conversation of its own in Home: `✦`, its name, its last line, the mark of what waits and when it was said (REQ-813). */
+/** The row of a live conversation of its own in Home: `✦`, its name, its last line, the mark of what waits and when it was said (REQ-826). */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatRow(row: HomeRow, current: Boolean, open: () -> Unit, hold: () -> Unit) {
@@ -79,7 +79,7 @@ internal fun ChatRow(row: HomeRow, current: Boolean, open: () -> Unit, hold: () 
     }
 }
 
-/** «archivadas · n ›», at the end of the section (REQ-813). */
+/** «archivadas · n ›», at the end of the section (REQ-826). */
 @Composable
 internal fun ArchivedLinkRow(count: Int, open: () -> Unit) {
     Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clickable(onClick = open).padding(horizontal = Gutter), verticalAlignment = Alignment.CenterVertically) {
@@ -87,7 +87,7 @@ internal fun ArchivedLinkRow(count: Int, open: () -> Unit) {
     }
 }
 
-/** What the section says while it has no live conversation (REQ-813). */
+/** What the section says while it has no live conversation (REQ-826). */
 @Composable
 internal fun NoChatsLine() {
     Mono("ninguna · el + de arriba abre una", Palette.dim, 12, lines = 2, modifier = Modifier.padding(horizontal = Gutter, vertical = 10.dp))
@@ -95,7 +95,7 @@ internal fun NoChatsLine() {
 
 /**
  * The sheet of a conversation of its own, from a long press on its row or from `⋯` in its header: its own, never the workspace's,
- * which offers «mover a un grupo…» and «cerrar» (REQ-818).
+ * which offers «mover a un grupo…» and «cerrar» (REQ-831).
  */
 @Composable
 internal fun BoxScope.ChatSheet(name: String, hasMessages: Boolean, dismiss: () -> Unit, choose: (ChatAction) -> Unit) {
@@ -108,7 +108,7 @@ internal fun BoxScope.ChatSheet(name: String, hasMessages: Boolean, dismiss: () 
     }
 }
 
-/** «llevar a un proyecto…»: the workspaces a conversation can be taken to, then the PC makes the new conversation (REQ-817). */
+/** «llevar a un proyecto…»: the workspaces a conversation can be taken to, then the PC makes the new conversation (REQ-830). */
 @Composable
 internal fun BoxScope.PromoteSheet(session: Node.Session, name: String, error: String?, dismiss: () -> Unit, pick: (WorkspaceSummary) -> Unit) {
     Sheet(dismiss) {
@@ -119,7 +119,7 @@ internal fun BoxScope.PromoteSheet(session: Node.Session, name: String, error: S
     }
 }
 
-/** The question before an archived conversation is deleted: its folder goes and Claude's transcript stays (REQ-817). */
+/** The question before an archived conversation is deleted: its folder goes and Claude's transcript stays (REQ-830). */
 @Composable
 internal fun BoxScope.DeleteChatConfirm(source: AppSource, sheet: DeleteChatSheet, cancel: () -> Unit, done: () -> Unit) {
     var error by remember(sheet.workspace) { mutableStateOf<String?>(null) }
@@ -142,7 +142,7 @@ internal fun BoxScope.DeleteChatConfirm(source: AppSource, sheet: DeleteChatShee
 
 /**
  * Opens a conversation of its own once the session lists it as live, with its field focused (and a summary in it) when its panel has
- * its conversation: an archived one is listed and has no panel, so it is not opened before (REQ-815, REQ-817). [spent] says it was
+ * its conversation: an archived one is listed and has no panel, so it is not opened before (REQ-828, REQ-830). [spent] says it was
  * opened or the wait is over.
  */
 @Composable
@@ -161,7 +161,7 @@ internal fun OpenChatWhenShown(source: AppSource, pending: ChatOpen?, state: Cli
     }
 }
 
-/** The archived conversations of their own: «reanudar» opens one again, `×` asks before deleting it (REQ-817). */
+/** The archived conversations of their own: «reanudar» opens one again, `×` asks before deleting it (REQ-830). */
 @Composable
 internal fun ArchivedScreen(source: AppSource, state: ClientState, nav: Navigator, set: (ClientState) -> Unit) {
     val version = source.tick.intValue

@@ -52,7 +52,7 @@ pub fn workspace(shared: &Shared, workspace: &str, name: &str) -> Done {
             format!("no workspace {workspace}"),
         ));
     };
-    // A chat's folder is the daemon's, not the person's (REQ-802).
+    // A chat's folder is the daemon's, not the person's (REQ-815).
     if ws.kind != WorkspaceKind::Worktree && ws.chat.is_none() {
         return Err(err(
             ErrorCode::BadRequest,

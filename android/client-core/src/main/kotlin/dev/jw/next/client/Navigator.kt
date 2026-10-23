@@ -114,27 +114,27 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Make a conversation of its own; [reply] gets its workspace's id (REQ-815). */
+    /** Make a conversation of its own; [reply] gets its workspace's id (REQ-828). */
     fun chatNew(reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Archive a conversation of its own; [reply] gets `true` when it was empty and went (REQ-817). */
+    /** Archive a conversation of its own; [reply] gets `true` when it was empty and went (REQ-830). */
     fun archiveChat(workspace: Id, reply: (Result<Boolean>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Open a panel in an archived conversation; [reply] gets the pane (REQ-817). */
+    /** Open a panel in an archived conversation; [reply] gets the pane (REQ-830). */
     fun resumeChat(workspace: Id, reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Delete an archived conversation and its folder (REQ-817). */
+    /** Delete an archived conversation and its folder (REQ-830). */
     fun deleteChat(workspace: Id, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Start a new conversation in [to] with a summary of [chat]; [reply] gets its pane and the text for its field (REQ-817). */
+    /** Start a new conversation in [to] with a summary of [chat]; [reply] gets its pane and the text for its field (REQ-830). */
     fun promoteChat(chat: Id, to: Id, reply: (Result<Promoted>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
@@ -323,7 +323,7 @@ sealed interface Screen {
     /** The files of one workspace, folder by folder and no higher than its own (REQ-323). */
     data class Files(val workspace: Id) : Screen
 
-    /** The conversations of their own that are archived, to resume or delete (REQ-817). */
+    /** The conversations of their own that are archived, to resume or delete (REQ-830). */
     data object Archived : Screen
 
     /** The artifacts of one workspace, reached from its header menu or from the attention that says one waits (N171). */
@@ -350,7 +350,7 @@ data class ClientState(
     val folded: Set<Id> = emptySet(),
     /** The chip of Avisos: null for every alert, [NO_GROUP], or a group's id (REQ-699). */
     val avisosFilter: Id? = null,
-    /** A conversation of its own just made, resumed or promoted: its field is focused once its conversation is there (REQ-815). */
+    /** A conversation of its own just made, resumed or promoted: its field is focused once its conversation is there (REQ-828). */
     val chatOpen: ChatOpen? = null,
 )
 
@@ -429,7 +429,7 @@ class Navigator(private val source: NodeSource) {
 
     /**
      * A conversation of its own that is archived has no panel to show: its screen gives way to Home, whoever archived it, from here,
-     * from the terminal or by closing its last panel (REQ-823).
+     * from the terminal or by closing its last panel (REQ-836).
      */
     fun leaveArchivedChat(s: ClientState): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s
@@ -441,12 +441,12 @@ class Navigator(private val source: NodeSource) {
      * session until the daemon says so. Null until then.
      */
     fun openWhenShown(s: ClientState, id: Id): ClientState? =
-        // An archived conversation is listed and has no panel: it is not opened until it is live (REQ-817).
+        // An archived conversation is listed and has no panel: it is not opened until it is live (REQ-830).
         if (source.session().workspaces.any { it.id == id && it.chat?.archived != true }) openWorkspace(s, id) else null
 
     /**
      * Opens [workspace] once it is live and has the field of its conversation take the focus when it opens, with [text]
-     * in it, in [pane] when the PC named one (REQ-815, REQ-817). Null until the session lists it as live.
+     * in it, in [pane] when the PC named one (REQ-828, REQ-830). Null until the session lists it as live.
      */
     fun openChat(s: ClientState, workspace: Id, pane: Id? = null, text: String? = null): ClientState? =
         openWhenShown(s, workspace)?.copy(chatOpen = ChatOpen(workspace, pane, text?.takeIf { it.isNotEmpty() }))

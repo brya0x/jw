@@ -1,4 +1,4 @@
-//! N172a: conversations of their own (REQ-792 to REQ-804), against the fake engine of the
+//! N173a: conversations of their own (REQ-805 to REQ-817), against the fake engine of the
 //! conversation tests. Each test has its own state directory, so no chat is made in the person's.
 
 mod common;
@@ -253,7 +253,7 @@ fn the_first_message_names_the_chat_and_a_reply_is_its_last_line() {
     r.say(&node, "  una   cosa\n larga  ");
     let w = r.until_summary("the name", &id, |w| w["name"] != NEW);
     assert_eq!(w["name"], "una cosa larga");
-    // the panel's engine starts in the chat's folder with mode `manual` (REQ-794)
+    // the panel's engine starts in the chat's folder with mode `manual` (REQ-807)
     r.log_has("an engine in manual mode", |l| {
         l.contains("--permission-mode\", \"manual") && l.contains("/chats/")
     });

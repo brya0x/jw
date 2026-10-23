@@ -149,7 +149,7 @@ private sealed interface Open {
  * prototype `docs/prototypes/conversation.html`): the items, the sheet that asks, the line with `+` above it, the lists.
  * [settingsAsked] counts the taps on the pane's tab, each of which opens the settings. [draft] is a reference to lines of a file
  * picked in the viewer: it is written in the field once and then [spendDraft] says it was (REQ-639). With [focusField] the field takes
- * the focus, with [fieldText] in it (a summary of a conversation taken from another), and [fieldDone] says it did (REQ-815, REQ-817).
+ * the focus, with [fieldText] in it (a summary of a conversation taken from another), and [fieldDone] says it did (REQ-828, REQ-830).
  */
 @Composable
 internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, workspacePath: String?, branch: String?, settingsAsked: Int, draft: Draft?, focusField: Boolean, fieldText: String?, fieldDone: () -> Unit, spendDraft: () -> Unit) {

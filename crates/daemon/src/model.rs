@@ -65,7 +65,7 @@ pub struct Workspace {
     /// changes and not again while it does not. Not saved: a restart sees it afresh.
     #[serde(skip)]
     pub github: Option<crate::github::Pr>,
-    /// The workspace is a conversation of its own (N172, REQ-792).
+    /// The workspace is a conversation of its own (N173, REQ-805).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<Chat>,
 }
@@ -73,13 +73,13 @@ pub struct Workspace {
 /// What the daemon keeps of a conversation of its own besides its folder and panel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chat {
-    /// The panel is closed and the chat waits to be resumed (REQ-798).
+    /// The panel is closed and the chat waits to be resumed (REQ-811).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
     /// The conversation's id, kept when the panel goes so that resuming opens the same one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
-    /// When the last item was added to the conversation, in seconds (REQ-792).
+    /// When the last item was added to the conversation, in seconds (REQ-805).
     pub active: u64,
     /// The text of that item on one line, clipped to 80 characters; none while nothing was said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,7 +112,7 @@ impl Workspace {
     /// The repository the workspace belongs to: a worktree's, or a folder's own path when the
     /// folder is a git repository's root (REQ-222).
     pub fn project_path(&self) -> Option<String> {
-        // A chat is no repository, whatever its folder holds (RISK-119).
+        // A chat is no repository, whatever its folder holds (RISK-123).
         if self.chat.is_some() {
             return None;
         }

@@ -14,7 +14,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** REQ-813, REQ-815, REQ-817, REQ-818: the conversations of their own on the phone. */
+/** REQ-826, REQ-828, REQ-830, REQ-831: the conversations of their own on the phone. */
 class ChatsHomeTest {
     private val session = (ContractJson.decodeFromString(DaemonMsg.serializer(), File(System.getProperty("contract.dir"), "fixtures/daemon/snapshot-session-chats.json").readText()) as DaemonMsg.Snapshot).node as Node.Session
     private val app = session.workspaces[0]

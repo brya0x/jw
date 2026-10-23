@@ -21,7 +21,7 @@ pub enum Side {
     /// What an open group with no workspace says.
     Empty,
     Workspace(usize),
-    /// The heading of the conversations of their own, with how many are live (REQ-805).
+    /// The heading of the conversations of their own, with how many are live (REQ-818).
     Chats(usize),
     /// A live chat, at an index into the session's workspaces.
     Chat(usize),
@@ -36,7 +36,7 @@ pub enum Side {
 /// (but with no `carpetas`) or `vacío`; last, under `sin grupo`, the workspaces of no group (or of
 /// a group that is not listed).
 pub fn rows(list: &[WorkspaceSummary], groups: &[Group], folded: &HashSet<String>) -> Vec<Side> {
-    // A chat is no repository, folder or member of a group: it has its own zone, last (REQ-797).
+    // A chat is no repository, folder or member of a group: it has its own zone, last (REQ-810).
     let all: Vec<usize> = (0..list.len())
         .filter(|&i| list[i].chat.is_none())
         .collect();
@@ -45,7 +45,7 @@ pub fn rows(list: &[WorkspaceSummary], groups: &[Group], folded: &HashSet<String
     rows
 }
 
-/// The zone of the conversations of their own, in the order the daemon sent them (REQ-805): the
+/// The zone of the conversations of their own, in the order the daemon sent them (REQ-818): the
 /// live ones, and a line for the archived, which have no row of their own.
 fn chat_rows(list: &[WorkspaceSummary]) -> Vec<Side> {
     let chat = |i: &usize| list[*i].chat.as_ref();
@@ -208,7 +208,7 @@ mod tests {
         w
     }
 
-    /// REQ-805: the chats leave the repositories, `carpetas` and the groups, and come last in the
+    /// REQ-818: the chats leave the repositories, `carpetas` and the groups, and come last in the
     /// order the daemon sent them, the archived as a line and with no row of their own.
     #[test]
     fn the_chats_are_a_zone_after_everything_and_the_archived_are_a_line() {

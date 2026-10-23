@@ -381,13 +381,13 @@ enum Cursor {
 
 /// How long the client waits for a conversation of its own to open its panel's conversation: the
 /// agent starts a moment after the panel and the conversation a moment after that, as the
-/// binary's `chat new` waits for them (REQ-806). A summary exists only in the reply to `P`, so
+/// binary's `chat new` waits for them (REQ-819). A summary exists only in the reply to `P`, so
 /// it is not given up on early.
 const CHAT_WAIT_MS: u64 = 50_000;
 
 /// What the client waits for after it made, resumed or took a summary to a conversation of its
 /// own: the panel (`pane`, else the workspace's first) to have its conversation, and then the
-/// cursor in the field (REQ-806). Typing starts only then: before, the panel is a terminal that
+/// cursor in the field (REQ-819). Typing starts only then: before, the panel is a terminal that
 /// runs `claude` and would take the person's first keys. `until` is in `now_ms`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChatWait {
@@ -397,7 +397,7 @@ struct ChatWait {
     until: u64,
 }
 
-/// An archived chat is listed and has no row: nothing selects it until it is live (REQ-805).
+/// An archived chat is listed and has no row: nothing selects it until it is live (REQ-818).
 fn archived(w: &contract::WorkspaceSummary) -> bool {
     w.chat.as_ref().is_some_and(|c| c.archived)
 }
@@ -481,11 +481,11 @@ pub enum Key {
     Group,
     /// `G`: a new group (REQ-694).
     NewGroup,
-    /// `C`: a conversation of its own (REQ-806).
+    /// `C`: a conversation of its own (REQ-819).
     ChatNew,
-    /// `A`: the archived conversations (REQ-808).
+    /// `A`: the archived conversations (REQ-821).
     Archived,
-    /// `P`: take a conversation to a project (REQ-809).
+    /// `P`: take a conversation to a project (REQ-822).
     Promote,
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
     Resize(SplitDir, bool),
@@ -652,21 +652,21 @@ pub enum After {
         node: String,
         ask: String,
     },
-    /// A conversation of its own (REQ-806).
+    /// A conversation of its own (REQ-819).
     ChatNew,
-    /// Archive a conversation of its own (REQ-807).
+    /// Archive a conversation of its own (REQ-820).
     ArchiveChat {
         workspace: String,
     },
-    /// Resume an archived conversation (REQ-808).
+    /// Resume an archived conversation (REQ-821).
     ResumeChat {
         workspace: String,
     },
-    /// Delete an archived conversation and its folder (REQ-808).
+    /// Delete an archived conversation and its folder (REQ-821).
     DeleteChat {
         workspace: String,
     },
-    /// Take a conversation to a workspace as a new conversation, with a summary (REQ-809).
+    /// Take a conversation to a workspace as a new conversation, with a summary (REQ-822).
     PromoteChat {
         chat: String,
         to: String,
@@ -855,7 +855,7 @@ pub struct View {
     /// The question being asked before a pane or a workspace is closed.
     manage: Option<Manage>,
     /// The conversation of its own the client just made, resumed or took a summary to: once its
-    /// panel's conversation is there, the cursor goes in its field, with the summary in it (REQ-806).
+    /// panel's conversation is there, the cursor goes in its field, with the summary in it (REQ-819).
     chat_wait: Option<ChatWait>,
     /// The `uncommitted` node `manage` reads a worktree's changes from, while it is open.
     check_node: Option<String>,
@@ -1928,7 +1928,7 @@ impl View {
 
     /// An archived chat is in the session and has no row: a cursor that was on it (it was just
     /// archived, or the session is older than the person's last key) goes to the nearest row that
-    /// is drawn, as when a workspace is closed elsewhere (REQ-805).
+    /// is drawn, as when a workspace is closed elsewhere (REQ-818).
     fn keep_cursor_on_a_row(&mut self) {
         if self.on_group.is_some() {
             return;
@@ -2690,7 +2690,7 @@ impl View {
     }
 
     /// Wait for the panel of a conversation of its own to have its conversation, to put the cursor
-    /// in its field with `draft` in it (REQ-806, REQ-809): `pane` is the panel the daemon said, or
+    /// in its field with `draft` in it (REQ-819, REQ-822): `pane` is the panel the daemon said, or
     /// the workspace's first.
     pub fn chat_wait(&mut self, workspace: &str, pane: Option<String>, draft: Option<String>) {
         self.chat_wait = Some(ChatWait {
@@ -2771,7 +2771,7 @@ impl View {
 
     /// The conversation just made, resumed or promoted: once the workspace is open and its panel
     /// has a conversation, the focus goes to the panel and the cursor into its field, with the
-    /// draft in it (REQ-806, REQ-809). A draft that does not arrive is said, not copied.
+    /// draft in it (REQ-819, REQ-822). A draft that does not arrive is said, not copied.
     fn follow_chat(&mut self) {
         let Some(wait) = self.chat_wait.clone() else {
             return;
@@ -2802,7 +2802,7 @@ impl View {
         }
     }
 
-    /// `A`: the archived conversations, the most recent first as the daemon lists them (REQ-808).
+    /// `A`: the archived conversations, the most recent first as the daemon lists them (REQ-821).
     fn ask_archived(&mut self) {
         let chats: Vec<(String, String)> = self
             .session
@@ -2818,7 +2818,7 @@ impl View {
         self.manage = Some(Manage::Archived { chats, cursor: 0 });
     }
 
-    /// `P`: the workspaces to take the highlighted conversation to (REQ-809).
+    /// `P`: the workspaces to take the highlighted conversation to (REQ-822).
     fn ask_promote(&mut self) {
         let Some(chat) = self.selected_chat() else {
             self.flash("P lleva una conversación a un proyecto: ponte en una");
@@ -2854,7 +2854,7 @@ impl View {
     }
 
     /// What `key` says when the highlighted row is a conversation of its own and the key is
-    /// for something it has not (REQ-810).
+    /// for something it has not (REQ-823).
     fn chat_refusal(&self, key: Key) -> Option<&'static str> {
         self.selected_chat()?;
         Some(match key {
@@ -3776,7 +3776,7 @@ impl View {
             self.flash("ya se está quitando");
             return After::Continue;
         }
-        // What a conversation of its own has no use for is said, and nothing is sent (REQ-810).
+        // What a conversation of its own has no use for is said, and nothing is sent (REQ-823).
         if self.mode == Mode::Workspaces
             && level == Level::Workspaces
             && let Some(why) = self.chat_refusal(key)
@@ -3786,13 +3786,13 @@ impl View {
         }
         match (self.mode, key) {
             (_, Key::Quit) => return After::Quit,
-            // `C` makes a conversation of its own, from any row of the list (REQ-806).
+            // `C` makes a conversation of its own, from any row of the list (REQ-819).
             (Mode::Workspaces, Key::ChatNew) if level == Level::Workspaces => {
                 return After::ChatNew;
             }
             (Mode::Workspaces, Key::Archived) if level == Level::Workspaces => self.ask_archived(),
             (Mode::Workspaces, Key::Promote) if level == Level::Workspaces => self.ask_promote(),
-            // `x` archives it: nothing is lost, and `A` brings it back (REQ-807).
+            // `x` archives it: nothing is lost, and `A` brings it back (REQ-820).
             (Mode::Workspaces, Key::Close)
                 if level == Level::Workspaces && self.selected_chat().is_some() =>
             {
@@ -4795,7 +4795,7 @@ impl View {
                 }
                 return After::Continue;
             }
-            // The line of the archived chats opens their list, as `A` does (REQ-808).
+            // The line of the archived chats opens their list, as `A` does (REQ-821).
             Some(side::Side::Archived(_)) => {
                 self.ask_archived();
                 return After::Continue;
@@ -6080,7 +6080,7 @@ impl View {
                     continue;
                 }
             };
-            // A chat is drawn at the edge of the sidebar and has no number (REQ-805).
+            // A chat is drawn at the edge of the sidebar and has no number (REQ-818).
             let chat = matches!(row, side::Side::Chat(_));
             if !chat {
                 number += 1;
@@ -15451,7 +15451,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------------------
-    // N172b: the conversations of their own (REQ-805 to REQ-812)
+    // N173b: the conversations of their own (REQ-818 to REQ-825)
 
     const CHAT: &str = "00000000-0000-4000-8000-0000000000b4";
     const SHELVED: &str = "00000000-0000-4000-8000-0000000000b5";
@@ -15486,7 +15486,7 @@ mod tests {
         v.sync([doc].iter());
     }
 
-    /// REQ-805: the zone is after the workspaces, with the live chats as `✦` rows with no number,
+    /// REQ-818: the zone is after the workspaces, with the live chats as `✦` rows with no number,
     /// its count, and the archived as a line; at 60 columns the sidebar is the same.
     #[test]
     fn the_chats_are_a_zone_at_the_end_of_the_sidebar_with_no_numbers_and_a_line_for_the_archived()
@@ -15533,7 +15533,7 @@ mod tests {
         );
     }
 
-    /// REQ-806, REQ-807: `C` asks for a chat from any row of the list, `x` archives the chat the
+    /// REQ-819, REQ-820: `C` asks for a chat from any row of the list, `x` archives the chat the
     /// cursor is on and asks nothing about a workspace.
     #[test]
     fn c_makes_a_chat_from_any_row_and_x_archives_the_one_the_cursor_is_on() {
@@ -15560,7 +15560,7 @@ mod tests {
         );
     }
 
-    /// REQ-810: what a chat has no use for is said and nothing is sent or asked.
+    /// REQ-823: what a chat has no use for is said and nothing is sent or asked.
     #[test]
     fn what_a_chat_has_no_use_for_is_said_and_sends_nothing() {
         for (key, said) in [
@@ -15628,7 +15628,7 @@ mod tests {
         assert!(v.goto.is_none());
     }
 
-    /// REQ-808: `A` lists the archived, `↵` resumes, `d` asks and then deletes; with none it
+    /// REQ-821: `A` lists the archived, `↵` resumes, `d` asks and then deletes; with none it
     /// says so and opens nothing.
     #[test]
     fn a_lists_the_archived_enter_resumes_and_d_asks_before_deleting() {
@@ -15675,7 +15675,7 @@ mod tests {
         assert!(v.manage.is_none());
     }
 
-    /// REQ-809: `P` lists the workspaces that are no chat, and `↵` takes the chat to one; an empty
+    /// REQ-822: `P` lists the workspaces that are no chat, and `↵` takes the chat to one; an empty
     /// chat has nothing to take and a workspace row has nothing to ask about.
     #[test]
     fn p_lists_the_workspaces_and_takes_the_chat_to_the_one_chosen() {

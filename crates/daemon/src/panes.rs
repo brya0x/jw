@@ -224,7 +224,7 @@ pub fn close_pane(shared: &Shared, pane: &Id) -> Done {
         .find(|w| w.panes.iter().any(|p| p.id == *pane))
         .ok_or_else(|| no_pane(pane))?;
     // A chat keeps the id of the conversation of the panel that goes, so that it can be resumed
-    // (REQ-798); with its last panel gone it is archived, or discarded when nothing was said.
+    // (REQ-811); with its last panel gone it is archived, or discarded when nothing was said.
     let session = ws
         .panes
         .iter()
@@ -340,7 +340,7 @@ pub fn restore(shared: &Shared) {
             resumed.push(id.clone());
         }
         // A chat that said nothing has no transcript: it comes back as an empty conversation and
-        // not as a shell (REQ-801).
+        // not as a shell (REQ-814).
         let program = resume
             .clone()
             .or_else(|| chat.then(|| vec!["claude".to_owned()]));

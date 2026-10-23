@@ -541,7 +541,7 @@ mod tests {
                 .is_none()
         );
         assert!(refused_control(r#"{"t":"open","node":"mobile_x"}"#).is_none());
-        // the commands of a conversation of its own are a phone's like any other workspace's (REQ-819)
+        // the commands of a conversation of its own are a phone's like any other workspace's (REQ-832)
         for cmd in [
             r#"{"cmd":"chat_new"}"#,
             r#"{"cmd":"archive_chat","workspace":"w"}"#,

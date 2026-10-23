@@ -636,7 +636,7 @@ fn group_move(args: &[&str]) -> Out {
     Ok(())
 }
 
-/// What `ls` says of a chat where it says the branch (REQ-820).
+/// What `ls` says of a chat where it says the branch (REQ-833).
 fn chat_word(w: &WorkspaceSummary) -> Option<&'static str> {
     w.chat
         .as_ref()
@@ -652,7 +652,7 @@ fn chat_named(s: &mut Link, word: &str) -> Out<WorkspaceSummary> {
     Ok(ws)
 }
 
-/// The archived chat `ws` cannot be read from or prompted: it has no panel (REQ-821).
+/// The archived chat `ws` cannot be read from or prompted: it has no panel (REQ-834).
 fn not_archived(ws: &WorkspaceSummary, word: &str) -> Out<()> {
     if ws.chat.as_ref().is_some_and(|c| c.archived) {
         return fail(format!("archivada: {} chat resume {word}", bin()));
@@ -660,7 +660,7 @@ fn not_archived(ws: &WorkspaceSummary, word: &str) -> Out<()> {
     Ok(())
 }
 
-/// `chat new [--json]`: a conversation of its own; prints its id and name (REQ-820).
+/// `chat new [--json]`: a conversation of its own; prints its id and name (REQ-833).
 fn chat_new(args: &[&str]) -> Out {
     let a = Args::parse(args, &[], &["json"])?;
     a.words::<0>()?;

@@ -74,7 +74,7 @@ private fun OpenWhenShown(source: AppSource, id: Id?, state: ClientState, nav: N
     LaunchedEffect(version, id) { if (id != null) nav.openWhenShown(state, id)?.let(set) }
 }
 
-/** What a long press on the title of Home, or its `+`, offers: a folder of the PC, a group and a conversation of its own (REQ-201, REQ-814). */
+/** What a long press on the title of Home, or its `+`, offers: a folder of the PC, a group and a conversation of its own (REQ-201, REQ-827). */
 @Composable
 internal fun BoxScope.NewWorkspaceSheet(dismiss: () -> Unit, folders: () -> Unit, group: () -> Unit, chat: () -> Unit) {
     Sheet(dismiss) {

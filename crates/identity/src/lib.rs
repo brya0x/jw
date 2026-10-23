@@ -58,7 +58,7 @@ pub fn state_dir() -> PathBuf {
     }
 }
 
-/// Where the conversations of their own have their folders: `<state>/chats` (N172, REQ-793).
+/// Where the conversations of their own have their folders: `<state>/chats` (N173, REQ-806).
 /// The state directory is the caller's, as the daemon's is (a test gives it its own).
 pub fn chats_dir(state: &Path) -> PathBuf {
     state.join("chats")

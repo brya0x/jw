@@ -130,7 +130,7 @@ private val Gutter = 16.dp
 private val MarkColumn = 28.dp
 private const val PANE_WAIT_MS = 5_000L
 
-/** How long the field of a conversation just made, resumed or promoted is waited for before the phone stops (REQ-815). */
+/** How long the field of a conversation just made, resumed or promoted is waited for before the phone stops (REQ-828). */
 private const val CHAT_FIELD_WAIT_MS = 50_000L
 
 /** How many lines the composer grows to before it scrolls. */
@@ -272,9 +272,9 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var moving by remember { mutableStateOf<MoveTo?>(null) }
     var groupOpen by remember { mutableStateOf<Id?>(null) }
     var newGroup by remember { mutableStateOf(false) }
-    // A long press on the title, or the `+`: a folder to open, a group, a conversation of its own (REQ-201, REQ-814); a worktree is made from a workspace (REQ-213).
+    // A long press on the title, or the `+`: a folder to open, a group, a conversation of its own (REQ-201, REQ-827); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
-    // The sheet of a conversation of its own (a long press on its row), taking it to a project, and the conversation just made or promoted that waits to be opened (REQ-815, REQ-817, REQ-818).
+    // The sheet of a conversation of its own (a long press on its row), taking it to a project, and the conversation just made or promoted that waits to be opened (REQ-828, REQ-830, REQ-831).
     var chatSheet by remember { mutableStateOf<Id?>(null) }
     var promoting by remember { mutableStateOf<Id?>(null) }
     var promoteError by remember { mutableStateOf<String?>(null) }
@@ -515,7 +515,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var moving by remember { mutableStateOf<MoveTo?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
-    // A conversation of its own: its sheet (`⋯`, or a long press on the title) and taking it to a project (REQ-817, REQ-818). One that is archived, from here or from the PC, leaves this screen.
+    // A conversation of its own: its sheet (`⋯`, or a long press on the title) and taking it to a project (REQ-830, REQ-831). One that is archived, from here or from the PC, leaves this screen.
     var chatSheet by remember(screen.id) { mutableStateOf(false) }
     var promoting by remember(screen.id) { mutableStateOf(false) }
     var promoteError by remember(screen.id) { mutableStateOf<String?>(null) }
@@ -523,7 +523,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     val chat = ws?.chat
     LaunchedEffect(version, screen) { nav.leaveArchivedChat(state).let { if (it != state) set(it) } }
     // A conversation just made, resumed or promoted: the panel the PC named (else the first) is the one shown, and its field takes the focus
-    // once it has its conversation, with the summary in it (REQ-815, REQ-817); the wait ends after a while whatever happens.
+    // once it has its conversation, with the summary in it (REQ-828, REQ-830); the wait ends after a while whatever happens.
     val chatOpen = state.chatOpen?.takeIf { it.workspace == screen.id }
     val chatTarget = chatOpen?.let { it.pane ?: ws?.panes?.firstOrNull()?.id }
     val latestState by rememberUpdatedState(state)
@@ -588,7 +588,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
         Header(title, ws?.let { (if (it.branch != null) "⎇ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }, onTitleLongClick = { if (ws != null) { if (ws.chat != null) chatSheet = true else wsMenu = true } }) {
             Row {
-            // A conversation of its own has its own sheet, `⋯`; the `⋮` menu stays for what every workspace has (REQ-817).
+            // A conversation of its own has its own sheet, `⋯`; the `⋮` menu stays for what every workspace has (REQ-830).
             if (chat != null) Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { chatSheet = true }.semantics { contentDescription = "Conversación" }, contentAlignment = Alignment.Center) {
                 Mono("⋯", Palette.blue, 20, bold = true)
             }
@@ -606,7 +606,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                     ) { Mono("$waitingArtifacts", Palette.bg, 10, bold = true) }
                 }
                 DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }, containerColor = Palette.panel) {
-                    // A conversation of its own has no git: no changes to see (REQ-796).
+                    // A conversation of its own has no git: no changes to see (REQ-809).
                     WorkspaceMenuRow.entries.filter { chat == null || it != WorkspaceMenuRow.Cambios }.forEach { row ->
                         DropdownMenuItem(
                             text = {

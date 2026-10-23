@@ -1,4 +1,4 @@
-//! Conversations of their own (N172, REQ-792 to REQ-804): a workspace with `chat`, in an empty
+//! Conversations of their own (N173, REQ-805 to REQ-817): a workspace with `chat`, in an empty
 //! folder under the state directory, with one conversation panel. Closing keeps it (archived,
 //! with the id of its session) and resuming opens a panel on that session; deleting removes the
 //! folder and never touches Claude's own folders. No git is read for it and no worktree is made.
@@ -14,12 +14,12 @@ use crate::core::Core;
 use crate::model::{Chat, Workspace, new_id};
 use crate::server::Shared;
 
-/// What a chat is called until its first message names it (REQ-794).
+/// What a chat is called until its first message names it (REQ-807).
 pub const NEW_NAME: &str = "conversación nueva";
-/// The most characters of a chat's name and of its last line (REQ-795, REQ-792).
+/// The most characters of a chat's name and of its last line (REQ-808, REQ-805).
 const NAME: usize = 40;
 const LAST: usize = 80;
-/// What the summary of `promote_chat` is made of (REQ-803).
+/// What the summary of `promote_chat` is made of (REQ-816).
 const SUMMARY_ITEMS: usize = 6;
 const SUMMARY_CLIP: usize = 300;
 
@@ -42,7 +42,7 @@ fn one_line(text: &str, max: usize) -> String {
 
 /// The session's workspaces in the order Home draws them: the groups' and the repositories' as
 /// `grouping::group` says, and the chats after all of them, the live ones by activity (the most
-/// recent first) and then the archived ones the same way (REQ-797).
+/// recent first) and then the archived ones the same way (REQ-810).
 pub fn arrange(list: Vec<WorkspaceSummary>, groups: &[Id]) -> Vec<WorkspaceSummary> {
     let (mut chats, rest): (Vec<_>, Vec<_>) = list.into_iter().partition(|w| w.chat.is_some());
     chats.sort_by_key(|w| {
@@ -59,7 +59,7 @@ fn bad(why: &str) -> ErrorBody {
     err(ErrorCode::BadRequest, why)
 }
 
-/// The commands that make no sense for a chat answer `bad_request` (REQ-796): a chat is closed
+/// The commands that make no sense for a chat answer `bad_request` (REQ-809): a chat is closed
 /// with `archive_chat` and removed with `delete_chat`, so no folder or session id is left behind.
 pub fn refuse(shared: &Shared, cmd: &Cmd) -> Result<(), ErrorBody> {
     // An archived chat has no panel and `resume_chat` is what opens one: a shell put in it would
@@ -143,7 +143,7 @@ fn start(shared: &Shared, ws: &Id, session: Option<&str>) -> Result<Id, ErrorBod
         .ok_or_else(|| err(ErrorCode::Io, "the pane has no id"))
 }
 
-/// `chat_new` (REQ-794).
+/// `chat_new` (REQ-807).
 pub fn new(shared: &Shared) -> Done {
     let id = new_id();
     let dir = identity::chats_dir(&state_dir(shared)?).join(&id);
@@ -209,7 +209,7 @@ fn inside(root: &Path, dir: &Path) -> Result<(), ErrorBody> {
     }
 }
 
-/// The chat's panels closed, its folder removed and the chat forgotten (REQ-800).
+/// The chat's panels closed, its folder removed and the chat forgotten (REQ-813).
 fn remove(shared: &Shared, id: &str) -> Result<(), ErrorBody> {
     let root = identity::chats_dir(&state_dir(shared)?);
     let dir = PathBuf::from(&chat_of(&shared.lock(), id)?.0.path);
@@ -230,7 +230,7 @@ fn remove(shared: &Shared, id: &str) -> Result<(), ErrorBody> {
     Ok(())
 }
 
-/// `archive_chat` (REQ-798).
+/// `archive_chat` (REQ-811).
 pub fn archive(shared: &Shared, id: &Id) -> Done {
     let (session, env, said) = {
         let core = shared.lock();
@@ -273,7 +273,7 @@ pub fn archive(shared: &Shared, id: &Id) -> Done {
     Ok(None)
 }
 
-/// `resume_chat` (REQ-799): a panel on the session the chat kept; the engine starts it with
+/// `resume_chat` (REQ-812): a panel on the session the chat kept; the engine starts it with
 /// `--resume` when the transcript is on disk and says so when it is not (REQ-754, REQ-755).
 pub fn resume(shared: &Shared, id: &Id) -> Done {
     let session = {
@@ -300,14 +300,14 @@ pub fn resume(shared: &Shared, id: &Id) -> Done {
     Ok(Some(json!({ "pane": pane })))
 }
 
-/// `delete_chat` (REQ-800).
+/// `delete_chat` (REQ-813).
 pub fn delete(shared: &Shared, id: &Id) -> Done {
     remove(shared, id)?;
     Ok(None)
 }
 
 /// What the chat said, to put in the field of the new conversation: the last items of the
-/// person and of Claude, one line each (REQ-803).
+/// person and of Claude, one line each (REQ-816).
 fn summary(core: &Core, ws: &Workspace) -> String {
     let lines: Vec<String> = ws
         .panes
@@ -336,7 +336,7 @@ fn summary(core: &Core, ws: &Workspace) -> String {
     )
 }
 
-/// `promote_chat` (REQ-803): a new conversation in `to`; the chat stays as it was.
+/// `promote_chat` (REQ-816): a new conversation in `to`; the chat stays as it was.
 pub fn promote(shared: &Shared, id: &Id, to: &Id, summary_wanted: Option<bool>) -> Done {
     let text = {
         let core = shared.lock();
@@ -365,7 +365,7 @@ pub fn promote(shared: &Shared, id: &Id, to: &Id, summary_wanted: Option<bool>) 
 }
 
 /// The person sent `text` in the conversation of `pane`: if it is a chat's, that is its activity
-/// and its last line, and its first message names it while nothing else has (REQ-795).
+/// and its last line, and its first message names it while nothing else has (REQ-808).
 pub fn said(core: &mut Core, pane: &str, text: &str) {
     let Some(ws) = workspace_of_pane(core, pane) else {
         return;
