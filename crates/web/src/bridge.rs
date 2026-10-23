@@ -389,21 +389,31 @@ fn admit<S: Link>(ws: &mut WebSocket<S>, ctx: &Ctx, key: &str) -> Option<String>
     .then_some(device)
 }
 
-/// The reply to a `mobile_*` command from a phone, which only the PC's own tools may send
-/// (REQ-84): the phone link cannot be reconfigured through the phone link.
+/// The reply to a command a phone must not send, which only the PC's own tools may: `mobile_*`
+/// (REQ-84, the phone link cannot be reconfigured through the phone link) and the two that put
+/// an artifact in or take it out (REQ-774, the phone only looks and decides). Everything else
+/// is forwarded: this forbids what it names, it does not allow by a list (RISK-110).
 fn refused_control(text: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
-    let is_control = v["t"] == "cmd"
-        && v["cmd"]["cmd"]
-            .as_str()
-            .is_some_and(|c| c.starts_with("mobile_"));
-    is_control.then(|| {
+    let cmd = if v["t"] == "cmd" {
+        v["cmd"]["cmd"].as_str()?
+    } else {
+        return None;
+    };
+    let why = if cmd.starts_with("mobile_") {
+        "the phone link is controlled from the PC"
+    } else if matches!(cmd, "artifact_publish" | "artifact_rm") {
+        "artifacts are published and removed from the PC"
+    } else {
+        return None;
+    };
+    Some(
         serde_json::json!({
             "t": "reply", "id": v["id"], "ok": false,
-            "error": {"code": "unsupported", "message": "the phone link is controlled from the PC"}
+            "error": {"code": "unsupported", "message": why}
         })
-        .to_string()
-    })
+        .to_string(),
+    )
 }
 
 /// Pass text messages and daemon lines to each other until either side ends or the device
@@ -503,18 +513,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_mobile_commands_are_refused() {
-        let reply =
-            refused_control(r#"{"t":"cmd","id":"c1","cmd":{"cmd":"mobile_stop"}}"#).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
-        assert_eq!(
-            (
-                v["id"].as_str(),
-                v["ok"].as_bool(),
-                v["error"]["code"].as_str()
-            ),
-            (Some("c1"), Some(false), Some("unsupported"))
-        );
+    fn only_mobile_and_the_two_artifact_commands_are_refused() {
+        for (id, cmd) in [
+            ("c1", "mobile_stop"),
+            ("c3", "artifact_publish"),
+            ("c4", "artifact_rm"),
+        ] {
+            let text = format!(r#"{{"t":"cmd","id":"{id}","cmd":{{"cmd":"{cmd}"}}}}"#);
+            let v: serde_json::Value =
+                serde_json::from_str(&refused_control(&text).unwrap()).unwrap();
+            assert_eq!(
+                (
+                    v["id"].as_str(),
+                    v["ok"].as_bool(),
+                    v["error"]["code"].as_str()
+                ),
+                (Some(id), Some(false), Some("unsupported")),
+                "{cmd}"
+            );
+        }
+        for cmd in ["artifact_decide", "artifact_read", "open_artifacts"] {
+            let text = format!(r#"{{"t":"cmd","id":"c5","cmd":{{"cmd":"{cmd}"}}}}"#);
+            assert!(refused_control(&text).is_none(), "{cmd}");
+        }
         assert!(
             refused_control(r#"{"t":"cmd","id":"c2","cmd":{"cmd":"write","pane":"p","data":"x"}}"#)
                 .is_none()
