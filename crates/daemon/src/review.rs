@@ -351,6 +351,7 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
         if no_panel {
             crate::start::start_workspace(shared, &id, Some(OpenKind::Claude))?;
         }
+        open_diff(shared, &id)?;
         return Ok(Some(
             json!({ "workspace": id, "existed": true, "dirty": dirty }),
         ));
@@ -399,6 +400,8 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            views: Vec::new(),
+            places: Default::default(),
             adopted: false,
             ports: None,
             review: Some(review),
@@ -410,9 +413,24 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
         return Err(e);
     }
     crate::start::start_workspace(shared, &id, Some(OpenKind::Claude))?;
+    open_diff(shared, &id)?;
     Ok(Some(
         json!({ "workspace": id, "existed": false, "dirty": false }),
     ))
+}
+
+/// The review's diff is a leaf of its layout, at the right of the agent, once the agent's pane
+/// is there (REQ-726): the terminal client and the phone both see it.
+fn open_diff(shared: &Shared, workspace: &contract::Id) -> Result<(), ErrorBody> {
+    crate::views::open_view(
+        shared,
+        workspace,
+        contract::ViewKind::Diff,
+        None,
+        None,
+        None,
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]

@@ -357,6 +357,17 @@
         }
       ]
     },
+    "ViewKind": { "enum": ["diff", "viewer"] },
+    "ViewSummary": {
+      "type": "object",
+      "required": ["id", "kind", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "kind": { "$ref": "#/$defs/ViewKind" },
+        "title": { "type": "string" },
+        "files": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 8 }
+      }
+    },
     "PaneSummary": {
       "type": "object",
       "required": ["id", "title", "attention"],
@@ -427,6 +438,7 @@
             "branch": { "type": "string" },
             "panes": { "type": "array", "items": { "$ref": "#/$defs/PaneSummary" } },
             "layout": { "$ref": "#/$defs/Layout" },
+            "views": { "type": "array", "items": { "$ref": "#/$defs/ViewSummary" }, "minItems": 1 },
             "review": { "$ref": "#/$defs/Review" },
             "removing": { "type": "boolean" }
           }
@@ -597,6 +609,8 @@
         { "type": "object", "required": ["cmd", "pane", "name"], "properties": { "cmd": { "const": "rename_pane" }, "pane": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "new_pane" }, "workspace": { "$ref": "#/$defs/Id" }, "program": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "beside": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" } } },
         { "type": "object", "required": ["cmd", "pane"], "properties": { "cmd": { "const": "close_pane" }, "pane": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace", "kind"], "properties": { "cmd": { "const": "open_view" }, "workspace": { "$ref": "#/$defs/Id" }, "kind": { "$ref": "#/$defs/ViewKind" }, "path": { "type": "string" }, "beside": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" } } },
+        { "type": "object", "required": ["cmd", "view"], "properties": { "cmd": { "const": "close_view" }, "view": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "pane", "data"], "properties": { "cmd": { "const": "write" }, "pane": { "$ref": "#/$defs/Id" }, "data": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "pane", "rows", "cols"], "properties": { "cmd": { "const": "resize" }, "pane": { "$ref": "#/$defs/Id" }, "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } } },
         { "type": "object", "required": ["cmd", "node", "rev"], "properties": { "cmd": { "const": "mark_seen" }, "node": { "$ref": "#/$defs/Id" }, "rev": { "$ref": "#/$defs/Rev" } } },

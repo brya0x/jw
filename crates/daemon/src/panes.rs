@@ -129,7 +129,8 @@ pub fn new_pane_then(
     };
     let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
     if let Some(beside) = beside.filter(|b| ids.contains(b)) {
-        let tree = crate::layout::reconcile(ws.layout.take(), &ids);
+        let views: Vec<Id> = ws.views.iter().map(|v| v.id.clone()).collect();
+        let tree = crate::layout::reconcile_views(ws.layout.take(), &ids, &views);
         ws.layout =
             tree.map(|t| crate::layout::split(t, &beside, &id, dir.unwrap_or(SplitDir::Row)));
     }
@@ -160,29 +161,30 @@ fn with_agent_hooks(argv: Option<&[String]>, hooks: Option<&Path>) -> Option<Vec
     }
 }
 
-/// The workspace that has the pane, with its layout made to agree with its panes.
+/// The workspace that has the pane or the view, with its layout made to agree with both.
 fn workspace_of<'a>(
     core: &'a mut crate::core::Core,
-    pane: &Id,
+    leaf: &Id,
 ) -> Result<&'a mut crate::model::Workspace, ErrorBody> {
     let ws = core
         .model
         .workspaces
         .iter_mut()
-        .find(|w| w.panes.iter().any(|p| p.id == *pane))
-        .ok_or_else(|| no_pane(pane))?;
+        .find(|w| w.panes.iter().any(|p| p.id == *leaf) || w.views.iter().any(|v| v.id == *leaf))
+        .ok_or_else(|| no_pane(leaf))?;
     let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
-    ws.layout = crate::layout::reconcile(ws.layout.take(), &ids);
+    let views: Vec<Id> = ws.views.iter().map(|v| v.id.clone()).collect();
+    ws.layout = crate::layout::reconcile_views(ws.layout.take(), &ids, &views);
     Ok(ws)
 }
 
 pub fn swap_panes(shared: &Shared, a: &Id, b: &Id) -> Done {
     let mut core = shared.lock();
     let ws = workspace_of(&mut core, a)?;
-    if a == b || !ws.panes.iter().any(|p| p.id == *b) {
+    if a == b || !(ws.panes.iter().any(|p| p.id == *b) || ws.views.iter().any(|v| v.id == *b)) {
         return Err(err(
             ErrorCode::BadRequest,
-            "swapping takes two different panes of one workspace",
+            "swapping takes two different panes or views of one workspace",
         ));
     }
     ws.layout = ws.layout.take().map(|t| crate::layout::swap(t, a, b));

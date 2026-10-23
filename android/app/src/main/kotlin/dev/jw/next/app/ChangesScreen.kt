@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,19 +40,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.ChangesModel
 import dev.jw.next.client.ChangesView
-import dev.jw.next.client.ClientState
 import dev.jw.next.client.Content
 import dev.jw.next.client.HunkRow
 import dev.jw.next.client.LineKind
 import dev.jw.next.client.Live
-import dev.jw.next.client.Navigator
-import dev.jw.next.client.Screen
 import dev.jw.next.client.TreeRow
 import dev.jw.next.client.ago
 import dev.jw.next.client.hunkRows
 import dev.jw.next.client.treeRows
 import dev.jw.next.client.whyUnread
 import dev.jw.next.contract.DiffFile
+import dev.jw.next.contract.Id
 import dev.jw.next.contract.FileStatus
 import dev.jw.next.contract.Seen
 import kotlinx.coroutines.delay
@@ -63,10 +59,14 @@ private val Gutter = 16.dp
 private val AddBg = Color(0xFF2A3B2C)
 private val DelBg = Color(0xFF40292D)
 
-/** The changes of one workspace, as `docs/prototypes/mobile.html` draws them (REQ-113 to REQ-121). */
+/**
+ * The changes of one workspace, as `docs/prototypes/mobile.html` draws them (REQ-113 to REQ-121), in the body of the diff's tab
+ * of the workspace screen (REQ-740). [leave] is Back when there is nothing to go back to inside it; [openFile] asks the PC for a
+ * viewer tab of a file (REQ-741).
+ */
 @Composable
-fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes, nav: Navigator, set: (ClientState) -> Unit) {
-    val model = remember(source, screen.workspace) { ChangesModel(source, screen.workspace) }
+fun ColumnScope.DiffPanel(source: AppSource, workspace: Id, leave: () -> Unit, openFile: (String) -> Unit) {
+    val model = remember(source, workspace) { ChangesModel(source, workspace) }
     val bump = remember(model) { mutableIntStateOf(0) }
     DisposableEffect(model) {
         model.onChange = { bump.intValue++ }
@@ -75,10 +75,9 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             model.close()
         }
     }
-    BackHandler { if (!model.back()) set(nav.leaveChanges(state)) }
+    BackHandler { if (!model.back()) leave() }
     // Either the PC sent a node or the person did something: read the model again.
     val version = source.tick.intValue + bump.intValue
-    val session = remember(version) { source.session() }
     val content = remember(version) {
         model.onNodes()
         model.content()
@@ -91,24 +90,18 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             bump.intValue++
         }
     }
-    val name = session.workspaces.firstOrNull { it.id == screen.workspace }?.name ?: "workspace"
     val open = (content as? Content.Files)?.diff?.let(model::openFileIn)
-    Column(Modifier.fillMaxSize()) {
-        if (open != null) {
-            FileScreen(open, model)
-        } else {
-            ChangesHeader(model, name, content, session.workspaces.map { it.id to it.name }, back = { set(nav.leaveChanges(state)) }) { id ->
-                set(nav.show(state, Screen.Changes(id)).copy(last = id))
-            }
-            ViewTabs(model, counts)
-            Box(Modifier.weight(1f)) { ChangesBody(model, content, version) }
-        }
+    if (open != null) {
+        FileScreen(open, model, openFile)
+    } else {
+        ChangesHeader(model, content)
+        ViewTabs(model, counts)
+        Box(Modifier.weight(1f)) { ChangesBody(model, content, version) }
     }
 }
 
 @Composable
-private fun ChangesHeader(model: ChangesModel, name: String, content: Content, workspaces: List<Pair<String, String>>, back: () -> Unit, pick: (String) -> Unit) {
-    var menu by remember { mutableStateOf(false) }
+private fun ChangesHeader(model: ChangesModel, content: Content) {
     val sub = when (model.view) {
         ChangesView.Uncommitted -> "sin commitear" + if (content is Content.Files) liveText(model) + seenText(content) else ""
         ChangesView.Commits -> model.commit?.let { "commit ${it.take(7)}" } ?: "commits"
@@ -116,18 +109,9 @@ private fun ChangesHeader(model: ChangesModel, name: String, content: Content, w
     }
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(48.dp).height(56.dp).clickable(onClick = back).semantics { contentDescription = "Volver al workspace" }, contentAlignment = Alignment.Center) { Mono("‹", Palette.fg, 24) }
-            Row(Modifier.weight(1f).clickable { menu = true }.padding(end = Gutter), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Mono("cambios · $name", bold = true, size = 15)
-                    Mono(sub, if (model.live() == Live.Updated && model.view == ChangesView.Uncommitted) Palette.yellow else Palette.dim, 11)
-                }
-                Mono("▾", Palette.dim, 14)
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    workspaces.forEach { (id, label) ->
-                        DropdownMenuItem(text = { Mono(label, size = 13) }, onClick = { menu = false; pick(id) })
-                    }
-                }
+            Column(Modifier.weight(1f).padding(horizontal = Gutter)) {
+                Mono("cambios", bold = true, size = 15)
+                Mono(sub, if (model.live() == Live.Updated && model.view == ChangesView.Uncommitted) Palette.yellow else Palette.dim, 11)
             }
         }
         Hairline()
@@ -320,9 +304,15 @@ private fun MarkBox(seen: Seen?, click: () -> Unit) {
 }
 
 @Composable
-private fun ColumnScope.FileScreen(file: DiffFile, model: ChangesModel) {
+private fun ColumnScope.FileScreen(file: DiffFile, model: ChangesModel, openFile: (String) -> Unit) {
     Header(file.path.substringAfterLast('/'), (file.oldPath?.let { "$it → " } ?: "") + file.path, onBack = { model.back() }) {
-        MarkBox(file.seen) { model.toggleViewed(file.path) }
+        Row {
+            Box(
+                Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { openFile(file.path) }.semantics { contentDescription = "Abrir el archivo" },
+                contentAlignment = Alignment.Center,
+            ) { Mono("▤", Palette.blue, 18, bold = true) }
+            MarkBox(file.seen) { model.toggleViewed(file.path) }
+        }
     }
     Column(Modifier.weight(1f)) {
         if (file.seen == Seen.Changed) Note("este archivo cambió desde que lo marcaste como visto")

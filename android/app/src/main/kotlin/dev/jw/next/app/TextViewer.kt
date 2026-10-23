@@ -79,7 +79,7 @@ internal fun TextViewerDialog(doc: TextDoc, rel: String, refer: (Draft) -> Unit,
 }
 
 @Composable
-private fun ColumnScope.TextViewer(doc: TextDoc, rel: String, refer: (Draft) -> Unit, close: () -> Unit) {
+internal fun ColumnScope.TextViewer(doc: TextDoc, rel: String, refer: (Draft) -> Unit, close: () -> Unit) {
     val digits = remember(doc) { doc.lines.size.toString().length }
     var anchor by remember(doc) { mutableStateOf<Int?>(null) }
     var tip by remember(doc) { mutableIntStateOf(0) }

@@ -12,6 +12,7 @@ import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.TextDoc
+import dev.jw.next.contract.ViewKind
 import dev.jw.next.contract.OlderItems
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
@@ -49,6 +50,19 @@ interface NodeSource {
 
     /** Ask the daemon for the `commits` node of [workspace]. */
     fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /**
+     * Open the diff or a viewer of [workspace] as a tab: a viewer gets [path] as a file of it. [reply] gets the id of the
+     * view, which the workspace lists once the PC says so (REQ-741).
+     */
+    fun openView(workspace: Id, kind: ViewKind, path: String?, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Close a view, or with [path] one file of a viewer (the last closes it); [reply] gets the PC's message when it refuses. */
+    fun closeView(view: Id, path: String?, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
@@ -260,9 +274,6 @@ sealed interface Screen {
     data object Settings : Screen
     data class Workspace(val id: Id, val pane: Id?) : Screen
 
-    /** The changes of one workspace (REQ-113). */
-    data class Changes(val workspace: Id) : Screen
-
     /** The PC's folders, to choose one to open (REQ-201). */
     data object Folders : Screen
 
@@ -271,7 +282,7 @@ sealed interface Screen {
 }
 
 /**
- * [last] is the workspace opened most recently: the one the changes of the `±` open. [recent] is
+ * [last] is the workspace opened most recently: the one the files open. [recent] is
  * every workspace opened on this phone, the latest first, for the search (REQ-232).
  */
 data class ClientState(
@@ -353,7 +364,7 @@ class Navigator(private val source: NodeSource) {
     fun settle(s: ClientState): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s
         val ws = source.node(at.id) as? Node.Workspace ?: return s
-        if (at.pane != null && ws.panes.any { it.id == at.pane }) return s
+        if (at.pane != null && (ws.panes.any { it.id == at.pane } || ws.views.any { it.id == at.pane })) return s
         val first = ws.panes.firstOrNull()?.id
         val seen = if (first != null) markNode(s.seen, first) else s.seen
         return s.copy(screen = at.copy(pane = first), seen = seen)
@@ -367,11 +378,12 @@ class Navigator(private val source: NodeSource) {
         if (source.session().workspaces.any { it.id == id }) openWorkspace(s, id) else null
 
     /**
-     * Selects [pane] of [workspace] once the workspace's document lists it: a pane the phone just
-     * asked for is not there until the daemon says so (REQ-235). Null until then.
+     * Selects [pane] of [workspace] once the workspace's document lists it, as a pane or as a view: one the
+     * phone just asked for is not there until the daemon says so (REQ-235, REQ-741). Null until then.
      */
     fun selectWhenShown(s: ClientState, workspace: Id, pane: Id): ClientState? {
-        val shown = (source.node(workspace) as? Node.Workspace)?.panes.orEmpty().any { it.id == pane }
+        val ws = source.node(workspace) as? Node.Workspace
+        val shown = ws?.panes.orEmpty().any { it.id == pane } || ws?.views.orEmpty().any { it.id == pane }
         return if (shown) selectPane(s, pane) else null
     }
 
@@ -411,23 +423,6 @@ class Navigator(private val source: NodeSource) {
     fun leaveFiles(s: ClientState): ClientState {
         val at = s.screen as? Screen.Files ?: return back(s)
         return openWorkspace(s, at.workspace)
-    }
-
-    /** Leaves the changes of a workspace for the workspace itself; anywhere else it is [back]. */
-    fun leaveChanges(s: ClientState): ClientState {
-        val at = s.screen as? Screen.Changes ?: return back(s)
-        return openWorkspace(s, at.workspace)
-    }
-
-    /**
-     * The `diff` tab: the changes of the workspace opened last, else the first one.
-     * Null while the session has no workspace.
-     */
-    fun changes(s: ClientState): ClientState? {
-        val ws = s.last?.takeIf { id -> source.session().workspaces.any { it.id == id } }
-            ?: source.session().workspaces.firstOrNull()?.id
-            ?: return null
-        return s.copy(screen = Screen.Changes(ws), last = ws)
     }
 
     /** Seen at the node's revision when it is cached, else at the newest attention raised on it. */

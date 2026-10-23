@@ -208,6 +208,8 @@ pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            views: Vec::new(),
+            places: Default::default(),
             adopted: true,
             ports: (!project.ports.is_empty()).then(|| PortBlock {
                 slot: 0,

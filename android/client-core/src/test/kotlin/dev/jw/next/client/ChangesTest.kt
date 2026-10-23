@@ -215,25 +215,4 @@ class ChangesTest {
         assertEquals("hace 2 h", ago(10_000, 10_000 - 7200))
         assertEquals("hace 1 d", ago(1_000_000, 1_000_000 - 90_000))
     }
-
-    @Test
-    fun theChangesOpenTheLastWorkspaceElseTheFirst() {
-        val pc = pc()
-        val nav = Navigator(pc)
-        val first = pc.session().workspaces.first().id
-        assertEquals(Screen.Changes(first), nav.changes(ClientState())?.screen)
-        val second = pc.session().workspaces.last().id
-        val opened = nav.openWorkspace(ClientState(), second)
-        assertEquals(Screen.Changes(second), nav.changes(nav.back(opened))?.screen)
-    }
-
-    @Test
-    fun leavingTheChangesGoesBackToTheirWorkspace() {
-        val pc = pc()
-        val nav = Navigator(pc)
-        val second = pc.session().workspaces.last().id
-        val changes = nav.changes(nav.openWorkspace(ClientState(), second))!!
-        assertEquals(second, (nav.leaveChanges(changes).screen as Screen.Workspace).id)
-        assertEquals(Screen.Home, nav.leaveChanges(ClientState(screen = Screen.Avisos)).screen)
-    }
 }

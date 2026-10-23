@@ -21,6 +21,7 @@ use crate::server::Shared;
 use crate::start;
 use crate::sync;
 use crate::textfile;
+use crate::views;
 use crate::workspaces;
 use crate::worktrees;
 
@@ -122,6 +123,14 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             dir,
         } => panes::new_pane(shared, &workspace, program, beside, dir),
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
+        Cmd::OpenView {
+            workspace,
+            kind,
+            path,
+            beside,
+            dir,
+        } => views::open_view(shared, &workspace, kind, path, beside, dir),
+        Cmd::CloseView { view, path } => views::close_view(shared, &view, path),
         Cmd::SwapPanes { a, b } => panes::swap_panes(shared, &a, &b),
         Cmd::GrowPane { pane, dir, by } => panes::grow_pane(shared, &pane, dir, by),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),

@@ -1163,8 +1163,12 @@ impl Core {
     pub fn refresh(&mut self) {
         for ws in &mut self.model.workspaces {
             let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
-            if !crate::layout::agrees(&ws.layout, &ids) {
-                ws.layout = crate::layout::reconcile(ws.layout.take(), &ids);
+            if ids.is_empty() {
+                ws.views.clear();
+            }
+            let views: Vec<Id> = ws.views.iter().map(|v| v.id.clone()).collect();
+            if !crate::layout::agrees_views(&ws.layout, &ids, &views) {
+                ws.layout = crate::layout::reconcile_views(ws.layout.take(), &ids, &views);
             }
         }
         self.assign_attention_revs();
@@ -1263,14 +1267,40 @@ impl Core {
 
     fn save(&mut self) {
         self.prune_histories();
-        let Some(path) = &self.save_path else { return };
-        let text = persist::to_text(&self.model);
+        let Some(path) = self.save_path.clone() else {
+            return;
+        };
+        let text = self.saved_text();
         if text != self.last_saved {
-            match persist::save_text(path, &text) {
+            match persist::save_text(&path, &text) {
                 Ok(()) => self.last_saved = text,
                 Err(e) => eprintln!("cannot save {}: {e}", path.display()),
             }
         }
+    }
+
+    /// The model as the session file keeps it: the leaves of views are not saved, since the
+    /// views are not (REQ-727), so a restart finds the layout of the panes alone.
+    fn saved_text(&mut self) -> String {
+        let mut layouts = Vec::new();
+        for ws in &mut self.model.workspaces {
+            if ws.views.is_empty() {
+                continue;
+            }
+            let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
+            let kept = ws
+                .layout
+                .clone()
+                .and_then(|l| crate::layout::retain(l, &ids));
+            layouts.push((ws.id.clone(), std::mem::replace(&mut ws.layout, kept)));
+        }
+        let text = persist::to_text(&self.model);
+        for (id, layout) in layouts {
+            if let Some(ws) = self.model.workspaces.iter_mut().find(|w| w.id == id) {
+                ws.layout = layout;
+            }
+        }
+        text
     }
 
     /// A new attention shows up in the next revision of its node; record which one.
@@ -1393,6 +1423,16 @@ impl Core {
                 branch: ws.branch.clone(),
                 panes,
                 layout: ws.layout.clone(),
+                views: ws
+                    .views
+                    .iter()
+                    .map(|v| contract::ViewSummary {
+                        id: v.id.clone(),
+                        kind: v.kind,
+                        title: crate::views::title(v),
+                        files: v.files.clone(),
+                    })
+                    .collect(),
                 review: ws.review.clone(),
                 removing: self.removing.contains(&ws.id),
             }));
@@ -1533,6 +1573,8 @@ mod tests {
             }],
             layout: None,
             attention: vec![],
+            views: vec![],
+            places: Default::default(),
             adopted: false,
             ports: None,
             review: None,

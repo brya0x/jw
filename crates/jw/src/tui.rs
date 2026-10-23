@@ -103,6 +103,14 @@ impl Viewing {
             Viewing::Text(v) => v.hint(),
         }
     }
+
+    /// The workspace the file or document belongs to.
+    fn workspace(&self) -> &str {
+        match self {
+            Viewing::Doc(v) => &v.workspace,
+            Viewing::Text(t) => &t.current().workspace,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
@@ -438,6 +446,9 @@ pub enum Key {
     Tree,
     /// Swap the focused panel with the one on this side.
     Swap(split::Side),
+    /// `S`: number the panels and swap the focused one with the one whose digit comes next
+    /// (REQ-735).
+    SwapPick,
     /// `z`: fold every group, or unfold them when all are folded (REQ-694).
     Fold,
     /// `g`: the group of the highlighted workspace's repository (REQ-694).
@@ -551,6 +562,16 @@ pub struct Place {
     pub dir: SplitDir,
 }
 
+/// A file the viewer shows, to be told to the daemon as a tab of the workspace's viewer view,
+/// beside `beside` along `dir` when the view is new (REQ-731, REQ-732).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewAsk {
+    pub workspace: String,
+    pub path: String,
+    pub beside: Option<String>,
+    pub dir: SplitDir,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum After {
     Continue,
@@ -601,6 +622,15 @@ pub enum After {
     },
     /// Close a pane.
     ClosePane(String),
+    /// Open the diff of this workspace as a panel of its layout (REQ-728).
+    OpenDiff(String),
+    /// Close a view: the diff or a viewer.
+    CloseView(String),
+    /// Close one tab of a viewer view; the last closes the view.
+    CloseViewTab {
+        view: String,
+        path: String,
+    },
     /// Name a workspace or a panel (empty: the automatic name).
     Rename {
         target: Named,
@@ -767,9 +797,7 @@ pub struct View {
     /// The diffs and lists of commits the daemon sent, by node id.
     diffs: HashMap<String, contract::Diff>,
     commit_lists: HashMap<String, contract::Commits>,
-    /// The diff viewer, while it is open.
-    changes: Option<Changes>,
-    /// What the viewer asked for as it closed: to stop watching its nodes.
+    /// What the diff asked for as it closed: to stop watching its nodes.
     asks: Vec<Ask>,
     /// The terminal's size as the loop last said it.
     size: (usize, usize),
@@ -793,13 +821,8 @@ pub struct View {
     /// The list of pull requests to review, while it is open, and what it waits to ask (REQ-587).
     prs: Option<prs::Prs>,
     prs_asks: Vec<PrsAsk>,
-    /// The diff of a review, beside its agent (REQ-589), and whether it has the focus.
-    rv: Option<Changes>,
-    rv_focus: bool,
-    /// `d` opened the diff beside the panels of every workspace, and `z` made it fill the area
-    /// (REQ-590).
-    diff_open: bool,
-    diff_zoom: bool,
+    /// The diff of the shown workspace while it has a diff view: a panel of its layout (N167b).
+    diff: Option<Changes>,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
     /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
@@ -819,6 +842,14 @@ pub struct View {
     new_pane: Option<(String, u64)>,
     /// The focused panel fills the area, and the box of the keys of the level is open.
     full: bool,
+    /// `S` was pressed: the panels show their digits and the next key picks one (REQ-735).
+    pick_swap: bool,
+    /// The press that began a mouse selection was the viewer's, so the drag and the release are.
+    viewer_drag: bool,
+    /// Files the viewer shows that the daemon has yet to be told of, for the loop to send.
+    view_asks: Vec<ViewAsk>,
+    /// The viewer that is asked for takes the keys when it shows up (REQ-731).
+    keys_on_arrival: bool,
     help: bool,
     /// The phone link, and whether its box is open, how many phones are paired, whether the
     /// loop should start the thread that turns it on, and what to tell that thread.
@@ -851,6 +882,10 @@ impl View {
             jobs_mine: HashSet::new(),
             opened: None,
             focus: 0,
+            pick_swap: false,
+            viewer_drag: false,
+            view_asks: Vec::new(),
+            keys_on_arrival: false,
             status: status.to_owned(),
             epoch: None,
             outbox: Vec::new(),
@@ -879,7 +914,6 @@ impl View {
             now_ms: 0,
             diffs: HashMap::new(),
             commit_lists: HashMap::new(),
-            changes: None,
             asks: Vec::new(),
             size: (0, 0),
             manage: None,
@@ -894,10 +928,7 @@ impl View {
             worktree: None,
             prs: None,
             prs_asks: Vec::new(),
-            rv: None,
-            rv_focus: false,
-            diff_open: false,
-            diff_zoom: false,
+            diff: None,
             project: None,
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
@@ -983,7 +1014,7 @@ impl View {
     pub fn set_size(&mut self, cols: usize, rows: usize) {
         if self.size != (cols, rows) {
             self.size = (cols, rows);
-            self.sync_review_diff();
+            self.sync_diff();
         }
     }
 
@@ -992,88 +1023,76 @@ impl View {
         self.shown()?.review.as_ref().map(|r| r.pr)
     }
 
-    /// Whether the area has room for the diff beside the panels: the panels keep two fifths of it
-    /// (at least 40 columns) and the diff gets at least 30.
-    fn side_room(&self) -> bool {
-        let w = self.size.0.saturating_sub(SIDEBAR + 1);
-        w >= (w * 2 / 5).max(40) + 30
+    /// The diff view of the shown workspace: its place among the panels (the panes, then the
+    /// views) and its id.
+    fn diff_panel(&self) -> Option<(usize, String)> {
+        let doc = self.shown()?;
+        let at = doc
+            .views
+            .iter()
+            .position(|v| v.kind == contract::ViewKind::Diff)?;
+        Some((doc.panes.len() + at, doc.views[at].id.clone()))
     }
 
-    /// The columns the diff takes at the right of the open workspace, when it is beside the
-    /// panels: the workspace of a review always has it, any other when `d` opened it; three fifths
-    /// of the area, all of it when zoomed, and none when the area is too narrow (the diff is then
-    /// the screen of `d`).
-    fn diff_w(&self) -> usize {
-        let wanted = self.review_pr().is_some() || (self.diff_open && self.shown().is_some());
-        if !wanted || self.mode != Mode::Workspaces || !self.side_room() {
-            return 0;
-        }
-        let w = self.size.0.saturating_sub(SIDEBAR + 1);
-        if self.diff_zoom {
-            w
-        } else {
-            w - (w * 2 / 5).max(40)
-        }
-    }
-
-    /// Where the diff of a review is drawn.
+    /// Where the diff is drawn: the panel the layout gives its view.
     fn diff_rect(&self) -> Rect {
         let (cols, rows) = self.size;
-        let w = self.diff_w();
-        (cols.saturating_sub(w), 1, w, rows.saturating_sub(2))
+        let (Some(doc), Some((at, _))) = (self.shown(), self.diff_panel()) else {
+            return (0, 0, 0, 0);
+        };
+        self.layout(doc, self.panes_space(cols, rows))
+            .get(at)
+            .copied()
+            .unwrap_or((0, 0, 0, 0))
     }
 
-    /// The diff of a review exists while its workspace is the one shown, in the place it has, and
-    /// is let go when another is (its nodes stop being read).
-    fn sync_review_diff(&mut self) {
-        let id = self.shown().map(|d| d.head.id.clone());
-        match id.filter(|_| self.diff_w() > 0) {
+    /// The diff is the focused panel of the open workspace.
+    fn diff_focused(&self) -> bool {
+        self.opened.is_some()
+            && self.opened == self.selected_id()
+            && self.diff_panel().is_some_and(|(at, _)| at == self.focus)
+    }
+
+    /// The keyboard is in the diff.
+    fn diff_typing(&self) -> bool {
+        self.typing && self.mode == Mode::Workspaces && self.diff.is_some() && self.diff_focused()
+    }
+
+    /// The diff exists while the shown workspace has a diff view, in the place its layout gives
+    /// it, and is let go when it has none or another workspace is shown (its nodes stop being
+    /// read).
+    fn sync_diff(&mut self) {
+        let id = self
+            .shown()
+            .map(|d| d.head.id.clone())
+            .filter(|_| self.diff_panel().is_some() && self.mode == Mode::Workspaces);
+        match id {
             Some(id) => {
-                self.tree_on = false;
-                self.tree_focus = false;
-                if self.rv.as_ref().is_none_or(|c| c.workspace() != id) {
-                    if let Some(old) = self.rv.take() {
+                if self.diff.as_ref().is_none_or(|c| c.workspace() != id) {
+                    if let Some(old) = self.diff.take() {
                         self.asks.extend(old.close());
                     }
-                    self.rv = Some(if self.review_pr().is_some() {
+                    self.diff = Some(if self.review_pr().is_some() {
                         Changes::open_general(&id)
                     } else {
                         Changes::open(&id)
                     });
-                    self.leave_review_diff();
                 }
                 let area = self.diff_rect();
                 let docs = Docs {
                     diffs: &self.diffs,
                     commits: &self.commit_lists,
                 };
-                if let Some(c) = self.rv.as_mut() {
+                if let Some(c) = self.diff.as_mut() {
                     c.set_area(area);
                     c.update(&docs, self.size, self.now_ms);
                 }
             }
             None => {
-                if let Some(old) = self.rv.take() {
+                if let Some(old) = self.diff.take() {
                     self.asks.extend(old.close());
                 }
-                self.leave_review_diff();
             }
-        }
-    }
-
-    /// The diff no longer has the keyboard: not as typing that would go to a panel by surprise.
-    fn leave_review_diff(&mut self) {
-        if self.rv_focus {
-            self.typing = false;
-        }
-        self.rv_focus = false;
-    }
-
-    /// The viewer that is open: the screen of `d`, or the diff of a review.
-    fn viewer_mut(&mut self) -> Option<&mut Changes> {
-        match self.changes.as_mut() {
-            Some(c) => Some(c),
-            None => self.rv.as_mut(),
         }
     }
 
@@ -1084,97 +1103,64 @@ impl View {
         }
     }
 
-    /// The viewer follows the documents and the terminal.
-    fn update_changes(&mut self) {
-        if let Some(c) = self.changes.as_mut() {
-            let docs = Docs {
-                diffs: &self.diffs,
-                commits: &self.commit_lists,
-            };
-            c.update(&docs, self.size, self.now_ms);
-        }
-    }
-
-    fn close_changes(&mut self) {
-        if let Some(c) = self.changes.take() {
-            self.asks.extend(c.close());
-        }
-    }
-
-    /// What the diff viewer wants the daemon to do, for the loop to send.
+    /// What the diff wants the daemon to do, for the loop to send.
     pub fn take_asks(&mut self) -> Vec<Ask> {
         let mut asks = std::mem::take(&mut self.asks);
-        if let Some(c) = self.viewer_mut() {
+        if let Some(c) = self.diff.as_mut() {
             asks.extend(c.take_asks());
         }
         asks
     }
 
-    /// The daemon made the node the viewer asked for.
+    /// The daemon made the node the diff asked for.
     pub fn changes_made(&mut self, src: Src, node: &str) {
-        if let Some(c) = self.viewer_mut() {
+        if let Some(c) = self.diff.as_mut() {
             c.made(src, node);
         }
     }
 
     pub fn changes_failed(&mut self, src: Src, why: &str) {
-        if let Some(c) = self.viewer_mut() {
+        if let Some(c) = self.diff.as_mut() {
             c.failed(src, why);
         }
     }
 
     pub fn changes_flash(&mut self, text: &str) {
-        if let Some(c) = self.viewer_mut() {
+        if let Some(c) = self.diff.as_mut() {
             c.flash(text);
         }
     }
 
-    /// A key while the diff of a review has the keyboard: it is the viewer's; the leader and `esc`
-    /// give the keyboard back to the client's commands.
-    fn rv_key(&mut self, ev: KeyEvent) -> After {
+    /// A key while the keyboard is in the diff: it is the diff's own; the leader and `esc` give
+    /// the keyboard back to the client's commands and `q` closes the view (REQ-730).
+    fn diff_key(&mut self, ev: KeyEvent) -> After {
         if is_leader(&ev) || ev.modifiers.contains(KeyModifiers::CONTROL) {
             if is_leader(&ev) {
                 self.typing = false;
             }
             return After::Continue;
         }
-        match ev.code {
-            // `d` closes the diff that `d` opened; in a review, where it stays, it gives the keys back.
-            KeyCode::Char('d') => {
-                self.typing = false;
-                if self.review_pr().is_none() {
-                    self.diff_open = false;
-                    self.diff_zoom = false;
-                    self.rv_focus = false;
-                }
-                self.sync_review_diff();
-                return After::Continue;
-            }
-            KeyCode::Char('z') => {
-                self.diff_zoom = !self.diff_zoom;
-                self.sync_review_diff();
-                return After::Continue;
-            }
-            _ => {}
-        }
         let docs = Docs {
             diffs: &self.diffs,
             commits: &self.commit_lists,
         };
         let size = self.size;
-        let Some(c) = self.rv.as_mut() else {
+        let Some(c) = self.diff.as_mut() else {
             return After::Continue;
         };
-        let outcome = c.press(ev.code, &docs, size);
-        let after = match outcome {
+        let after = match c.press(ev.code, &docs, size) {
             Outcome::Close => {
                 self.typing = false;
-                After::Continue
+                match (ev.code, self.diff_panel()) {
+                    (KeyCode::Char('q'), Some((_, view))) => After::CloseView(view),
+                    _ => After::Continue,
+                }
             }
             Outcome::Reference(text) => self.refer(text),
+            Outcome::Open(path) => self.open_file(&path, None),
             Outcome::Stay => After::Continue,
         };
-        self.sync_review_diff();
+        self.sync_diff();
         after
     }
 
@@ -1201,7 +1187,6 @@ impl View {
     fn write_reference(&mut self, at: usize, node: String, text: &str) -> After {
         self.conv_ui.entry(node).or_default().editor.insert(text);
         self.focus = at;
-        self.rv_focus = false;
         self.typing = true;
         self.flash = "referencia escrita en el campo del agente; nada se mandó".into();
         After::Continue
@@ -1228,31 +1213,6 @@ impl View {
         after
     }
 
-    /// A key while the diff is open: it is the viewer's, never a pane's.
-    fn changes_key(&mut self, ev: KeyEvent) -> After {
-        if ev.modifiers.contains(KeyModifiers::CONTROL) {
-            return After::Continue;
-        }
-        let Some(c) = self.changes.as_mut() else {
-            return After::Continue;
-        };
-        let docs = Docs {
-            diffs: &self.diffs,
-            commits: &self.commit_lists,
-        };
-        match c.press(ev.code, &docs, self.size) {
-            Outcome::Close => self.close_changes(),
-            // The screen of `d` has no agent beside it: the reference is copied.
-            Outcome::Reference(text) => {
-                self.flash = "referencia copiada".into();
-                self.update_changes();
-                return After::Copy(text);
-            }
-            Outcome::Stay => self.update_changes(),
-        }
-        After::Continue
-    }
-
     pub fn set_status(&mut self, status: &str) {
         self.status = status.to_owned();
     }
@@ -1261,6 +1221,7 @@ impl View {
     /// so only a document whose epoch or revision is not the one already read is read again, and what
     /// the client no longer holds goes.
     pub fn sync<'a>(&mut self, nodes: impl Iterator<Item = &'a serde_json::Value>) {
+        let focused = self.focused_leaf();
         let mut held: HashSet<&str> = HashSet::new();
         for doc in nodes {
             let Some(id) = doc["id"].as_str() else {
@@ -1346,12 +1307,12 @@ impl View {
         self.watch_jobs();
         self.note_painted();
         self.note_left_alt();
-        self.update_changes();
-        self.sync_review_diff();
+        self.sync_diff();
         self.advance_manage();
         self.follow_restore();
         self.follow_goto();
         self.follow_cursor();
+        self.keep_focus(focused);
         self.clamp();
         // The folders of the open workspace's tree are asked for before the tree is shown (REQ-636).
         self.ask_folders();
@@ -1365,17 +1326,56 @@ impl View {
         }
     }
 
+    /// The focused panel of the open workspace: the workspace, the id of the pane or view, and
+    /// whether it is a view.
+    fn focused_leaf(&self) -> Option<(String, String, bool)> {
+        let ws = self.opened.clone()?;
+        let doc = self.workspaces.get(&ws)?;
+        let id = leaf_id(doc, self.focus)?.to_owned();
+        Some((ws, id, self.focus >= doc.panes.len()))
+    }
+
+    /// Panels are numbered panes first, so a pane that is added moves every view's number:
+    /// the focus follows the panel and not the number, and the keys never fall on a pane by
+    /// surprise when the view they were in goes.
+    fn keep_focus(&mut self, before: Option<(String, String, bool)>) {
+        let Some((ws, id, was_view)) = before else {
+            return;
+        };
+        if self.opened.as_deref() != Some(ws.as_str()) {
+            return;
+        }
+        let at = self.workspaces.get(&ws).and_then(|doc| {
+            (0..doc.panes.len() + doc.views.len()).find(|i| leaf_id(doc, *i) == Some(id.as_str()))
+        });
+        match at {
+            Some(at) => self.focus = at,
+            None if was_view => self.typing = false,
+            None => {}
+        }
+    }
+
     /// A workspace or a pane that was closed leaves the highlight on its neighbour.
     fn clamp(&mut self) {
         if let Some((id, asked)) = &self.new_pane {
-            let at = self
-                .shown()
-                .and_then(|d| d.panes.iter().position(|p| p.id == *id));
+            let at = self.shown().and_then(|d| {
+                d.panes.iter().position(|p| p.id == *id).or_else(|| {
+                    let at = d.views.iter().position(|v| v.id == *id)?;
+                    Some(d.panes.len() + at)
+                })
+            });
             if let Some(at) = at {
                 self.focus = at;
                 self.new_pane = None;
+                // A viewer that was asked for has the keys; the other panels only the focus.
+                if std::mem::take(&mut self.keys_on_arrival)
+                    && self.shown().is_some_and(|d| at >= d.panes.len())
+                {
+                    self.typing = true;
+                }
             } else if self.now_ms > asked + NEW_PANE_WAIT_MS {
                 self.new_pane = None;
+                self.keys_on_arrival = false;
             }
         }
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
@@ -1408,8 +1408,16 @@ impl View {
                 self.on_group = Some(g.id.clone());
             }
         }
-        if let Some(panes) = self.shown().map(|w| w.panes.len()) {
-            self.focus = self.focus.min(panes.saturating_sub(1));
+        if let Some((panes, panels)) = self
+            .shown()
+            .map(|w| (w.panes.len(), w.panes.len() + w.views.len()))
+        {
+            // A view that goes while the keys are in it must not hand them to the pane that
+            // now has its number.
+            if self.focus >= panels && self.focus >= panes {
+                self.typing = false;
+            }
+            self.focus = self.focus.min(panels.saturating_sub(1));
         }
     }
 
@@ -1758,7 +1766,6 @@ impl View {
         }
         self.opened = Some(ws.to_owned());
         self.typing = false;
-        self.rv_focus = false;
         self.blk = None;
         self.mark_seen(ws);
         let pane = self
@@ -1769,7 +1776,7 @@ impl View {
         self.focus = focus.min(
             self.workspaces
                 .get(ws)
-                .map_or(0, |d| d.panes.len().saturating_sub(1)),
+                .map_or(0, |d| (d.panes.len() + d.views.len()).saturating_sub(1)),
         );
         if let Some(p) = pane {
             self.mark_seen(&p);
@@ -1778,7 +1785,7 @@ impl View {
 
     /// Where the person is.
     fn level(&self) -> Level {
-        if self.typing_pane().is_some() || self.rv_typing() {
+        if self.typing_pane().is_some() || self.diff_typing() || self.viewer_typing() {
             Level::Terminal
         } else if self.opened.is_some() && self.opened == self.selected_id() {
             Level::Panels
@@ -1787,8 +1794,8 @@ impl View {
         }
     }
 
-    /// The rectangles of the panels, in the order of `doc.panes`: those of the daemon's layout, or
-    /// the client's own arrangement when the daemon keeps none. While one is shown full, it has
+    /// The rectangles of the panels, in the order of `doc.panes` and then `doc.views`: those of the
+    /// daemon's layout, or the client's own arrangement when the daemon keeps none. While one is shown full, it has
     /// the whole area and the others none.
     fn layout(&self, doc: &Workspace, area: Rect) -> Vec<Rect> {
         let mut rects = match &doc.layout {
@@ -1796,17 +1803,52 @@ impl View {
                 let at = split::rects(tree, area);
                 doc.panes
                     .iter()
-                    .map(|p| at.get(p.id.as_str()).copied().unwrap_or((0, 0, 0, 0)))
+                    .map(|p| p.id.as_str())
+                    .chain(doc.views.iter().map(|v| v.id.as_str()))
+                    .map(|id| at.get(id).copied().unwrap_or((0, 0, 0, 0)))
                     .collect()
             }
             None => pane_rects(doc.panes.len(), area),
         };
-        if self.full && self.level() != Level::Workspaces {
+        if self.single() {
+            // One panel at a time, under a strip of titles (REQ-738).
+            let one = (area.0, area.1 + 1, area.2, area.3.saturating_sub(1));
+            let shown = self.shown_panel(doc);
+            for (i, r) in rects.iter_mut().enumerate() {
+                *r = if i == shown { one } else { (0, 0, 0, 0) };
+            }
+        } else if self.full && self.level() != Level::Workspaces {
             for (i, r) in rects.iter_mut().enumerate() {
                 *r = if i == self.focus { area } else { (0, 0, 0, 0) };
             }
         }
         rects
+    }
+
+    /// The panel a single-panel terminal shows for `doc`: the focused one of the open workspace,
+    /// and the first of one that is only highlighted (the focus is the open workspace's).
+    fn shown_panel(&self, doc: &Workspace) -> usize {
+        let last = (doc.panes.len() + doc.views.len()).saturating_sub(1);
+        if self.opened.as_deref() == Some(doc.head.id.as_str()) {
+            self.focus.min(last)
+        } else {
+            0
+        }
+    }
+
+    /// The terminal is too narrow for panels side by side: the focused one fills the area.
+    fn single(&self) -> bool {
+        self.size.0 < SINGLE_BELOW
+    }
+
+    /// The titles of the strip a single panel has above it: the panes, then the views.
+    fn strip_titles(doc: &Workspace) -> Vec<String> {
+        let panes = doc.panes.iter().map(|p| p.title.clone());
+        let views = doc.views.iter().map(|v| match v.kind {
+            contract::ViewKind::Diff => "± diff".to_owned(),
+            contract::ViewKind::Viewer => format!("▤ {}", v.title),
+        });
+        panes.chain(views).collect()
     }
 
     /// What the sidebar's cursor can be on, in the order the rows are drawn: the row of a group
@@ -1953,6 +1995,107 @@ impl View {
         self.focus = 0;
     }
 
+    /// The key after `S`: a digit swaps the focused panel with the one that has it, anything else
+    /// cancels (REQ-735).
+    fn swap_pick_key(&mut self, ev: KeyEvent) -> After {
+        self.pick_swap = false;
+        let KeyCode::Char(c) = ev.code else {
+            return After::Continue;
+        };
+        let Some(n) = c.to_digit(10).filter(|n| *n >= 1) else {
+            return After::Continue;
+        };
+        let Some(doc) = self.shown() else {
+            return After::Continue;
+        };
+        let Some(&to) = panel_order(doc).get(n as usize - 1) else {
+            self.flash("no hay un panel con ese número");
+            return After::Continue;
+        };
+        match (leaf_id(doc, self.focus), leaf_id(doc, to)) {
+            (Some(a), Some(b)) if to != self.focus => After::Swap(a.to_owned(), b.to_owned()),
+            _ => After::Continue,
+        }
+    }
+
+    /// `d`: open the diff as a panel and focus it; focus it when it is there; close it when it
+    /// has the focus. It never gives it the keys (REQ-729).
+    fn toggle_diff(&mut self) -> After {
+        let Some(ws) = self.selected_id() else {
+            return After::Continue;
+        };
+        self.blk = None;
+        match self.diff_panel() {
+            Some((at, view)) => {
+                if self.opened.as_deref() == Some(ws.as_str()) && self.focus == at {
+                    self.typing = false;
+                    return After::CloseView(view);
+                }
+                self.open(&ws, at);
+                After::Continue
+            }
+            None => {
+                if !self.room_for_edge_panel() {
+                    self.flash(NO_ROOM);
+                    return After::Continue;
+                }
+                let focus = self.focus;
+                self.open(&ws, focus);
+                self.full = false;
+                After::OpenDiff(ws)
+            }
+        }
+    }
+
+    /// Whether the focused panel can be split along `dir` and leave both halves their least size
+    /// (REQ-737). With no layout of the daemon's, or no panel, there is nothing to measure.
+    fn room_to_split(&self, dir: SplitDir) -> bool {
+        if self.single() {
+            return true;
+        }
+        let (cols, rows) = self.size;
+        let Some(doc) = self.shown().filter(|d| d.layout.is_some()) else {
+            return true;
+        };
+        let Some(&(_, _, w, h)) = self
+            .layout(doc, self.panes_space(cols, rows))
+            .get(self.focus)
+        else {
+            return true;
+        };
+        match dir {
+            SplitDir::Row => w >= MIN_PANEL.0 * 2 && h >= MIN_PANEL.1,
+            SplitDir::Col => h >= MIN_PANEL.1 * 2 && w >= MIN_PANEL.0,
+        }
+    }
+
+    /// Whether every panel would keep its least size if one took half the width at the right edge
+    /// of the layout, as the daemon puts a new view (REQ-736). The daemon may put it where it
+    /// was last, so this is only an estimate.
+    fn room_for_edge_panel(&self) -> bool {
+        if self.single() {
+            return true;
+        }
+        let Some(doc) = self.shown() else {
+            return true;
+        };
+        let Some(tree) = &doc.layout else {
+            return true;
+        };
+        let (cols, rows) = self.size;
+        let tree = contract::Layout::Split {
+            dir: SplitDir::Row,
+            ratio: 500,
+            a: Box::new(tree.clone()),
+            b: Box::new(contract::Layout::Pane {
+                pane: String::new(),
+            }),
+        };
+        split::rects(&tree, self.panes_space(cols, rows))
+            .values()
+            .all(|r| r.2 >= MIN_PANEL.0 && r.3 >= MIN_PANEL.1)
+    }
+
     /// Where a new panel goes: beside the focused one, along `dir` or, when none is given, along
     /// the longer side of the focused panel.
     fn place(&self, dir: Option<SplitDir>) -> Place {
@@ -1977,8 +2120,8 @@ impl View {
         let doc = self.shown()?;
         let (cols, rows) = self.size;
         let at = split::rects(doc.layout.as_ref()?, self.panes_space(cols, rows));
-        let id = split::neighbour(&at, &doc.panes.get(self.focus)?.id, side)?;
-        doc.panes.iter().position(|p| p.id == id)
+        let id = split::neighbour(&at, leaf_id(doc, self.focus)?, side)?;
+        (0..doc.panes.len() + doc.views.len()).find(|i| leaf_id(doc, *i) == Some(id))
     }
 
     /// `H` `J` `K` `L`: ask to swap the focused panel with the one on that side.
@@ -1988,8 +2131,8 @@ impl View {
         };
         let pair = self.neighbour_toward(side).and_then(|to| {
             Some((
-                doc.panes.get(self.focus)?.id.clone(),
-                doc.panes.get(to)?.id.clone(),
+                leaf_id(doc, self.focus)?.to_owned(),
+                leaf_id(doc, to)?.to_owned(),
             ))
         });
         match pair {
@@ -2003,11 +2146,11 @@ impl View {
 
     /// `<` `>` `{` `}`: ask to move the split around the focused panel by a twentieth.
     fn resize_focused(&mut self, dir: SplitDir, bigger: bool) -> After {
-        let Some(pane) = self.shown().and_then(|d| d.panes.get(self.focus)) else {
+        let Some(pane) = self.shown().and_then(|d| leaf_id(d, self.focus)) else {
             return After::Continue;
         };
         After::Grow {
-            pane: pane.id.clone(),
+            pane: pane.to_owned(),
             dir,
             by: if bigger { RESIZE_STEP } else { -RESIZE_STEP },
         }
@@ -2015,20 +2158,7 @@ impl View {
 
     /// Focus the panel on this side of the focused one, when there is one.
     fn focus_toward(&mut self, side: split::Side) {
-        // The diff of a review is the panel at the right of its agent.
-        if self.rv.is_some() {
-            if self.rv_focus {
-                if side == split::Side::Left {
-                    self.rv_focus = false;
-                }
-                return;
-            }
-            if side == split::Side::Right && self.neighbour_toward(side).is_none() {
-                self.rv_focus = true;
-                return;
-            }
-        }
-        if self.shown().is_some_and(|d| d.layout.is_none()) {
+        if self.single() || self.shown().is_some_and(|d| d.layout.is_none()) {
             self.go_panel(matches!(side, split::Side::Right | split::Side::Down));
         } else if let Some(to) = self.neighbour_toward(side) {
             self.focus = to;
@@ -2037,9 +2167,20 @@ impl View {
 
     /// The panel the client just asked for takes the focus as soon as it shows up.
     pub fn focus_new(&mut self, reply: &Reply) {
+        self.keys_on_arrival = false;
         if let Ok(Ok(Some(r))) = reply {
-            self.new_pane = r["pane"].as_str().map(|id| (id.to_owned(), self.now_ms));
+            self.new_pane = r["pane"]
+                .as_str()
+                .or_else(|| r["view"].as_str())
+                .map(|id| (id.to_owned(), self.now_ms));
         }
+    }
+
+    /// The viewer the client asked for takes the focus and the keys as soon as it shows up
+    /// (REQ-731); a reply that is an error leaves nothing waiting.
+    pub fn focus_new_with_keys(&mut self, reply: &Reply) {
+        self.focus_new(reply);
+        self.keys_on_arrival = self.new_pane.is_some();
     }
 
     /// Focus the next or the previous panel of the open workspace.
@@ -2047,17 +2188,10 @@ impl View {
         let Some(id) = self.opened.clone() else {
             return;
         };
-        let panes = self.workspaces.get(&id).map_or(0, |d| d.panes.len());
-        if self.rv.is_some() {
-            if self.rv_focus {
-                self.rv_focus = self.rv_focus && forward;
-                return;
-            }
-            if forward && self.focus + 1 >= panes {
-                self.rv_focus = true;
-                return;
-            }
-        }
+        let panes = self
+            .workspaces
+            .get(&id)
+            .map_or(0, |d| d.panes.len() + d.views.len());
         if panes == 0 {
             return;
         }
@@ -2076,18 +2210,9 @@ impl View {
         Some((conversation::accent_rgb(conv.accent), conv.ask.is_some()))
     }
 
-    /// The keyboard is in the diff of a review.
-    fn rv_typing(&self) -> bool {
-        self.typing && self.rv_focus && self.rv.is_some() && self.mode == Mode::Workspaces
-    }
-
     /// The pane the keyboard goes to: the focused pane of the opened workspace, while typing.
     fn typing_pane(&self) -> Option<String> {
-        if !self.typing
-            || self.mode != Mode::Workspaces
-            || self.changes.is_some()
-            || self.rv_focus && self.rv.is_some()
-        {
+        if !self.typing || self.mode != Mode::Workspaces {
             return None;
         }
         let ws = self.workspaces.get(self.opened.as_deref()?)?;
@@ -2110,6 +2235,9 @@ impl View {
         let Some(ws) = self.shown() else {
             return After::Continue;
         };
+        if let Some(view) = ws.views.get(self.focus.wrapping_sub(ws.panes.len())) {
+            return After::CloseView(view.id.clone());
+        }
         let Some(pane) = ws.panes.get(self.focus) else {
             self.flash = "no hay panel enfocado".into();
             return After::Continue;
@@ -3182,7 +3310,7 @@ impl View {
             self.help = false;
             return After::Continue;
         }
-        if self.viewer.is_some() {
+        if self.viewer_overlay() {
             if self.tree_on && self.tree_focus {
                 return self.tree_key(ev);
             }
@@ -3209,11 +3337,14 @@ impl View {
         if self.manage.is_some() {
             return self.manage_key(ev);
         }
-        if self.changes.is_some() {
-            return self.changes_key(ev);
+        if self.pick_swap {
+            return self.swap_pick_key(ev);
         }
-        if self.rv_typing() {
-            return self.rv_key(ev);
+        if self.diff_typing() {
+            return self.diff_key(ev);
+        }
+        if self.viewer_typing() {
+            return self.viewer_key(ev);
         }
         if self.tree_focus && self.tree_on {
             return self.tree_key(ev);
@@ -3340,7 +3471,6 @@ impl View {
             || self.launcher.is_some()
             || self.phone_open
             || self.manage.is_some()
-            || self.changes.is_some()
             || (self.tree_focus && self.tree_on)
     }
 
@@ -3348,7 +3478,7 @@ impl View {
     /// or typed into whatever has the keyboard, a line break being Enter.
     pub fn paste(&mut self, text: &str) -> After {
         self.flash.clear();
-        if self.viewer.is_some() {
+        if self.viewer_overlay() || self.viewer_typing() {
             return After::Continue;
         }
         if self.modal() {
@@ -3538,16 +3668,43 @@ impl View {
                     }
                 }
                 Level::Panels => {
+                    // A viewer this terminal has not read: ↵ reads its last file.
+                    if self.viewer_focused()
+                        && self.viewing_here().is_none()
+                        && !self.viewer_overlay()
+                        && let Some(file) = self.shown().and_then(|d| {
+                            d.views
+                                .get(self.focus.checked_sub(d.panes.len())?)?
+                                .files
+                                .last()
+                                .cloned()
+                        })
+                    {
+                        return self.open_file(&file, None);
+                    }
                     let panes = self
                         .opened
                         .as_ref()
                         .and_then(|id| self.workspaces.get(id))
                         .map_or(0, |d| d.panes.len());
-                    self.typing = panes > 0 || self.rv.is_some();
+                    self.typing = (panes > 0 && self.focus < panes)
+                        || self.diff_focused()
+                        || (self.viewer_focused() && self.viewing_here().is_some());
                 }
                 Level::Terminal => {}
             },
             (Mode::Workspaces, Key::Full) if level == Level::Panels => self.full = !self.full,
+            (Mode::Workspaces, Key::SwapPick) if level == Level::Panels => {
+                let panels = self.shown().map_or(0, |d| d.panes.len() + d.views.len());
+                if panels < 2 {
+                    self.flash("solo hay un panel");
+                } else if self.single() {
+                    self.flash("con tan poco ancho se ve un panel: H J K L intercambian");
+                } else {
+                    self.full = false;
+                    self.pick_swap = true;
+                }
+            }
             (Mode::Workspaces, Key::Repeat) if level != Level::Terminal => self.ask_rename(level),
             (Mode::Workspaces, Key::CopyOut) if level != Level::Terminal => self.open_picker(),
             (Mode::Workspaces, Key::Sync) if level != Level::Terminal => return self.ask_sync(),
@@ -3561,30 +3718,7 @@ impl View {
                 Level::Panels => return self.ask_close_pane(),
                 Level::Terminal => {}
             },
-            // In a review the diff is already beside the agent: `d` gives it the keys.
-            (Mode::Workspaces, Key::Changes) if self.rv.is_some() => {
-                self.opened = self.selected_id();
-                self.rv_focus = true;
-                self.typing = true;
-            }
-            // Elsewhere it opens beside the panels when there is room, and as a screen when not.
-            (Mode::Workspaces, Key::Changes)
-                if self.side_room() && self.selected_id().is_some() =>
-            {
-                self.opened = self.selected_id();
-                self.blk = None;
-                self.diff_open = true;
-                self.sync_review_diff();
-                self.rv_focus = true;
-                self.typing = true;
-            }
-            (Mode::Workspaces, Key::Changes) => {
-                if let Some(id) = self.selected_id() {
-                    self.typing = false;
-                    self.blk = None;
-                    self.changes = Some(Changes::open(&id));
-                }
-            }
+            (Mode::Workspaces, Key::Changes) => return self.toggle_diff(),
             (Mode::Workspaces, Key::NewPane | Key::SplitRow | Key::SplitCol)
                 if level == Level::Panels =>
             {
@@ -3607,7 +3741,12 @@ impl View {
                         ));
                         return After::Continue;
                     }
-                    return After::NewPane(id, self.place(dir));
+                    let place = self.place(dir);
+                    if !self.room_to_split(place.dir) {
+                        self.flash(NO_ROOM);
+                        return After::Continue;
+                    }
+                    return After::NewPane(id, place);
                 }
             }
             (Mode::Workspaces, Key::NewProgram) if level == Level::Panels => {
@@ -3843,6 +3982,118 @@ impl View {
         }
     }
 
+    // ---- the viewer as a panel (N167c) ----
+
+    /// A plan still covers the panels' area; a file is the panel of its workspace's viewer view.
+    fn viewer_overlay(&self) -> bool {
+        matches!(&self.viewer, Some(Viewing::Doc(v)) if matches!(v.source, viewer::Source::Plan { .. }))
+    }
+
+    /// The viewer view of the shown workspace: its place among the panels and its id.
+    fn viewer_panel(&self) -> Option<(usize, String)> {
+        let doc = self.shown()?;
+        let at = doc
+            .views
+            .iter()
+            .position(|v| v.kind == contract::ViewKind::Viewer)?;
+        Some((doc.panes.len() + at, doc.views[at].id.clone()))
+    }
+
+    /// The panel of the viewer view, border included.
+    fn viewer_outer_rect(&self) -> Rect {
+        let (cols, rows) = self.size;
+        let (Some(doc), Some((at, _))) = (self.shown(), self.viewer_panel()) else {
+            return (0, 0, 0, 0);
+        };
+        self.layout(doc, self.panes_space(cols, rows))
+            .get(at)
+            .copied()
+            .unwrap_or((0, 0, 0, 0))
+    }
+
+    /// Where the viewer draws: a plan has the panels' area, a file the inside of its panel.
+    fn viewer_rect(&self) -> Rect {
+        if self.viewer_overlay() {
+            let (cols, rows) = self.size;
+            return self.panes_space(cols, rows);
+        }
+        inner(self.viewer_outer_rect())
+    }
+
+    /// The file viewing of the shown workspace, when the client has it.
+    fn viewing_here(&self) -> Option<&Viewing> {
+        let id = self.shown()?.head.id.as_str();
+        self.viewer
+            .as_ref()
+            .filter(|v| !self.viewer_overlay() && v.workspace() == id)
+    }
+
+    /// The viewer is the focused panel of the open workspace.
+    fn viewer_focused(&self) -> bool {
+        self.opened.is_some()
+            && self.opened == self.selected_id()
+            && self.viewer_panel().is_some_and(|(at, _)| at == self.focus)
+    }
+
+    /// The keyboard is in the viewer's panel.
+    fn viewer_typing(&self) -> bool {
+        self.typing
+            && self.mode == Mode::Workspaces
+            && self.viewing_here().is_some()
+            && self.viewer_focused()
+    }
+
+    /// The mouse at (`x`, `y`) is the viewer's: a plan has all of it, a file its panel.
+    fn viewer_gets(&self, x: usize, y: usize) -> bool {
+        self.viewer.is_some()
+            && (self.viewer_overlay()
+                || (self.viewing_here().is_some() && inside(self.viewer_outer_rect(), x, y)))
+    }
+
+    /// The viewer takes what the mouse began in it, to its end.
+    fn viewer_held(&self) -> bool {
+        self.viewer.is_some() && (self.viewer_overlay() || self.viewer_drag)
+    }
+
+    /// A file the viewer shows is told to the daemon as a tab of the viewer view, beside the
+    /// focused panel (along its longer side when it is 80 columns or more, else below it), and
+    /// takes the keys when its panel shows up (REQ-731, REQ-732).
+    fn queue_view(&mut self, workspace: &str, path: &str) {
+        if workspace.is_empty() || path.is_empty() {
+            return;
+        }
+        let (cols, rows) = self.size;
+        let place = self
+            .shown()
+            .filter(|d| d.head.id == workspace)
+            .and_then(|d| {
+                let id = leaf_id(d, self.focus)?.to_owned();
+                let at = self.layout(d, self.panes_space(cols, rows));
+                let r = at.get(self.focus)?;
+                let dir = if r.2 >= WIDE_PANEL {
+                    SplitDir::Row
+                } else {
+                    SplitDir::Col
+                };
+                Some((id, dir))
+            });
+        let (beside, dir) = match place {
+            Some((id, dir)) => (Some(id), dir),
+            None => (None, SplitDir::Row),
+        };
+        self.view_asks.push(ViewAsk {
+            workspace: workspace.to_owned(),
+            path: path.to_owned(),
+            beside,
+            dir,
+        });
+    }
+
+    /// What the viewer asked of the daemon, for the loop to send.
+    pub fn take_view_asks(&mut self) -> Vec<ViewAsk> {
+        std::mem::take(&mut self.view_asks)
+    }
+
     // ---- the Markdown viewer (REQ-469 to REQ-478) ----
 
     /// Show a document in the viewer; the keys and the mouse are its until it closes.
@@ -3868,6 +4119,7 @@ impl View {
                 .unwrap_or_default(),
             viewer::Source::File => Vec::new(),
         };
+        self.forget_other_workspace(&workspace);
         if let Some(Viewing::Text(tabs)) = self.viewer.take() {
             self.tabs_behind = Some(tabs);
         }
@@ -3883,13 +4135,34 @@ impl View {
         self.viewer = self.tabs_behind.take().map(Viewing::Text);
     }
 
+    /// The viewer holds the files of one workspace: what it has of another goes when a file of
+    /// this one is opened (the daemon keeps each workspace's viewer apart).
+    fn forget_other_workspace(&mut self, workspace: &str) {
+        if self
+            .viewer
+            .as_ref()
+            .is_some_and(|v| v.workspace() != workspace)
+        {
+            self.viewer = None;
+        }
+        if self
+            .tabs_behind
+            .as_ref()
+            .is_some_and(|t| t.current().workspace != workspace)
+        {
+            self.tabs_behind = None;
+        }
+    }
+
     /// Put `view` in the tabs of the viewer: the ones that show, the ones a Markdown view is over,
     /// or new ones.
     fn open_tab(&mut self, view: fileview::FileView, keep: bool) {
+        self.forget_other_workspace(&view.workspace);
         let tabs = match self.viewer.take() {
             Some(Viewing::Text(tabs)) => Some(tabs),
             Some(Viewing::Doc(_)) | None => self.tabs_behind.take(),
         };
+        let (workspace, rel) = (view.workspace.clone(), view.rel().to_owned());
         let tabs = match tabs {
             Some(mut tabs) => {
                 tabs.open(view, keep);
@@ -3897,6 +4170,7 @@ impl View {
             }
             None => fileview::FileTabs::new(view),
         };
+        self.queue_view(&workspace, &rel);
         self.viewer = Some(Viewing::Text(tabs));
         // The keys are the viewer's, whoever had them when the file came.
         self.tree_focus = false;
@@ -3920,7 +4194,7 @@ impl View {
         let weight = size.map_or_else(String::new, |n| format!(" · {}", fileview::size_text(n)));
         let why = format!("binario{weight} · no se puede mostrar");
         self.open_tab(
-            fileview::FileView::refused(workspace, path, name, why),
+            fileview::FileView::refused(workspace, path.clone(), name, why).at(path),
             false,
         );
     }
@@ -3945,10 +4219,8 @@ impl View {
     fn viewer_act(&mut self, act: viewer::Act) -> After {
         match act {
             viewer::Act::Nothing => After::Continue,
-            viewer::Act::Close => {
-                self.close_viewer();
-                After::Continue
-            }
+            viewer::Act::Leave => self.leave_viewer(),
+            viewer::Act::Close => self.close_file_viewer(),
             viewer::Act::Copy(text) => After::Copy(text),
             viewer::Act::Source(path) => {
                 let workspace = self
@@ -3994,9 +4266,16 @@ impl View {
     }
 
     fn viewer_key(&mut self, ev: KeyEvent) -> After {
-        let (cols, rows) = self.size;
-        let rect = self.panes_space(cols, rows);
-        match self.viewer.as_mut() {
+        if !self.viewer_overlay() && is_leader(&ev) {
+            self.typing = false;
+            return After::Continue;
+        }
+        let rect = self.viewer_rect();
+        let before = match &self.viewer {
+            Some(Viewing::Text(t)) => t.rels(),
+            _ => Vec::new(),
+        };
+        let after = match self.viewer.as_mut() {
             Some(Viewing::Doc(v)) => {
                 let act = v.key(&ev, rect);
                 if let Some(says) = v.take_says() {
@@ -4012,6 +4291,51 @@ impl View {
                 self.text_act(act)
             }
             None => After::Continue,
+        };
+        // A tab the key closed is the daemon's to be told of.
+        let now = match &self.viewer {
+            Some(Viewing::Text(t)) => t.rels(),
+            _ => before.clone(),
+        };
+        let gone = before.iter().find(|r| !now.contains(r));
+        match (after, gone, self.viewer_panel()) {
+            (After::Continue, Some(path), Some((_, view))) => After::CloseViewTab {
+                view,
+                path: path.clone(),
+            },
+            (after, ..) => after,
+        }
+    }
+
+    /// `esc` with nothing to cancel: a plan over the panels closes, a file's viewer gives the keys
+    /// back to the client's commands (REQ-730).
+    fn leave_viewer(&mut self) -> After {
+        if self.viewer_overlay() {
+            self.close_viewer();
+        } else {
+            self.typing = false;
+        }
+        After::Continue
+    }
+
+    /// `q` on a file's viewer: the tab that shows goes, and with the last the view; a Markdown
+    /// view lets the text tabs under it come back (REQ-733).
+    fn close_file_viewer(&mut self) -> After {
+        if self.viewer_overlay() {
+            self.close_viewer();
+            return After::Continue;
+        }
+        let doc = match &self.viewer {
+            Some(Viewing::Doc(v)) => Some(v.file()),
+            _ => None,
+        };
+        let view = self.viewer_panel().map(|(_, id)| id);
+        self.close_viewer();
+        self.typing = self.typing && self.viewer.is_some();
+        match (view, self.viewer.is_some(), doc) {
+            (Some(view), false, _) => After::CloseView(view),
+            (Some(view), true, Some(path)) => After::CloseViewTab { view, path },
+            _ => After::Continue,
         }
     }
 
@@ -4026,11 +4350,9 @@ impl View {
         let rel = v.rel().to_owned();
         match act {
             fileview::Act::Nothing => After::Continue,
+            fileview::Act::Leave => self.leave_viewer(),
             fileview::Act::Refer { path, from, to } => self.refer_lines(&workspace, path, from, to),
-            fileview::Act::Close => {
-                self.close_viewer();
-                After::Continue
-            }
+            fileview::Act::Close => self.close_file_viewer(),
             fileview::Act::Tree => {
                 self.tree_on = true;
                 self.tree_focus = true;
@@ -4051,7 +4373,17 @@ impl View {
 
     /// The button was let go over the viewer: the click it was, or the text a drag covered.
     fn viewer_release(&mut self, cols: usize, rows: usize) -> After {
-        let rect = self.panes_space(cols, rows);
+        self.viewer_drag = false;
+        // A press in the panel of a viewer takes its keys.
+        if !self.viewer_overlay()
+            && !self.viewer_typing()
+            && let (Some(ws), Some((at, _))) = (self.selected_id(), self.viewer_panel())
+        {
+            self.open(&ws, at);
+            self.typing = true;
+        }
+        let rect = self.viewer_rect();
+        let _ = (cols, rows);
         if let Some(Viewing::Text(t)) = self.viewer.as_mut() {
             let copy = t.release();
             if let Some(says) = t.take_says() {
@@ -4109,8 +4441,14 @@ impl View {
             self.help = false;
             return After::Continue;
         }
-        if self.viewer.is_some() {
-            let rect = self.panes_space(cols, rows);
+        if self.viewer_gets(x, y) {
+            if !self.viewer_overlay()
+                && let (Some(ws), Some((at, _))) = (self.selected_id(), self.viewer_panel())
+            {
+                self.open(&ws, at);
+                self.typing = true;
+            }
+            let rect = self.viewer_rect();
             let act = self
                 .viewer
                 .as_mut()
@@ -4133,44 +4471,35 @@ impl View {
         {
             return After::Continue;
         }
-        if self.rv.is_some() && self.changes.is_none() {
-            if x >= self.diff_rect().0 {
-                self.opened = self.selected_id();
-                self.rv_focus = true;
+        if self.single()
+            && self.mode == Mode::Workspaces
+            && y == 1
+            && x > SIDEBAR
+            && let (Some(ws), Some(at)) = (self.selected_id(), self.strip_panel(x, cols))
+        {
+            self.open(&ws, at);
+            return After::Continue;
+        }
+        if self.diff.is_some() && inside(self.diff_rect(), x, y) {
+            if let (Some(ws), Some((at, _))) = (self.selected_id(), self.diff_panel()) {
+                self.open(&ws, at);
                 self.typing = true;
-                let docs = Docs {
-                    diffs: &self.diffs,
-                    commits: &self.commit_lists,
-                };
-                let size = self.size;
-                if let Some(c) = self.rv.as_mut() {
-                    c.click(x, y, &docs, size);
-                }
-                self.sync_review_diff();
-                return After::Continue;
             }
-            self.rv_focus = false;
-        }
-        if self.changes.is_none() {
-            if self.tree_on && x + TREE_W >= cols {
-                return self.tree_click(y, rows);
+            let docs = Docs {
+                diffs: &self.diffs,
+                commits: &self.commit_lists,
+            };
+            let size = self.size;
+            if let Some(c) = self.diff.as_mut() {
+                c.click(x, y, &docs, size);
             }
-            self.tree_focus = false;
+            self.sync_diff();
+            return After::Continue;
         }
-        if self.changes.is_some() {
-            if x > SIDEBAR {
-                if let Some(c) = self.changes.as_mut() {
-                    let docs = Docs {
-                        diffs: &self.diffs,
-                        commits: &self.commit_lists,
-                    };
-                    c.click(x, y, &docs, (cols, rows));
-                }
-                self.update_changes();
-                return After::Continue;
-            }
-            self.close_changes();
+        if self.tree_on && x + TREE_W >= cols {
+            return self.tree_click(y, rows);
         }
+        self.tree_focus = false;
         if self.mode == Mode::Avisos {
             let (listed, extra) = self.avisos_rows();
             let rect = avisos_rect(listed, extra, self.panes_space(cols, rows));
@@ -4250,7 +4579,11 @@ impl View {
         if let Some(doc) = self.shown() {
             let id = doc.head.id.clone();
             let rects = self.layout(doc, self.panes_space(cols, rows));
-            if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
+            if let Some(i) = rects
+                .iter()
+                .take(doc.panes.len())
+                .position(|r| inside(*r, x, y))
+            {
                 let pane = doc.panes[i].id.clone();
                 self.open(&id, i);
                 // A click in a panel starts typing in it, unless it picks a block.
@@ -4264,7 +4597,9 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if let Some(v) = self.viewer.as_mut() {
+        if self.viewer_gets(x, y)
+            && let Some(v) = self.viewer.as_mut()
+        {
             v.scroll_by(!down, 3);
             return After::Continue;
         }
@@ -4278,21 +4613,12 @@ impl View {
         {
             return After::Continue;
         }
-        if self.changes.is_some() {
-            if x >= SIDEBAR {
-                if let Some(c) = self.changes.as_mut() {
-                    c.wheel(down, x, (cols, rows));
-                }
-                return After::Continue;
-            }
-            self.close_changes();
-        }
         if self.mode == Mode::Avisos {
             return self.press(if down { Key::Down } else { Key::Up });
         }
-        if self.rv.is_some() && x >= self.diff_rect().0 {
+        if self.diff.is_some() && inside(self.diff_rect(), x, y) {
             let size = self.size;
-            if let Some(c) = self.rv.as_mut() {
+            if let Some(c) = self.diff.as_mut() {
                 c.wheel(down, x, size);
             }
             return After::Continue;
@@ -4317,7 +4643,11 @@ impl View {
             return After::Continue;
         };
         let rects = self.layout(doc, self.panes_space(cols, rows));
-        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+        let Some(i) = rects
+            .iter()
+            .take(doc.panes.len())
+            .position(|r| inside(*r, x, y))
+        else {
             return After::Continue;
         };
         let pane = doc.panes[i].id.clone();
@@ -4459,10 +4789,6 @@ impl View {
 
     /// `t`: show the file tree and give it the keys; with it shown, the keys; with them, close it.
     fn toggle_tree(&mut self) {
-        if self.rv.is_some() {
-            self.flash = "la review ya tiene su diff al lado".into();
-            return;
-        }
         if self.tree_on && self.tree_focus {
             self.tree_on = false;
             self.tree_focus = false;
@@ -4982,9 +5308,8 @@ impl View {
     /// The press that began a drag was the second of a double click: the drag covers the word it
     /// is on, so the release copies it (REQ-637).
     pub fn widen_to_word(&mut self) {
-        if self.viewer.is_some() {
-            let (cols, rows) = self.size;
-            let rect = self.panes_space(cols, rows);
+        if self.viewer_held() {
+            let rect = self.viewer_rect();
             match self.viewer.as_mut() {
                 Some(Viewing::Doc(v)) => v.widen_to_word(rect),
                 Some(Viewing::Text(t)) => t.widen_to_word(),
@@ -5027,14 +5352,18 @@ impl View {
     /// A double click on the text of a conversation's field selects the word it is on (REQ-637);
     /// `true` when it did.
     pub fn select_word_in_field(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
-        if self.mode != Mode::Workspaces || self.viewer.is_some() {
+        if self.mode != Mode::Workspaces || self.viewer_overlay() {
             return false;
         }
         let Some(doc) = self.shown() else {
             return false;
         };
         let rects = self.layout(doc, self.panes_space(cols, rows));
-        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+        let Some(i) = rects
+            .iter()
+            .take(doc.panes.len())
+            .position(|r| inside(*r, x, y))
+        else {
             return false;
         };
         let pane = doc.panes[i].id.clone();
@@ -5053,9 +5382,11 @@ impl View {
     pub fn press_select(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
         self.selection = None;
         self.drag = None;
+        self.viewer_drag = false;
         self.unlight_conversations();
-        if self.viewer.is_some() {
-            let rect = self.panes_space(cols, rows);
+        if self.viewer_gets(x, y) {
+            self.viewer_drag = true;
+            let rect = self.viewer_rect();
             return match self.viewer.as_mut() {
                 Some(Viewing::Doc(v)) => v.press(rect, x, y),
                 Some(Viewing::Text(t)) => t.press(rect, x, y),
@@ -5069,7 +5400,6 @@ impl View {
             || self.picker.is_some()
             || self.worktree.is_some()
             || self.project.is_some()
-            || self.changes.is_some()
             || self.mode != Mode::Workspaces
         {
             return false;
@@ -5078,7 +5408,11 @@ impl View {
             return false;
         };
         let rects = self.layout(doc, self.panes_space(cols, rows));
-        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+        let Some(i) = rects
+            .iter()
+            .take(doc.panes.len())
+            .position(|r| inside(*r, x, y))
+        else {
             return false;
         };
         let pane = doc.panes[i].id.clone();
@@ -5127,9 +5461,8 @@ impl View {
     /// the line and column it is on, or, past the top or the bottom of the list, to its first or
     /// last line, which scrolls (REQ-305).
     pub fn drag_to(&mut self, x: usize, y: usize) {
-        if self.viewer.is_some() {
-            let (cols, rows) = self.size;
-            let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
+        if self.viewer_held() {
+            let (rect, now) = (self.viewer_rect(), self.now_ms);
             match self.viewer.as_mut() {
                 Some(Viewing::Doc(v)) => v.drag_to(rect, (x, y), now),
                 Some(Viewing::Text(t)) => t.drag_to(rect, x, y),
@@ -5200,9 +5533,8 @@ impl View {
     /// While a drag is held past the edge of a list, scroll it a line every so often and keep the
     /// selection at its edge.
     pub fn drag_tick(&mut self) {
-        if self.viewer.is_some() {
-            let (cols, rows) = self.size;
-            let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
+        if self.viewer_held() {
+            let (rect, now) = (self.viewer_rect(), self.now_ms);
             if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
                 v.drag_tick(rect, now);
             }
@@ -5251,7 +5583,7 @@ impl View {
     /// The button was let go: a drag that never moved is the click it was; one that did copies what it
     /// covers (REQ-306) and leaves it lit until the next press or key.
     pub fn release(&mut self, cols: usize, rows: usize) -> After {
-        if self.viewer.is_some() {
+        if self.viewer_held() {
             return self.viewer_release(cols, rows);
         }
         if let Some(pane) = self.conv_drag.take() {
@@ -5655,37 +5987,31 @@ impl View {
                     rows.saturating_sub(2),
                 ),
             );
+            if self.pick_swap {
+                self.draw_digits(
+                    &mut g,
+                    doc,
+                    (
+                        px,
+                        1,
+                        pw.saturating_sub(self.tree_w()),
+                        rows.saturating_sub(2),
+                    ),
+                );
+            }
             if self.tree_on {
                 self.draw_tree(&mut g, cols, rows);
             }
-            if let Some(c) = &self.rv {
-                c.draw_focused(
-                    &mut g,
-                    &self.docs(),
-                    &self.label(c.workspace()),
-                    self.now_ms,
-                    self.rv_focus,
-                );
-            }
         }
 
-        if let Some(c) = &self.changes {
-            c.draw(
-                &mut g,
-                &self.docs(),
-                &self.label(c.workspace()),
-                self.now_ms,
-            );
-        }
-
-        match &self.viewer {
-            Some(Viewing::Doc(v)) => v.draw(
+        if self.viewer_overlay()
+            && let Some(Viewing::Doc(v)) = &self.viewer
+        {
+            v.draw(
                 &mut g,
                 self.panes_space(cols, rows),
                 self.viewer_plan_waits(),
-            ),
-            Some(Viewing::Text(v)) => v.draw(&mut g, self.panes_space(cols, rows)),
-            None => {}
+            );
         }
 
         // The status bar.
@@ -5695,11 +6021,15 @@ impl View {
         let level = self.level();
         let conv_focus = self.focused_conversation();
         let diff_status = self
-            .changes
+            .diff
             .as_ref()
-            .or_else(|| self.rv.as_ref().filter(|_| self.rv_typing()))
+            .filter(|_| self.diff_typing())
             .map(|c| c.status(&self.docs()));
-        let viewer_hint = self.viewer.as_ref().map(Viewing::hint);
+        let viewer_hint = self
+            .viewer
+            .as_ref()
+            .filter(|_| self.viewer_overlay() || self.viewer_typing())
+            .map(Viewing::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             _ if viewer_hint.is_some() => (
                 " LEER ",
@@ -5896,6 +6226,108 @@ impl View {
         g
     }
 
+    /// The strip above the one panel a narrow terminal shows: every panel's title, the shown one lit.
+    fn draw_strip(&self, g: &mut Grid, doc: &Workspace, (x, y, w): (usize, usize, usize)) {
+        let mut at = x;
+        for (i, title) in Self::strip_titles(doc).iter().enumerate() {
+            let label = format!(" {} ", clip(title, 14));
+            let width = label.chars().count();
+            if at + width > x + w {
+                break;
+            }
+            let style = if i == self.shown_panel(doc) {
+                Style::fg(look::bg()).on(look::blue()).bold()
+            } else {
+                Style::fg(look::dim()).on(look::panel())
+            };
+            g.put(at, y, &label, style);
+            at += width;
+        }
+    }
+
+    /// The panel whose title of the strip is at column `x`, when the strip is shown.
+    fn strip_panel(&self, x: usize, cols: usize) -> Option<usize> {
+        let doc = self.shown()?;
+        let end = self.panes_space(cols, self.size.1).0 + self.panes_space(cols, self.size.1).2;
+        let mut at = SIDEBAR + 1;
+        for (i, title) in Self::strip_titles(doc).iter().enumerate() {
+            let width = clip(title, 14).chars().count() + 2;
+            if at + width > end {
+                break;
+            }
+            if x >= at && x < at + width {
+                return Some(i);
+            }
+            at += width;
+        }
+        None
+    }
+
+    /// The digit `S` gave each panel, in the middle of it.
+    fn draw_digits(&self, g: &mut Grid, doc: Option<&Workspace>, area: Rect) {
+        let Some(doc) = doc else { return };
+        let rects = self.layout(doc, area);
+        for (n, at) in panel_order(doc).into_iter().enumerate() {
+            let Some(&(rx, ry, rw, rh)) = rects.get(at).filter(|r| r.2 > 0) else {
+                continue;
+            };
+            let label = format!(" {} ", n + 1);
+            g.put(
+                rx + rw.saturating_sub(label.len()) / 2,
+                ry + rh / 2,
+                &label,
+                Style::fg(look::bg()).on(look::blue()).bold(),
+            );
+        }
+    }
+
+    /// A view of the layout drawn as a panel: the diff is the diff viewer in its rectangle, and a
+    /// viewer is its box until it is drawn too (N167c).
+    fn view_panel(&self, g: &mut Grid, view: &contract::ViewSummary, rect: Rect, focused: bool) {
+        if let (contract::ViewKind::Diff, Some(c)) = (view.kind, &self.diff) {
+            c.draw_focused(
+                g,
+                &self.docs(),
+                &self.label(c.workspace()),
+                self.now_ms,
+                focused,
+            );
+            return;
+        }
+        let (title, border) = if focused {
+            (Style::fg(look::blue()).bold(), look::blue())
+        } else {
+            (Style::fg(look::fg()).bold(), look::line())
+        };
+        let name = match view.kind {
+            contract::ViewKind::Diff => "± diff".to_owned(),
+            contract::ViewKind::Viewer => format!("▤ {}", view.title),
+        };
+        g.boxed(rect, &name, border, title, None);
+        if view.kind != contract::ViewKind::Viewer {
+            skeleton(g, rect);
+            return;
+        }
+        let room = inner(rect);
+        match (self.viewing_here(), &self.tabs_behind) {
+            (Some(Viewing::Text(t)), _) => t.draw(g, room),
+            (Some(Viewing::Doc(v)), _) => v.draw(g, room, false),
+            // A plan is over the panels: the tabs it covers stay drawn.
+            (None, Some(t)) if self.viewer_overlay() => t.draw(g, room),
+            // The daemon has the files, this terminal has not read them: they are named.
+            _ => {
+                for (i, f) in view.files.iter().enumerate().take(room.3) {
+                    g.put(
+                        room.0 + 1,
+                        room.1 + i,
+                        &clip(f, room.2.saturating_sub(2)),
+                        Style::fg(look::dim()),
+                    );
+                }
+            }
+        }
+    }
+
     /// One pane fills the area; two sit side by side; from three, the first takes the left
     /// half and the rest stack on the right.
     fn panes_area(
@@ -5918,7 +6350,17 @@ impl View {
         }
         let rects = self.layout(doc, (x, y, w, h));
         let opened = self.opened.as_deref() == Some(doc.head.id.as_str());
-        for (i, (summary, rect)) in doc.panes.iter().zip(rects).enumerate() {
+        if self.single() {
+            self.draw_strip(g, doc, (x, y, w));
+        }
+        for (j, view) in doc.views.iter().enumerate() {
+            let at = doc.panes.len() + j;
+            let rect = rects.get(at).copied().unwrap_or((0, 0, 0, 0));
+            if rect.2 > 0 {
+                self.view_panel(g, view, rect, opened && at == self.focus);
+            }
+        }
+        for (i, (summary, rect)) in doc.panes.iter().zip(rects.iter().copied()).enumerate() {
             if rect.2 == 0 {
                 continue;
             }
@@ -6374,6 +6816,10 @@ const PANEL_KEYS: &[(&str, &str)] = &[
     ("n", "panel nuevo (por el lado más largo)"),
     ("| -", "panel nuevo a la derecha · debajo"),
     ("H J K L", "intercambiar con el panel de ese lado"),
+    (
+        "S",
+        "intercambiar con el panel que lleve el número que sigue",
+    ),
     ("< >", "panel más estrecho · más ancho"),
     ("{ }", "panel más bajo · más alto"),
     ("N", "panel nuevo con un programa (^␣ N)"),
@@ -6384,7 +6830,8 @@ const PANEL_KEYS: &[(&str, &str)] = &[
         "o w s t",
         "abrir una carpeta · worktree nuevo · subir el worktree · archivos",
     ),
-    ("d a m ,", "cambios · avisos · teléfono · ajustes"),
+    ("d", "los cambios como un panel: abre, enfoca o cierra"),
+    ("a m ,", "avisos · teléfono · ajustes"),
     ("esc", "volver a los workspaces"),
 ];
 const TERMINAL_KEYS: &[(&str, &str)] = &[
@@ -6498,6 +6945,40 @@ fn panes_rect(cols: usize, rows: usize) -> Rect {
 
 /// One pane fills the area; two sit side by side; from three, the first takes the left half
 /// and the rest stack on the right.
+/// The panels of a workspace in the order of its layout, left to right and top to bottom: the
+/// numbers `S` shows. Without a layout, the order they are listed in.
+fn panel_order(doc: &Workspace) -> Vec<usize> {
+    fn walk<'a>(tree: &'a contract::Layout, out: &mut Vec<&'a str>) {
+        match tree {
+            contract::Layout::Pane { pane } => out.push(pane),
+            contract::Layout::Split { a, b, .. } => {
+                walk(a, out);
+                walk(b, out);
+            }
+        }
+    }
+    let total = doc.panes.len() + doc.views.len();
+    let Some(tree) = &doc.layout else {
+        return (0..total).collect();
+    };
+    let mut ids = Vec::new();
+    walk(tree, &mut ids);
+    ids.into_iter()
+        .filter_map(|id| (0..total).find(|i| leaf_id(doc, *i) == Some(id)))
+        .collect()
+}
+
+/// The id of the panel `i` of a workspace: its panes first, then its views.
+fn leaf_id(doc: &Workspace, i: usize) -> Option<&str> {
+    match doc.panes.get(i) {
+        Some(p) => Some(p.id.as_str()),
+        None => doc
+            .views
+            .get(i.checked_sub(doc.panes.len())?)
+            .map(|v| v.id.as_str()),
+    }
+}
+
 fn pane_rects(n: usize, (x, y, w, h): Rect) -> Vec<Rect> {
     let half = w / 2;
     match n {
@@ -6744,6 +7225,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('z') => Key::Fold,
         KeyCode::Char('g') => Key::Group,
         KeyCode::Char('G') => Key::NewGroup,
+        KeyCode::Char('S') => Key::SwapPick,
         KeyCode::Char('H') => Key::Swap(split::Side::Left),
         KeyCode::Char('L') => Key::Swap(split::Side::Right),
         KeyCode::Char('K') => Key::Swap(split::Side::Up),
@@ -6832,6 +7314,14 @@ fn commits(n: u64) -> String {
 
 /// How much of a split one press of `<` `>` `{` `}` moves, in thousandths.
 const RESIZE_STEP: i16 = 50;
+
+/// The least a panel is, in columns and rows: a split that would leave less is not made (REQ-736).
+const MIN_PANEL: (usize, usize) = (14, 5);
+/// Under this many columns the terminal shows one panel at a time (REQ-738).
+const SINGLE_BELOW: usize = 64;
+/// A panel this wide has its viewer beside it; a narrower one has it below (REQ-731).
+const WIDE_PANEL: usize = 80;
+const NO_ROOM: &str = "no cabe: f amplía un panel o cierra otro";
 
 /// How long a panel the client asked for is waited for, to focus it.
 const NEW_PANE_WAIT_MS: u64 = 5000;
@@ -6959,6 +7449,27 @@ fn answer(view: &mut View, src: Src, reply: Reply) {
 
 /// Send what the diff viewer asked for. A node it asked to be made is opened as soon as the
 /// reply names it.
+/// The files the viewer shows are told to the daemon as tabs of the workspace's viewer view; the
+/// panel that comes of it takes the focus (REQ-731).
+fn serve_views(view: &mut View, client: &mut Client) {
+    for ask in view.take_view_asks() {
+        let reply = client.cmd(Cmd::OpenView {
+            workspace: ask.workspace,
+            kind: contract::ViewKind::Viewer,
+            path: Some(ask.path),
+            beside: ask.beside,
+            dir: Some(ask.dir),
+        });
+        view.focus_new_with_keys(&reply);
+        if let Ok(Err(e)) = &reply {
+            view.flash(&format!(
+                "No se pudo abrir el panel del visor: {}",
+                e.message
+            ));
+        }
+    }
+}
+
 fn serve_asks(view: &mut View, client: &mut Client) {
     loop {
         let asks = view.take_asks();
@@ -7469,6 +7980,38 @@ fn do_after(
             let reply = client.cmd(Cmd::ClosePane { pane });
             told(view, "No se pudo cerrar el panel", "panel cerrado", reply);
         }
+        After::OpenDiff(workspace) => {
+            let reply = client.cmd(Cmd::OpenView {
+                workspace,
+                kind: contract::ViewKind::Diff,
+                path: None,
+                beside: None,
+                dir: None,
+            });
+            view.focus_new(&reply);
+            if let Ok(Err(e)) = &reply {
+                view.flash(&format!("No se pudo abrir el diff: {}", e.message));
+            }
+        }
+        After::CloseView(id) => {
+            let reply = client.cmd(Cmd::CloseView {
+                view: id,
+                path: None,
+            });
+            told(view, "No se pudo cerrar el panel", "panel cerrado", reply);
+        }
+        After::CloseViewTab { view: id, path } => {
+            let reply = client.cmd(Cmd::CloseView {
+                view: id,
+                path: Some(path),
+            });
+            told(
+                view,
+                "No se pudo cerrar la pestaña",
+                "pestaña cerrada",
+                reply,
+            );
+        }
         After::RemoveWorkspace {
             workspace,
             remove_worktree,
@@ -7501,12 +8044,16 @@ fn do_after(
         }
         After::Conv(act) => conversation_cmd(view, client, act),
         After::ReadMarkdown { workspace, path } => {
+            let asked = path.clone();
             let cmd = Cmd::ReadMarkdown {
                 workspace: workspace.clone(),
                 path,
             };
             match read_doc(client, cmd) {
-                Ok(doc) => view.open_viewer(doc, viewer::Source::File, workspace),
+                Ok(doc) => {
+                    view.open_viewer(doc, viewer::Source::File, workspace.clone());
+                    view.queue_view(&workspace, &asked);
+                }
                 Err(why) => view.flash(&why),
             }
         }
@@ -7634,6 +8181,7 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        serve_views(&mut view, &mut client);
         for repo in view.take_worktree_asks() {
             let reply = client.cmd_within(
                 Cmd::ListWorktrees {
@@ -7755,6 +8303,35 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// What the daemon and the client do once a file is open (REQ-731): the workspace has a viewer
+    /// view at the right of its layout, and the client has the focus and the keys in it.
+    fn attach_viewer(v: &mut View) {
+        let ws = v.selected_id().unwrap();
+        if v.viewer_panel().is_none() {
+            let doc = v.workspaces.get_mut(&ws).unwrap();
+            let old = doc.layout.take().unwrap_or(contract::Layout::Pane {
+                pane: doc.panes[0].id.clone(),
+            });
+            doc.layout = Some(contract::Layout::Split {
+                dir: SplitDir::Row,
+                ratio: 150,
+                a: Box::new(old),
+                b: Box::new(contract::Layout::Pane {
+                    pane: "viewer-view".into(),
+                }),
+            });
+            doc.views.push(contract::ViewSummary {
+                id: "viewer-view".into(),
+                kind: contract::ViewKind::Viewer,
+                title: "visor".into(),
+                files: Vec::new(),
+            });
+        }
+        let (at, _) = v.viewer_panel().unwrap();
+        v.open(&ws, at);
+        v.typing = true;
+    }
 
     /// The shared fixtures as the documents a client holds: the same ones the phone draws.
     fn fixture_docs() -> Vec<serde_json::Value> {
@@ -8009,10 +8586,7 @@ mod tests {
                 v.worktree.is_none() && v.project.is_none() && v.prs.is_none(),
                 "{key:?}"
             );
-            assert!(
-                v.changes.is_none() && !v.tree_on && v.opened.is_none(),
-                "{key:?}"
-            );
+            assert!(!v.tree_on && v.opened.is_none(), "{key:?}");
             assert!(
                 v.take_asks().is_empty(),
                 "{key:?} asked the daemon for something"
@@ -8648,25 +9222,40 @@ mod tests {
         assert!(v.flash.contains("review lista"));
     }
 
-    /// A view whose first workspace reviews pull request 142.
-    fn review_view() -> View {
-        let mut docs = fixture_docs();
-        for d in docs.iter_mut().filter(|d| d["type"] == "workspace") {
-            d["review"] = serde_json::json!({"pr": 142, "base": "main"});
-        }
+    /// The fixtures' first workspace with a diff view at the right edge of its layout, and the
+    /// documents the daemon would send for it (REQ-684).
+    fn with_diff_view(review: bool) -> View {
+        let docs = with_diff_docs(review);
         let mut v = View::new("fixtures");
         v.set_size(120, 30);
         v.sync(docs.iter());
         v
     }
 
-    /// REQ-589: the workspace of a review is its agent and, beside it, the diff of the pull request
-    /// against its base, which has the keyboard when it is asked for (`d`, `l`, a click) and gives it
-    /// back to the commands with the leader.
+    fn with_diff_docs(review: bool) -> Vec<serde_json::Value> {
+        let mut docs = fixture_docs();
+        for d in docs.iter_mut().filter(|d| d["type"] == "workspace") {
+            if review {
+                d["review"] = serde_json::json!({"pr": 142, "base": "main"});
+            }
+            let old = d["layout"].clone();
+            d["rev"] = serde_json::json!(d["rev"].as_u64().unwrap_or(0) + 100);
+            d["views"] = serde_json::json!([{"id": "d1", "kind": "diff", "title": "diff"}]);
+            d["layout"] = serde_json::json!({
+                "t": "split", "dir": "row", "ratio": 500,
+                "a": old, "b": {"t": "pane", "pane": "d1"},
+            });
+        }
+        docs
+    }
+
+    /// REQ-728, REQ-730: the diff of a review is a panel of its layout, at the right of the agent:
+    /// the panel keys reach it, `↵` gives it the keyboard, the leader gives it back, a click takes
+    /// it, and it asks for the pull request's changes and no more.
     #[test]
-    fn a_review_is_the_agent_and_the_diff_beside_it() {
-        let mut v = review_view();
-        assert!(v.rv.is_some(), "the diff is made with the workspace");
+    fn the_diff_of_a_review_is_a_panel_at_the_right_of_the_agent() {
+        let mut v = with_diff_view(true);
+        assert!(v.diff.is_some(), "the diff is made with the workspace");
         let asks = v.take_asks();
         assert!(
             asks.iter().any(|a| matches!(
@@ -8677,7 +9266,7 @@ mod tests {
                     ..
                 }
             )),
-            "it asks for the pull request's changes, no more: {asks:?}"
+            "it asks for the pull request's changes: {asks:?}"
         );
         assert!(
             !asks.iter().any(|a| matches!(
@@ -8697,48 +9286,73 @@ mod tests {
         );
         let diff_x = v.diff_rect().0;
         assert!(diff_x > SIDEBAR + 30, "the agent keeps its share: {diff_x}");
-        // the keyboard moves between them with the keys of the panels: the diff is the panel at the
-        // right of the last one (the fixture's workspace has several)
-        assert!(!v.rv_focus);
-        for _ in 0..4 {
+        // the panel keys move the focus to it and back
+        assert!(!v.diff_focused());
+        for _ in 0..6 {
             v.press(Key::Right);
         }
-        assert!(v.rv_focus, "l goes to the diff");
+        assert!(
+            v.diff_focused() && !v.typing,
+            "l goes to the diff, with no keys"
+        );
         v.press(Key::Left);
-        assert!(!v.rv_focus, "h comes back");
-        for _ in 0..4 {
+        assert!(!v.diff_focused(), "h comes back");
+        for _ in 0..8 {
             v.press(Key::Next);
         }
-        assert!(v.rv_focus, "tab after the last panel is the diff");
-        v.press(Key::Left);
-        assert!(!v.rv_focus);
-        // d gives the keys to the diff, and the leader gives them back
-        v.press(Key::Changes);
-        assert!(v.rv_focus && v.typing && v.rv_typing());
-        assert!(v.changes.is_none(), "no screen of its own opens");
+        assert!(v.diff_focused(), "tab reaches it too");
+        // ↵ gives it the keys and the leader gives them back
+        v.press(Key::Enter);
+        assert!(v.typing && v.diff_typing());
         v.press_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
         assert!(!v.typing);
         // a click in the diff takes the keys, one in the agent gives them back to it
         let at = v.diff_rect();
         v.click(at.0 + 5, at.1 + 4, 120, 30);
-        assert!(v.rv_focus && v.typing);
+        assert!(v.diff_focused() && v.typing);
         v.click(SIDEBAR + 6, 6, 120, 30);
-        assert!(!v.rv_focus);
-        // the tree is not here: the review has its diff
+        assert!(!v.diff_focused());
+        // the tree is no longer in the diff's way
         v.press_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
         v.press(Key::Tree);
-        assert!(!v.tree_on && v.flash.contains("diff al lado"));
+        assert!(v.tree_on);
     }
 
-    /// REQ-590: `d` opens the diff beside the panels of any workspace, on the uncommitted changes,
-    /// `d` closes it, and `z` makes it fill the area.
+    /// REQ-729, REQ-730: `d` asks for the diff as a panel, focuses it when it shows up and never
+    /// gives it the keys; `↵` does, `esc` and the leader give them back and `q` closes the view; `d`
+    /// on the focused diff closes it and `d` from elsewhere focuses it.
     #[test]
-    fn d_opens_the_diff_beside_the_panels_of_any_workspace_and_z_fills_the_area() {
+    fn d_opens_the_diff_as_a_panel_and_q_or_d_close_it() {
         let mut v = fixture_view();
-        assert!(v.rv.is_none());
-        v.press(Key::Changes);
-        assert!(v.changes.is_none(), "no screen of its own: there is room");
-        assert!(v.rv.is_some() && v.rv_focus && v.rv_typing());
+        assert!(v.diff.is_none());
+        let ws = v.selected_id().unwrap();
+        assert_eq!(v.press(Key::Changes), After::OpenDiff(ws.clone()));
+        assert!(
+            v.diff.is_none(),
+            "nothing is drawn before the daemon says so"
+        );
+        // the daemon makes the view and sends the workspace with it
+        v.focus_new(&Ok(Ok(Some(serde_json::json!({ "view": "d1" })))));
+        let mut docs = fixture_docs();
+        for d in docs.iter_mut().filter(|d| d["id"] == ws.as_str()) {
+            let old = d["layout"].clone();
+            d["rev"] = serde_json::json!(d["rev"].as_u64().unwrap_or(0) + 100);
+            d["views"] = serde_json::json!([{"id": "d1", "kind": "diff", "title": "diff"}]);
+            d["layout"] = serde_json::json!({"t": "split", "dir": "row", "ratio": 500,
+                "a": old, "b": {"t": "pane", "pane": "d1"}});
+        }
+        v.sync(docs.iter());
+        assert!(v.diff.is_some(), "the diff is made");
+        assert!(
+            v.diff_focused(),
+            "the new panel has the focus: focus {} opened {:?} selected {:?} panel {:?} pending {:?}",
+            v.focus,
+            v.opened,
+            v.selected_id(),
+            v.diff_panel().map(|p| p.0),
+            v.new_pane
+        );
+        assert!(!v.typing, "and not the keys");
         let asks = v.take_asks();
         assert!(
             matches!(
@@ -8748,7 +9362,7 @@ mod tests {
                     ..
                 }]
             ),
-            "the uncommitted changes, the viewer's first view: {asks:?}"
+            "the uncommitted changes, the diff's first view: {asks:?}"
         );
         v.changes_made(Src::Uncommitted, "n1");
         let _ = v.take_asks();
@@ -8757,7 +9371,9 @@ mod tests {
             t.contains("╭─ zsh") && t.contains("diff · contra HEAD"),
             "both are drawn:\n{t}"
         );
-        // the keys are the viewer's: 3 is the general view, which asks for it
+        // ↵ gives it the keys: 3 is the general view, which asks for it
+        v.press(Key::Enter);
+        assert!(v.diff_typing());
         v.press_key(plain(KeyCode::Char('3')));
         assert!(
             v.take_asks().iter().any(|a| matches!(
@@ -8769,24 +9385,369 @@ mod tests {
             )),
             "1 2 3 change the view"
         );
-        // z fills the area, z gives it back
-        let beside = v.diff_rect();
-        v.press_key(plain(KeyCode::Char('z')));
-        assert_eq!(v.diff_rect().0, SIDEBAR + 1, "all of the area");
-        v.press_key(plain(KeyCode::Char('z')));
-        assert_eq!(v.diff_rect(), beside);
-        // d closes it, and the panels have their width back
-        v.press_key(plain(KeyCode::Char('d')));
-        assert!(v.rv.is_none() && !v.diff_open && !v.rv_focus && !v.typing);
+        // esc gives the keys back and closes nothing
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(!v.typing && v.diff.is_some());
+        // q closes the view
+        v.press(Key::Enter);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView("d1".into())
+        );
+        // d on the focused diff closes it; from another panel it focuses it
+        assert_eq!(v.press(Key::Changes), After::CloseView("d1".into()));
+        v.press(Key::Left);
+        assert!(!v.diff_focused());
+        assert_eq!(v.press(Key::Changes), After::Continue);
+        assert!(v.diff_focused() && !v.typing);
+        // the daemon says it is gone: the diff is let go and its nodes with it
+        v.sync(fixture_docs().iter());
+        assert!(v.diff.is_none());
         assert!(
             v.take_asks().contains(&Ask::Close("n1".into())),
             "its nodes are let go"
         );
-        // in the workspace of a review d only gives the keys back
-        let mut r = review_view();
-        r.press(Key::Changes);
-        r.press_key(plain(KeyCode::Char('d')));
-        assert!(r.rv.is_some() && !r.typing, "the diff of a review stays");
+    }
+
+    /// REQ-734, REQ-735: the swap keys reach a view like a pane, `S` numbers the panels in the order
+    /// of the layout and the next digit swaps, and `x` closes a view without asking.
+    #[test]
+    fn a_view_is_swapped_by_the_keys_and_by_s_and_closed_by_x() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let (at, view) = v.diff_panel().unwrap();
+        let ws = v.selected_id().unwrap();
+        v.open(&ws, at);
+        let doc = v.shown().unwrap();
+        let neighbour = doc.panes.last().unwrap().id.clone();
+        // H swaps the diff with the panel on its left
+        assert_eq!(
+            v.press(Key::Swap(split::Side::Left)),
+            After::Swap(view.clone(), neighbour.clone())
+        );
+        // S shows the digits, the next one picks: the first of the layout is the first pane
+        assert_eq!(v.press(Key::SwapPick), After::Continue);
+        assert!(v.pick_swap);
+        let t = v.plain(120, 30);
+        assert!(t.contains(" 1 ") && t.contains(" 2 "), "{t}");
+        let first = v.shown().unwrap().panes[0].id.clone();
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('1'))),
+            After::Swap(view.clone(), first)
+        );
+        assert!(!v.pick_swap);
+        // another key, or a digit with no panel, cancels
+        v.press(Key::SwapPick);
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(!v.pick_swap);
+        v.press(Key::SwapPick);
+        assert_eq!(v.press_key(plain(KeyCode::Char('9'))), After::Continue);
+        assert!(v.flash.contains("no hay"));
+        // x closes a view at once, with no question
+        assert_eq!(v.press(Key::Close), After::CloseView(view));
+        assert!(v.manage.is_none());
+    }
+
+    /// REQ-737: a split that would leave a panel under 14 columns or 5 rows is not made.
+    #[test]
+    fn a_split_that_leaves_a_panel_too_small_is_not_made() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.set_size(66, 14);
+        assert_eq!(v.press(Key::SplitRow), After::Continue);
+        assert!(v.flash.contains("no cabe"), "{}", v.flash);
+        v.set_size(120, 40);
+        v.press(Key::Down);
+        assert!(matches!(v.press(Key::SplitCol), After::NewPane(..)));
+    }
+
+    /// REQ-731, REQ-732: a file the viewer shows is told to the daemon as a tab, beside the panel
+    /// the keys were in (to its right when that is 80 columns wide, else below it), and the
+    /// viewer that comes of it has the focus and the keys.
+    #[test]
+    fn a_file_is_asked_beside_the_panel_it_was_opened_from_and_the_viewer_takes_the_keys() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        let (at, diff) = v.diff_panel().unwrap();
+        v.open(&ws, at);
+        v.typing = true;
+        // the diff is narrower than 80 columns at 120: below it
+        v.open_text(
+            ws.clone(),
+            "src/a.rs".into(),
+            doc_at("/x/src/a.rs", 5),
+            false,
+        );
+        let asks = v.take_view_asks();
+        assert_eq!(
+            asks,
+            [ViewAsk {
+                workspace: ws.clone(),
+                path: "src/a.rs".into(),
+                beside: Some(diff.clone()),
+                dir: SplitDir::Col,
+            }]
+        );
+        // wide: beside it
+        v.set_size(240, 30);
+        v.open_text(
+            ws.clone(),
+            "src/b.rs".into(),
+            doc_at("/x/src/b.rs", 5),
+            false,
+        );
+        assert_eq!(v.take_view_asks()[0].dir, SplitDir::Row);
+        // the daemon makes the viewer and sends the workspace with it: it has the focus and the keys
+        v.focus_new_with_keys(&Ok(Ok(Some(serde_json::json!({ "view": "viewer-view" })))));
+        v.typing = false;
+        let doc = v.workspaces.get_mut(&ws).unwrap();
+        let old = doc.layout.take().unwrap();
+        doc.layout = Some(contract::Layout::Split {
+            dir: SplitDir::Col,
+            ratio: 500,
+            a: Box::new(old),
+            b: Box::new(contract::Layout::Pane {
+                pane: "viewer-view".into(),
+            }),
+        });
+        doc.views.push(contract::ViewSummary {
+            id: "viewer-view".into(),
+            kind: contract::ViewKind::Viewer,
+            title: "b.rs".into(),
+            files: vec!["src/a.rs".into(), "src/b.rs".into()],
+        });
+        v.clamp();
+        assert!(v.viewer_focused(), "the viewer has the focus");
+        assert!(v.viewer_typing(), "and the keys");
+    }
+
+    /// REQ-733: `q` closes the tab that shows and tells the daemon, and the last closes the view;
+    /// `esc` gives the keys back and closes nothing.
+    #[test]
+    fn q_closes_a_tab_and_the_last_one_closes_the_view_and_the_daemon_is_told() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        attach_viewer(&mut v);
+        v.open_text(ws.clone(), "b.rs".into(), doc_at("/x/b.rs", 5), false);
+        attach_viewer(&mut v);
+        let (_, view) = v.viewer_panel().unwrap();
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(!v.typing && v.viewer.is_some());
+        attach_viewer(&mut v);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseViewTab {
+                view: view.clone(),
+                path: "b.rs".into()
+            },
+            "the tab that showed"
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(view),
+            "the last tab closes the view"
+        );
+        assert!(v.viewer.is_none());
+    }
+
+    /// A viewer that fails to open leaves no keys waiting, a refused file is told to the daemon by
+    /// the path it was asked by, and the viewer holds the files of one workspace.
+    #[test]
+    fn a_failed_viewer_leaves_no_keys_waiting_and_the_viewer_holds_one_workspace() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.open_refused(ws.clone(), "assets/logo.png".into(), Some(10));
+        assert_eq!(v.take_view_asks()[0].path, "assets/logo.png");
+        v.focus_new_with_keys(&Ok(Err(ErrorBody {
+            code: contract::ErrorCode::BadRequest,
+            message: "no".into(),
+        })));
+        assert!(!v.keys_on_arrival && v.new_pane.is_none());
+        // d after it focuses the diff and gives it no keys (REQ-729)
+        v.press(Key::Changes);
+        assert!(v.diff_focused() && !v.typing);
+        // a file of another workspace starts the viewer again
+        v.open_text(ws, "a.rs".into(), doc_at("/x/a.rs", 3), false);
+        v.open_text("other".into(), "b.rs".into(), doc_at("/x/b.rs", 3), false);
+        let Some(Viewing::Text(t)) = &v.viewer else {
+            panic!("a viewer of text");
+        };
+        assert_eq!(t.rels(), ["b.rs"], "a.rs was another workspace's");
+    }
+
+    /// A press that begins in a pane after a click in the viewer is the pane's.
+    #[test]
+    fn a_click_in_the_viewer_leaves_no_drag_for_the_pane_that_follows() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.open_text(ws, "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        attach_viewer(&mut v);
+        let at = v.viewer_outer_rect();
+        v.press_select(at.0 + 3, at.1 + 3, 120, 30);
+        assert!(v.viewer_drag);
+        v.press_select(SIDEBAR + 4, 6, 120, 30);
+        assert!(!v.viewer_drag, "the next press is not the viewer's");
+    }
+
+    /// ↵ on a viewer panel this terminal never read reads its last file.
+    #[test]
+    fn enter_on_a_viewer_panel_that_was_never_read_here_reads_its_last_file() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        attach_viewer(&mut v);
+        v.typing = false;
+        v.viewer = None;
+        let doc = v.workspaces.get_mut(&ws).unwrap();
+        doc.views[1].files = vec!["a.rs".into(), "docs/b.rs".into()];
+        assert_eq!(
+            v.press(Key::Enter),
+            After::ReadFile {
+                workspace: ws,
+                path: "docs/b.rs".into(),
+                size: None,
+                keep: false
+            }
+        );
+    }
+
+    /// REQ-738: under 64 columns the focused panel fills the area under a strip of titles, `h` `l`
+    /// and `tab` change the panel, and a click on a title does too.
+    #[test]
+    fn under_64_columns_one_panel_is_shown_under_a_strip_of_titles() {
+        let mut v = with_diff_view(false);
+        v.set_size(60, 30);
+        v.press(Key::Enter);
+        let rects = v.layout(v.shown().unwrap(), v.panes_space(60, 30));
+        let shown: Vec<usize> = (0..rects.len()).filter(|i| rects[*i].2 > 0).collect();
+        assert_eq!(shown, [v.focus], "only the focused panel has room");
+        let screen = v.plain(60, 30);
+        assert!(
+            screen.contains(" zsh ") && screen.contains("± diff"),
+            "the strip names the panels:\n{screen}"
+        );
+        let first = v.focus;
+        v.press(Key::Right);
+        assert_eq!(v.focus, first + 1, "l goes to the next panel");
+        v.press(Key::Next);
+        assert_eq!(v.focus, first + 2, "tab does");
+        v.press(Key::Left);
+        assert_eq!(v.focus, first + 1, "h goes back");
+        // a click on a title of the strip shows that panel
+        let at = v.strip_panel(SIDEBAR + 2, 60).unwrap();
+        assert_eq!(at, 0);
+        v.click(SIDEBAR + 2, 1, 60, 30);
+        assert_eq!(v.focus, 0);
+        // the diff, when it is the panel shown, has the area
+        let (diff_at, _) = v.diff_panel().unwrap();
+        let ws = v.selected_id().unwrap();
+        v.open(&ws, diff_at);
+        v.sync(with_diff_docs(false).iter());
+        assert!(
+            v.diff_rect().2 > 0 && v.diff_rect().1 == 2,
+            "{:?}",
+            v.diff_rect()
+        );
+        // wide again: all of them
+        v.set_size(120, 30);
+        let rects = v.layout(v.shown().unwrap(), v.panes_space(120, 30));
+        assert!(rects.iter().filter(|r| r.2 > 0).count() > 1);
+        // and a split needs no room check when only one is shown
+        v.set_size(40, 30);
+        assert!(matches!(v.press(Key::SplitRow), After::NewPane(..)));
+    }
+
+    /// A workspace that is only highlighted shows its first panel on a narrow terminal, whatever
+    /// the open workspace's focus was.
+    #[test]
+    fn a_highlighted_workspace_shows_a_panel_on_a_narrow_terminal() {
+        let mut v = with_diff_view(false);
+        v.set_size(60, 30);
+        v.press(Key::Enter);
+        let (diff_at, _) = v.diff_panel().unwrap();
+        let ws = v.selected_id().unwrap();
+        v.open(&ws, diff_at);
+        assert!(diff_at >= 2);
+        // the open workspace's focus is not the focus of one that is only highlighted
+        v.opened = None;
+        let doc = v.shown().unwrap();
+        assert_eq!(v.shown_panel(doc), 0);
+        let rects = v.layout(doc, v.panes_space(60, 30));
+        assert_eq!(
+            rects.iter().filter(|r| r.2 > 0).count(),
+            1,
+            "one panel is up under the strip: {rects:?}"
+        );
+        assert!(rects[0].2 > 0, "the first");
+    }
+
+    /// A pane that is added moves the number of every view: the focus and the keys stay in the
+    /// diff, and are not a pane's by surprise.
+    #[test]
+    fn a_pane_that_is_added_does_not_take_the_keys_from_the_diff() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        let (at, _) = v.diff_panel().unwrap();
+        v.open(&ws, at);
+        v.press(Key::Enter);
+        assert!(v.diff_typing());
+        let mut docs = with_diff_docs(false);
+        for d in docs.iter_mut().filter(|d| d["id"] == ws.as_str()) {
+            d["rev"] = serde_json::json!(d["rev"].as_u64().unwrap() + 100);
+            let first = d["panes"][0].clone();
+            let mut extra = first.clone();
+            extra["id"] = serde_json::json!("p9");
+            d["panes"].as_array_mut().unwrap().push(extra);
+            let old = d["layout"].clone();
+            d["layout"] = serde_json::json!({"t": "split", "dir": "col", "ratio": 500,
+                "a": old, "b": {"t": "pane", "pane": "p9"}});
+        }
+        v.sync(docs.iter());
+        assert!(
+            v.diff_focused() && v.diff_typing(),
+            "the keys stay in the diff"
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('a'))),
+            After::Continue,
+            "and no pane gets them"
+        );
+        // the view goes while the keys are in it: no pane has them afterwards
+        v.sync(fixture_docs().iter());
+        assert!(!v.typing);
+    }
+
+    /// REQ-736: `f` fills the area with the diff as with any panel.
+    #[test]
+    fn f_fills_the_area_with_the_diff() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let (at, _) = v.diff_panel().unwrap();
+        v.open(&v.selected_id().unwrap(), at);
+        let beside = v.diff_rect();
+        v.press(Key::Full);
+        v.sync(with_diff_docs(false).iter());
+        assert_eq!(v.diff_rect().0, SIDEBAR + 1, "all of the area");
+        v.press(Key::Full);
+        v.sync(with_diff_docs(false).iter());
+        assert_eq!(v.diff_rect(), beside);
+    }
+
+    /// REQ-737: a diff that would leave a panel under 14 columns is not asked for.
+    #[test]
+    fn a_diff_that_does_not_fit_is_not_asked_for() {
+        let mut v = fixture_view();
+        v.set_size(70, 30);
+        assert_eq!(v.press(Key::Changes), After::Continue);
+        assert!(v.flash.contains("no cabe"), "{}", v.flash);
+        v.set_size(120, 30);
+        assert!(matches!(v.press(Key::Changes), After::OpenDiff(_)));
     }
 
     /// REQ-592: where picked lines are goes in the field of the agent of the workspace and the keys
@@ -8795,7 +9756,6 @@ mod tests {
     fn a_reference_goes_in_the_agents_field_or_is_copied_when_there_is_none() {
         let mut v = fixture_view();
         v.press(Key::Enter);
-        v.press(Key::Changes);
         assert_eq!(
             v.refer("@a.rs#L3 ".into()),
             After::Copy("@a.rs#L3 ".into()),
@@ -8813,27 +9773,12 @@ mod tests {
         v.set_size(120, 30);
         v.sync(docs.iter());
         v.press(Key::Enter);
-        v.press(Key::Changes);
-        assert!(v.rv_typing());
         assert_eq!(v.refer("@a.rs#L3-5 ".into()), After::Continue);
         assert_eq!(v.conv_ui["conv-1"].editor.text(), "@a.rs#L3-5 ");
-        assert!(!v.rv_focus && v.typing, "the keys are the agent's now");
-    }
-
-    /// The diff is let go with its workspace, and a terminal too narrow for both has the screen of `d`.
-    #[test]
-    fn the_diff_of_a_review_goes_with_it_and_a_narrow_terminal_has_none() {
-        let mut v = review_view();
-        let _ = v.take_asks();
-        v.press(Key::Down);
-        v.sync(fixture_docs().iter());
-        v.set_size(120, 30);
-        let _ = v.take_asks();
-        v.set_size(70, 30);
-        assert_eq!(v.diff_w(), 0, "no room for both");
-        let mut w = review_view();
-        w.set_size(70, 30);
-        assert!(w.rv.is_none());
+        assert!(
+            !v.diff_focused() && v.typing,
+            "the keys are the agent's now"
+        );
     }
 
     /// REQ-588: a workspace that reviews a pull request says which one, beside its marks.
@@ -9918,13 +10863,11 @@ mod tests {
         assert!(t.lines().next().unwrap().contains("⎇ feat/login"), "{t}");
     }
 
+    /// REQ-728: the diff panel watches its nodes while its view is there and lets them go when it
+    /// is not; the status bar says DIFF while the keys are in it.
     #[test]
-    fn d_opens_the_diff_over_the_panes_when_there_is_no_room_beside_them_and_esc_closes_it_and_stops_watching()
-     {
-        let mut v = fixture_view();
-        v.set_size(90, 44);
-        assert!(!v.plain(90, 44).contains(" vs HEAD"));
-        v.press(Key::Changes);
+    fn the_diff_panel_watches_its_nodes_and_lets_them_go_with_its_view() {
+        let mut v = with_diff_view(false);
         let asks = v.take_asks();
         assert!(
             matches!(
@@ -9936,42 +10879,35 @@ mod tests {
             ),
             "{asks:?}"
         );
-        let screen = v.plain(90, 44);
-        assert!(screen.contains(" vs HEAD"), "{screen}");
-        assert!(screen.lines().last().unwrap().contains("DIFF"));
-        assert!(screen.contains("leyendo los cambios"));
-
         v.changes_made(Src::Uncommitted, "the-node");
         assert_eq!(v.take_asks(), [Ask::Watch("the-node".into())]);
-        // Keys are the viewer's, never a pane's.
+        v.press(Key::Enter);
+        let (at, _) = v.diff_panel().unwrap();
+        let ws = v.selected_id().unwrap();
+        v.open(&ws, at);
+        v.press(Key::Enter);
+        let screen = v.plain(120, 30);
+        assert!(screen.lines().last().unwrap().contains("DIFF"), "{screen}");
+        // the keys are the diff's, never a pane's
         assert_eq!(v.press_key(plain(KeyCode::Char('x'))), After::Continue);
-        v.press_key(plain(KeyCode::Esc));
+        // the view goes: the nodes are let go, and the keys are not a pane's by surprise
+        v.sync(fixture_docs().iter());
+        assert!(v.diff.is_none() && !v.typing);
         assert_eq!(v.take_asks(), [Ask::Close("the-node".into())]);
-        assert!(!v.plain(90, 44).contains(" vs HEAD"));
-        assert!(
-            v.plain(90, 44)
-                .lines()
-                .last()
-                .unwrap()
-                .contains("WORKSPACE")
-        );
     }
 
     #[test]
-    fn clicking_the_sidebar_leaves_the_diff_and_a_click_in_it_picks_a_tab() {
-        let mut v = fixture_view();
-        v.set_size(90, 44);
-        v.press(Key::Changes);
+    fn a_click_in_the_diff_panel_picks_a_tab_and_one_in_the_sidebar_leaves_it() {
+        let mut v = with_diff_view(false);
         v.take_asks();
+        let at = v.diff_rect();
         // The second tab starts after the first, which is ` 1 Sin commitear ` wide.
-        v.click(SIDEBAR + 4 + 20, 2, 90, 44);
+        v.click(at.0 + 4 + 20, at.1 + 1, 120, 30);
         let asks = v.take_asks();
         assert!(matches!(&asks[..], [Ask::OpenCommits { .. }]), "{asks:?}");
-        v.click(3, 2, 90, 44);
-        assert!(
-            !v.plain(90, 44).contains(" vs HEAD"),
-            "the sidebar closes it"
-        );
+        assert!(v.diff_typing());
+        v.click(3, 2, 120, 30);
+        assert!(!v.diff_typing(), "the sidebar takes the keys back");
     }
 
     #[test]
@@ -12866,13 +13802,9 @@ mod tests {
             None,
             false,
         );
-        let screen = v.plain(120, 30);
         assert!(
-            screen.contains("▤ main.rs · 3 líneas") && screen.contains("println!(\"hola\");"),
-            "{screen}"
-        );
-        assert!(
-            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().workspace == ws && t.current().path().ends_with("src/main.rs"))
+            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().workspace == ws && t.current().path().ends_with("src/main.rs") && t.current().doc_title() == "main.rs"),
+            "the file is read into the viewer"
         );
 
         read_file(
@@ -12884,10 +13816,8 @@ mod tests {
             false,
         );
         assert!(
-            v.plain(120, 30)
-                .contains("binario · 48.0 KB · no se puede mostrar"),
-            "{}",
-            v.plain(120, 30)
+            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().hint() == "esc volver · q cerrar"),
+            "a refusal has only esc and q"
         );
 
         v.viewer = None;
@@ -13433,6 +14363,7 @@ mod tests {
     fn a_text_file_in_the_viewer_has_the_keys_the_paste_and_the_wheel_and_none_reaches_a_pane() {
         let (mut v, ws) = tree_view();
         v.open_text(ws.clone(), String::new(), text_doc(80), false);
+        attach_viewer(&mut v);
         assert!(v.viewer.is_some());
         assert!(v.plain(120, 30).contains("▤ main.rs · 80 líneas"));
         assert!(
@@ -13472,7 +14403,17 @@ mod tests {
         );
         assert!(v.viewer.is_some(), "and it stays open");
         v.open_text(ws, String::new(), text_doc(5), false);
+        attach_viewer(&mut v);
         assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(
+            v.viewer.is_some() && !v.typing,
+            "esc gives the keys back and closes nothing"
+        );
+        attach_viewer(&mut v);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(_)
+        ));
         assert!(v.viewer.is_none());
     }
 
@@ -13481,6 +14422,7 @@ mod tests {
     fn s_flips_a_markdown_between_its_view_and_its_source() {
         let (mut v, ws) = tree_view();
         v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('s'))),
             After::ReadFile {
@@ -13494,6 +14436,7 @@ mod tests {
         doc.title = "plan.md".into();
         doc.path = "/x/plan.md".into();
         v.open_text(ws.clone(), String::new(), doc, false);
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('s'))),
             After::ReadMarkdown {
@@ -13508,6 +14451,7 @@ mod tests {
     fn a_binary_file_shows_its_refusal_with_its_weight_and_only_esc_works() {
         let (mut v, ws) = tree_view();
         v.open_refused(ws, "assets/logo.png".into(), Some(48 * 1024));
+        attach_viewer(&mut v);
         assert!(
             v.plain(120, 30)
                 .contains("binario · 48.0 KB · no se puede mostrar"),
@@ -13516,7 +14460,10 @@ mod tests {
         );
         assert_eq!(v.press_key(plain(KeyCode::Char('j'))), After::Continue);
         assert!(v.viewer.is_some());
-        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(_)
+        ));
         assert!(v.viewer.is_none());
     }
 
@@ -13591,6 +14538,7 @@ mod tests {
     #[test]
     fn the_viewer_has_the_wheel_the_clicks_and_the_drag() {
         let mut v = conv_view(true);
+        v.set_size(120, 30);
         v.convs.get_mut(CONV).unwrap().ask = Some(plan_ask());
         v.open_viewer(
             plan_doc(),
@@ -13619,7 +14567,9 @@ mod tests {
             })
         );
         // a drag copies, and a key lets go
-        v.open_viewer(plan_doc(), viewer::Source::File, String::new());
+        let ws = v.selected_id().unwrap();
+        v.open_viewer(plan_doc(), viewer::Source::File, ws);
+        attach_viewer(&mut v);
         let (x, y) = find_in(&v, "paso número 2", 30);
         assert!(v.press_select(x + 5, y, 120, 30));
         v.drag_to(x + 10, y);
@@ -13687,6 +14637,7 @@ mod tests {
     fn a_paste_while_the_viewer_is_open_goes_nowhere() {
         let mut v = conv_view(true);
         v.open_viewer(plan_doc(), viewer::Source::File, String::new());
+        attach_viewer(&mut v);
         assert_eq!(v.paste("q hola"), After::Continue);
         assert!(
             v.viewer.is_some(),
@@ -13724,6 +14675,7 @@ mod tests {
         );
         assert_eq!(v.press_key(plain(KeyCode::Char('3'))), After::Continue);
         v.open_viewer(plan_doc(), viewer::Source::File, String::new());
+        attach_viewer(&mut v);
         assert!(!v.plain(120, 30).contains("Aprobar"));
     }
 
@@ -13798,6 +14750,7 @@ mod tests {
         let root = v.session.as_ref().unwrap().workspaces[0].path.clone();
         let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
         v.open_text(ws, "src/auth.rs".into(), text_doc(10), false);
+        attach_viewer(&mut v);
         v.press_key(plain(KeyCode::Char('j')));
         v.press_key(plain(KeyCode::Char('v')));
         v.press_key(plain(KeyCode::Char('j')));
@@ -13808,13 +14761,18 @@ mod tests {
         assert!(v.typing, "the keyboard is the agent's");
         // with nothing picked, the line of the cursor; written from the folder the agent runs in
         v.convs.get_mut(CONV).unwrap().cwd = Some(format!("{root}/docs"));
+        attach_viewer(&mut v);
         assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
         assert_eq!(
             v.conv_ui[CONV].editor.text(),
             "@src/auth.rs#L2-3 @../src/auth.rs#L3 "
         );
-        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
-        assert!(v.viewer.is_none(), "esc closes it and the field is there");
+        attach_viewer(&mut v);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(_)
+        ));
+        assert!(v.viewer.is_none(), "q closes it");
     }
 
     /// REQ-639: a workspace with no agent has the reference copied.
@@ -13823,6 +14781,7 @@ mod tests {
         let mut v = fixture_view();
         let ws = v.selected_id().unwrap();
         v.open_text(ws, "src/auth.rs".into(), text_doc(10), false);
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Enter)),
             After::Copy("@src/auth.rs#L1 ".into())
@@ -13837,6 +14796,7 @@ mod tests {
         let mut v = conv_view(true);
         let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
         v.open_text(ws.clone(), "src/auth.rs".into(), text_doc(3), false);
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('r'))),
             After::ReadFile {
@@ -13873,6 +14833,7 @@ mod tests {
             doc_at("/x/src/a.rs", 20),
             false,
         );
+        attach_viewer(&mut v);
         assert!(!v.tree_focus, "the keys are the viewer's");
         assert_eq!(v.press_key(plain(KeyCode::Char('t'))), After::Continue);
         assert!(v.tree_on && v.tree_focus, "and now the tree's");
@@ -13888,6 +14849,7 @@ mod tests {
             After::ReadFile { ref path, keep: false, .. } if path == "Cargo.toml"
         ));
         v.open_text(ws, "Cargo.toml".into(), doc_at("/x/Cargo.toml", 5), false);
+        attach_viewer(&mut v);
         assert_eq!(tabs_of(&v).count(), 2);
         assert_eq!(tabs_of(&v).current().doc_title(), "Cargo.toml");
         assert!(!v.tree_focus, "the keys are the viewer's again");
@@ -13905,16 +14867,24 @@ mod tests {
     fn a_markdown_over_the_tabs_gives_them_back_when_it_closes() {
         let (mut v, ws) = tree_view();
         v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        attach_viewer(&mut v);
         v.open_text(ws.clone(), "b.rs".into(), doc_at("/x/b.rs", 5), false);
+        attach_viewer(&mut v);
         v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        attach_viewer(&mut v);
         assert!(matches!(v.viewer, Some(Viewing::Doc(_))));
         assert!(v.tabs_behind.is_some());
-        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseViewTab { .. }
+        ));
         assert_eq!(tabs_of(&v).count(), 2, "the tabs are back");
         assert!(v.tabs_behind.is_none());
         // a file read while the Markdown view is open (its `s`) joins them
         v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        attach_viewer(&mut v);
         v.open_text(ws, "c.rs".into(), doc_at("/x/c.rs", 5), false);
+        attach_viewer(&mut v);
         assert_eq!(tabs_of(&v).count(), 3);
         assert!(v.tabs_behind.is_none());
     }
@@ -13930,7 +14900,9 @@ mod tests {
             doc_at("/x/src/a.rs", 9),
             false,
         );
+        attach_viewer(&mut v);
         v.open_text(ws, "src/b.rs".into(), doc_at("/x/src/b.rs", 9), false);
+        attach_viewer(&mut v);
         v.press_key(plain(KeyCode::Tab));
         assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
         assert_eq!(v.conv_ui[CONV].editor.text(), "@src/a.rs#L1 ");
@@ -13942,7 +14914,9 @@ mod tests {
     fn the_mouse_moves_the_cursor_selects_and_changes_tab_in_the_viewer_of_text() {
         let (mut v, ws) = tree_view();
         v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 6), false);
+        attach_viewer(&mut v);
         v.open_text(ws, "b.rs".into(), doc_at("/x/b.rs", 6), false);
+        attach_viewer(&mut v);
         let (x, y) = find(&v, "let n = 3;");
         assert!(
             v.press_select(x + 4, y, 120, 30),
