@@ -18,7 +18,7 @@ use super::{Grid, Style, clip, erase, is_markdown, look, select};
 pub enum Act {
     Nothing,
     Close,
-    /// `esc` with nothing to cancel: give the keys back to the client's commands (REQ-720); `q`
+    /// `esc` with nothing to cancel: give the keys back to the client's commands (REQ-730); `q`
     /// closes.
     Leave,
     Copy(String),
@@ -1691,7 +1691,7 @@ mod tests {
         );
     }
 
-    /// REQ-640, REQ-723: `q` closes the tab that shows, and the last one closes the viewer; `esc`
+    /// REQ-640, REQ-733: `q` closes the tab that shows, and the last one closes the viewer; `esc`
     /// closes nothing: it gives the keys back.
     #[test]
     fn q_closes_a_tab_and_the_last_one_closes_the_viewer_and_esc_leaves() {

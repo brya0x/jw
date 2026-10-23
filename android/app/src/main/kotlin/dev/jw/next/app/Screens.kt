@@ -468,7 +468,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var waitingPane by remember(screen.id) { mutableStateOf<String?>(null) }
     var addError by remember(screen.id) { mutableStateOf<String?>(null) }
     LaunchedEffect(version, waitingPane) { waitingPane?.let { p -> nav.selectWhenShown(state, screen.id, p)?.let { set(it); waitingPane = null } } }
-    // The diff or a viewer asked for as a tab (REQ-730, REQ-731): the same wait as a shell's.
+    // The diff or a viewer asked for as a tab (REQ-740, REQ-741): the same wait as a shell's.
     var wantedFile by remember(screen.id) { mutableStateOf<String?>(null) }
     val askView = { kind: ViewKind, path: String? ->
         if (kind == ViewKind.Viewer) wantedFile = path
@@ -551,7 +551,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         }
         addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         referenceNote?.let { Mono(it, Palette.yellow, 12, lines = 2, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
-        // The diff or a viewer is a tab like a pane, after the panes (REQ-730).
+        // The diff or a viewer is a tab like a pane, after the panes (REQ-740).
         val tabView = ws.views.firstOrNull { it.id == screen.pane }
         if (tabView != null) {
             when (tabView.kind) {
@@ -884,7 +884,7 @@ private fun PaneTabs(
                         Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) (underline ?: Palette.blue) else Color.Transparent))
                     }
                 }
-                // The diff and the viewer come after the panes, each with a ✕ that closes it (REQ-730).
+                // The diff and the viewer come after the panes, each with a ✕ that closes it (REQ-740).
                 views.forEach { v ->
                     val on = v.id == current
                     Column(Modifier.clickable { select(v.id) }) {

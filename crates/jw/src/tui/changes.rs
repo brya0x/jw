@@ -157,7 +157,7 @@ pub enum Outcome {
     /// Lines were picked and `↵` asked for where they are, as `@file#L10-14`: the client puts it
     /// in the agent's field (REQ-592).
     Reference(String),
-    /// `↵` or `o` on a file: open it in a viewer, as a tab of the workspace's viewer (REQ-721).
+    /// `↵` or `o` on a file: open it in a viewer, as a tab of the workspace's viewer (REQ-731).
     Open(String),
 }
 
@@ -1640,7 +1640,7 @@ mod tests {
         assert!(r.text().contains('↪'), "w again wraps");
     }
 
-    /// REQ-721: `o`, and `↵` in the body, open the file the diff is on in a viewer; `↵` in the tree
+    /// REQ-731: `o`, and `↵` in the body, open the file the diff is on in a viewer; `↵` in the tree
     /// still goes to the file, and the list of commits has none.
     #[test]
     fn o_and_enter_in_the_body_open_the_file_the_diff_is_on() {

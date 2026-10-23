@@ -446,7 +446,7 @@ pub enum Key {
     /// Swap the focused panel with the one on this side.
     Swap(split::Side),
     /// `S`: number the panels and swap the focused one with the one whose digit comes next
-    /// (REQ-725).
+    /// (REQ-735).
     SwapPick,
     /// `z`: fold every group, or unfold them when all are folded (REQ-694).
     Fold,
@@ -558,7 +558,7 @@ pub struct Place {
 }
 
 /// A file the viewer shows, to be told to the daemon as a tab of the workspace's viewer view,
-/// beside `beside` along `dir` when the view is new (REQ-721, REQ-722).
+/// beside `beside` along `dir` when the view is new (REQ-731, REQ-732).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewAsk {
     pub workspace: String,
@@ -617,7 +617,7 @@ pub enum After {
     },
     /// Close a pane.
     ClosePane(String),
-    /// Open the diff of this workspace as a panel of its layout (REQ-718).
+    /// Open the diff of this workspace as a panel of its layout (REQ-728).
     OpenDiff(String),
     /// Close a view: the diff or a viewer.
     CloseView(String),
@@ -816,7 +816,7 @@ pub struct View {
     /// The list of pull requests to review, while it is open, and what it waits to ask (REQ-587).
     prs: Option<prs::Prs>,
     prs_asks: Vec<PrsAsk>,
-    /// The diff of the shown workspace while it has a diff view: a panel of its layout (N166b).
+    /// The diff of the shown workspace while it has a diff view: a panel of its layout (N167b).
     diff: Option<Changes>,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
@@ -837,13 +837,13 @@ pub struct View {
     new_pane: Option<(String, u64)>,
     /// The focused panel fills the area, and the box of the keys of the level is open.
     full: bool,
-    /// `S` was pressed: the panels show their digits and the next key picks one (REQ-725).
+    /// `S` was pressed: the panels show their digits and the next key picks one (REQ-735).
     pick_swap: bool,
     /// The press that began a mouse selection was the viewer's, so the drag and the release are.
     viewer_drag: bool,
     /// Files the viewer shows that the daemon has yet to be told of, for the loop to send.
     view_asks: Vec<ViewAsk>,
-    /// The viewer that is asked for takes the keys when it shows up (REQ-721).
+    /// The viewer that is asked for takes the keys when it shows up (REQ-731).
     keys_on_arrival: bool,
     help: bool,
     /// The phone link, and whether its box is open, how many phones are paired, whether the
@@ -1127,7 +1127,7 @@ impl View {
     }
 
     /// A key while the keyboard is in the diff: it is the diff's own; the leader and `esc` give
-    /// the keyboard back to the client's commands and `q` closes the view (REQ-720).
+    /// the keyboard back to the client's commands and `q` closes the view (REQ-730).
     fn diff_key(&mut self, ev: KeyEvent) -> After {
         if is_leader(&ev) || ev.modifiers.contains(KeyModifiers::CONTROL) {
             if is_leader(&ev) {
@@ -1806,7 +1806,7 @@ impl View {
             None => pane_rects(doc.panes.len(), area),
         };
         if self.single() {
-            // One panel at a time, under a strip of titles (REQ-728).
+            // One panel at a time, under a strip of titles (REQ-738).
             let one = (area.0, area.1 + 1, area.2, area.3.saturating_sub(1));
             let shown = self.shown_panel(doc);
             for (i, r) in rects.iter_mut().enumerate() {
@@ -1991,7 +1991,7 @@ impl View {
     }
 
     /// The key after `S`: a digit swaps the focused panel with the one that has it, anything else
-    /// cancels (REQ-725).
+    /// cancels (REQ-735).
     fn swap_pick_key(&mut self, ev: KeyEvent) -> After {
         self.pick_swap = false;
         let KeyCode::Char(c) = ev.code else {
@@ -2014,7 +2014,7 @@ impl View {
     }
 
     /// `d`: open the diff as a panel and focus it; focus it when it is there; close it when it
-    /// has the focus. It never gives it the keys (REQ-719).
+    /// has the focus. It never gives it the keys (REQ-729).
     fn toggle_diff(&mut self) -> After {
         let Some(ws) = self.selected_id() else {
             return After::Continue;
@@ -2043,7 +2043,7 @@ impl View {
     }
 
     /// Whether the focused panel can be split along `dir` and leave both halves their least size
-    /// (REQ-727). With no layout of the daemon's, or no panel, there is nothing to measure.
+    /// (REQ-737). With no layout of the daemon's, or no panel, there is nothing to measure.
     fn room_to_split(&self, dir: SplitDir) -> bool {
         if self.single() {
             return true;
@@ -2065,7 +2065,7 @@ impl View {
     }
 
     /// Whether every panel would keep its least size if one took half the width at the right edge
-    /// of the layout, as the daemon puts a new view (REQ-726). The daemon may put it where it
+    /// of the layout, as the daemon puts a new view (REQ-736). The daemon may put it where it
     /// was last, so this is only an estimate.
     fn room_for_edge_panel(&self) -> bool {
         if self.single() {
@@ -2172,7 +2172,7 @@ impl View {
     }
 
     /// The viewer the client asked for takes the focus and the keys as soon as it shows up
-    /// (REQ-721); a reply that is an error leaves nothing waiting.
+    /// (REQ-731); a reply that is an error leaves nothing waiting.
     pub fn focus_new_with_keys(&mut self, reply: &Reply) {
         self.focus_new(reply);
         self.keys_on_arrival = self.new_pane.is_some();
@@ -3977,7 +3977,7 @@ impl View {
         }
     }
 
-    // ---- the viewer as a panel (N166c) ----
+    // ---- the viewer as a panel (N167c) ----
 
     /// A plan still covers the panels' area; a file is the panel of its workspace's viewer view.
     fn viewer_overlay(&self) -> bool {
@@ -4052,7 +4052,7 @@ impl View {
 
     /// A file the viewer shows is told to the daemon as a tab of the viewer view, beside the
     /// focused panel (along its longer side when it is 80 columns or more, else below it), and
-    /// takes the keys when its panel shows up (REQ-721, REQ-722).
+    /// takes the keys when its panel shows up (REQ-731, REQ-732).
     fn queue_view(&mut self, workspace: &str, path: &str) {
         if workspace.is_empty() || path.is_empty() {
             return;
@@ -4303,7 +4303,7 @@ impl View {
     }
 
     /// `esc` with nothing to cancel: a plan over the panels closes, a file's viewer gives the keys
-    /// back to the client's commands (REQ-720).
+    /// back to the client's commands (REQ-730).
     fn leave_viewer(&mut self) -> After {
         if self.viewer_overlay() {
             self.close_viewer();
@@ -4314,7 +4314,7 @@ impl View {
     }
 
     /// `q` on a file's viewer: the tab that shows goes, and with the last the view; a Markdown
-    /// view lets the text tabs under it come back (REQ-723).
+    /// view lets the text tabs under it come back (REQ-733).
     fn close_file_viewer(&mut self) -> After {
         if self.viewer_overlay() {
             self.close_viewer();
@@ -6255,7 +6255,7 @@ impl View {
     }
 
     /// A view of the layout drawn as a panel: the diff is the diff viewer in its rectangle, and a
-    /// viewer is its box until it is drawn too (N166c).
+    /// viewer is its box until it is drawn too (N167c).
     fn view_panel(&self, g: &mut Grid, view: &contract::ViewSummary, rect: Rect, focused: bool) {
         if let (contract::ViewKind::Diff, Some(c)) = (view.kind, &self.diff) {
             c.draw_focused(
@@ -7288,11 +7288,11 @@ fn commits(n: u64) -> String {
 /// How much of a split one press of `<` `>` `{` `}` moves, in thousandths.
 const RESIZE_STEP: i16 = 50;
 
-/// The least a panel is, in columns and rows: a split that would leave less is not made (REQ-726).
+/// The least a panel is, in columns and rows: a split that would leave less is not made (REQ-736).
 const MIN_PANEL: (usize, usize) = (14, 5);
-/// Under this many columns the terminal shows one panel at a time (REQ-728).
+/// Under this many columns the terminal shows one panel at a time (REQ-738).
 const SINGLE_BELOW: usize = 64;
-/// A panel this wide has its viewer beside it; a narrower one has it below (REQ-721).
+/// A panel this wide has its viewer beside it; a narrower one has it below (REQ-731).
 const WIDE_PANEL: usize = 80;
 const NO_ROOM: &str = "no cabe: f amplía un panel o cierra otro";
 
@@ -7422,7 +7422,7 @@ fn answer(view: &mut View, src: Src, reply: Reply) {
 /// Send what the diff viewer asked for. A node it asked to be made is opened as soon as the
 /// reply names it.
 /// The files the viewer shows are told to the daemon as tabs of the workspace's viewer view; the
-/// panel that comes of it takes the focus (REQ-721).
+/// panel that comes of it takes the focus (REQ-731).
 fn serve_views(view: &mut View, client: &mut Client) {
     for ask in view.take_view_asks() {
         let reply = client.cmd(Cmd::OpenView {
@@ -8263,7 +8263,7 @@ mod tests {
 
     use super::*;
 
-    /// What the daemon and the client do once a file is open (REQ-721): the workspace has a viewer
+    /// What the daemon and the client do once a file is open (REQ-731): the workspace has a viewer
     /// view at the right of its layout, and the client has the focus and the keys in it.
     fn attach_viewer(v: &mut View) {
         let ws = v.selected_id().unwrap();
@@ -9208,7 +9208,7 @@ mod tests {
         docs
     }
 
-    /// REQ-718, REQ-720: the diff of a review is a panel of its layout, at the right of the agent:
+    /// REQ-728, REQ-730: the diff of a review is a panel of its layout, at the right of the agent:
     /// the panel keys reach it, `↵` gives it the keyboard, the leader gives it back, a click takes
     /// it, and it asks for the pull request's changes and no more.
     #[test]
@@ -9277,7 +9277,7 @@ mod tests {
         assert!(v.tree_on);
     }
 
-    /// REQ-719, REQ-720: `d` asks for the diff as a panel, focuses it when it shows up and never
+    /// REQ-729, REQ-730: `d` asks for the diff as a panel, focuses it when it shows up and never
     /// gives it the keys; `↵` does, `esc` and the leader give them back and `q` closes the view; `d`
     /// on the focused diff closes it and `d` from elsewhere focuses it.
     #[test]
@@ -9368,7 +9368,7 @@ mod tests {
         );
     }
 
-    /// REQ-724, REQ-725: the swap keys reach a view like a pane, `S` numbers the panels in the order
+    /// REQ-734, REQ-735: the swap keys reach a view like a pane, `S` numbers the panels in the order
     /// of the layout and the next digit swaps, and `x` closes a view without asking.
     #[test]
     fn a_view_is_swapped_by_the_keys_and_by_s_and_closed_by_x() {
@@ -9407,7 +9407,7 @@ mod tests {
         assert!(v.manage.is_none());
     }
 
-    /// REQ-727: a split that would leave a panel under 14 columns or 5 rows is not made.
+    /// REQ-737: a split that would leave a panel under 14 columns or 5 rows is not made.
     #[test]
     fn a_split_that_leaves_a_panel_too_small_is_not_made() {
         let mut v = fixture_view();
@@ -9420,7 +9420,7 @@ mod tests {
         assert!(matches!(v.press(Key::SplitCol), After::NewPane(..)));
     }
 
-    /// REQ-721, REQ-722: a file the viewer shows is told to the daemon as a tab, beside the panel
+    /// REQ-731, REQ-732: a file the viewer shows is told to the daemon as a tab, beside the panel
     /// the keys were in (to its right when that is 80 columns wide, else below it), and the
     /// viewer that comes of it has the focus and the keys.
     #[test]
@@ -9481,7 +9481,7 @@ mod tests {
         assert!(v.viewer_typing(), "and the keys");
     }
 
-    /// REQ-723: `q` closes the tab that shows and tells the daemon, and the last closes the view;
+    /// REQ-733: `q` closes the tab that shows and tells the daemon, and the last closes the view;
     /// `esc` gives the keys back and closes nothing.
     #[test]
     fn q_closes_a_tab_and_the_last_one_closes_the_view_and_the_daemon_is_told() {
@@ -9526,7 +9526,7 @@ mod tests {
             message: "no".into(),
         })));
         assert!(!v.keys_on_arrival && v.new_pane.is_none());
-        // d after it focuses the diff and gives it no keys (REQ-719)
+        // d after it focuses the diff and gives it no keys (REQ-729)
         v.press(Key::Changes);
         assert!(v.diff_focused() && !v.typing);
         // a file of another workspace starts the viewer again
@@ -9575,7 +9575,7 @@ mod tests {
         );
     }
 
-    /// REQ-728: under 64 columns the focused panel fills the area under a strip of titles, `h` `l`
+    /// REQ-738: under 64 columns the focused panel fills the area under a strip of titles, `h` `l`
     /// and `tab` change the panel, and a click on a title does too.
     #[test]
     fn under_64_columns_one_panel_is_shown_under_a_strip_of_titles() {
@@ -9682,7 +9682,7 @@ mod tests {
         assert!(!v.typing);
     }
 
-    /// REQ-726: `f` fills the area with the diff as with any panel.
+    /// REQ-736: `f` fills the area with the diff as with any panel.
     #[test]
     fn f_fills_the_area_with_the_diff() {
         let mut v = with_diff_view(false);
@@ -9698,7 +9698,7 @@ mod tests {
         assert_eq!(v.diff_rect(), beside);
     }
 
-    /// REQ-727: a diff that would leave a panel under 14 columns is not asked for.
+    /// REQ-737: a diff that would leave a panel under 14 columns is not asked for.
     #[test]
     fn a_diff_that_does_not_fit_is_not_asked_for() {
         let mut v = fixture_view();
@@ -10822,7 +10822,7 @@ mod tests {
         assert!(t.lines().next().unwrap().contains("⎇ feat/login"), "{t}");
     }
 
-    /// REQ-718: the diff panel watches its nodes while its view is there and lets them go when it
+    /// REQ-728: the diff panel watches its nodes while its view is there and lets them go when it
     /// is not; the status bar says DIFF while the keys are in it.
     #[test]
     fn the_diff_panel_watches_its_nodes_and_lets_them_go_with_its_view() {
