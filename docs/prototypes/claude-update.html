@@ -121,7 +121,7 @@ fieldset label small{color:var(--mut);font-size:12px}
   <label><input type="radio" name="retry" value="replace"> reintenta en cada revisión, con una sola fila ✗ que se reemplaza</label>
 </fieldset>
 <fieldset><legend>7. «Reiniciar con la versión nueva» (un motor viejo pasa a la versión instalada con <code>--resume</code>, solo con la conversación libre)</legend>
-  <label><input type="radio" name="restart" value="apart" checked> <span class="rec">va aparte, en N178b (recomendado)</span> <small>esta parte trae el aviso y el chip; el chip dice «ciérrala y ábrela». Falta comprobar que cerrar y abrir retoma sin perder nada</small></label>
+  <label><input type="radio" name="restart" value="apart" checked> <span class="rec">va aparte, en N179 (recomendado)</span> <small>esta parte trae el aviso y el chip; el chip dice «ciérrala y ábrela». Falta comprobar que cerrar y abrir retoma sin perder nada</small></label>
   <label><input type="radio" name="restart" value="here"> entra aquí <small>tecla <kbd>u</kbd> y botón; actúa solo si está libre: sin turno, sin pregunta, sin tareas (un reinicio mataría shells, monitores y subagentes), con transcripción en disco (REQ-754) y sin otro <code>claude</code> con la sesión (REQ-575)</small></label>
 </fieldset>
 
@@ -224,7 +224,7 @@ function whyNot(c){
 function restart(i){
   const c=ws[i].conv;
   if(!c){say('no hay conversación aquí','c-yellow');draw();return}
-  if(opt('restart')==='apart'){say('el reinicio es de otra parte (N178b): por ahora cierra y abre la conversación','c-dim');draw();return}
+  if(opt('restart')==='apart'){say('el reinicio es de otra parte (N179): por ahora cierra y abre la conversación','c-dim');draw();return}
   if(!stale(c)){say('el motor ya corre '+c.engine,'c-dim');draw();return}
   const w=whyNot(c);
   if(w){say('no ahora: '+w,'c-yellow');draw();return}
@@ -395,7 +395,7 @@ function sheetHtml(){
     const why=whyNot(c);
     b=`<h3>Motor de claude más viejo</h3><p>Esta conversación corre claude ${c.engine}; en la PC está instalado ${installed}. Una conversación nueva ya usa la nueva.</p>`;
     if(opt('restart')==='here')b+=`<button onclick="P.restart()" ${why||!stale(c)?'disabled':''}>reiniciar con la versión nueva</button>`+(why?`<p class="c-yellow">${esc(why)}</p>`:'<p class="sub">retoma la conversación con --resume; no pierde nada</p>');
-    else b+='<p class="sub">Cierra la conversación y ábrela: retoma donde estaba. (El botón de reiniciar va aparte: N178b.)</p>';
+    else b+='<p class="sub">Cierra la conversación y ábrela: retoma donde estaba. (El botón de reiniciar va aparte: N179.)</p>';
     b+='<button onclick="P.close()">cerrar</button>';
   }else{
     const j=jobs.find(x=>x.id===ui.sheet.id);if(!j)return '';
