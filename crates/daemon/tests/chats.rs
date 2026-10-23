@@ -42,6 +42,10 @@ fn rig() -> Rig {
             sb.dir.join("engine.log").to_string_lossy().into_owned(),
         ),
         (
+            "CLAUDE_CONFIG_DIR".into(),
+            sb.dir.join("claude").to_string_lossy().into_owned(),
+        ),
+        (
             "FAKE_PIDFILE".into(),
             sb.dir.join("engine.pid").to_string_lossy().into_owned(),
         ),
@@ -242,14 +246,17 @@ fn the_first_message_names_the_chat_and_a_reply_is_its_last_line() {
     let mut r = rig();
     let id = r.new_chat();
     let node = r.conversation(&id);
-    r.say(
-        &node,
-        "  una   pregunta\n larga  "
-            .replace("pregunta", "cosa")
-            .as_str(),
-    );
+    // the engine's own `/commands` are not something said: they name nothing
+    r.say(&node, "/compact");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(r.summary(&id).unwrap()["name"], NEW);
+    r.say(&node, "  una   cosa\n larga  ");
     let w = r.until_summary("the name", &id, |w| w["name"] != NEW);
     assert_eq!(w["name"], "una cosa larga");
+    // the panel's engine starts in the chat's folder with mode `manual` (REQ-794)
+    r.log_has("an engine in manual mode", |l| {
+        l.contains("--permission-mode\", \"manual") && l.contains("/chats/")
+    });
     let w = r.until_summary("the reply", &id, |w| w["chat"]["last"] == "Voy a mirar.");
     assert!(w["chat"]["active"].as_u64().unwrap() > 0);
     // a later message does not name it again
@@ -633,4 +640,54 @@ fn taking_a_chat_to_a_project_starts_a_conversation_there_and_leaves_the_chat() 
         })),
         ErrorCode::BadRequest
     );
+}
+
+#[test]
+fn a_chat_whose_conversation_has_a_transcript_is_kept_when_archived_and_not_discarded() {
+    let mut r = rig();
+    let id = r.new_chat();
+    // the daemon never saw a message (the conversation ran apart), but Claude has the session
+    let dir = r.chats_dir().join(&id);
+    let end = Instant::now() + WAIT;
+    let session = loop {
+        let pane = r.saved()["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id.as_str())
+            .and_then(|w| w["panes"][0]["resume"][2].as_str().map(str::to_owned));
+        if let Some(s) = pane {
+            break s;
+        }
+        assert!(Instant::now() < end, "the panel has no session id");
+        std::thread::sleep(Duration::from_millis(30));
+    };
+    let projects = r.sb.dir.join("claude").join("projects").join("x");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(projects.join(format!("{session}.jsonl")), "{}\n").unwrap();
+    assert_eq!(
+        r.ok(Cmd::ArchiveChat {
+            workspace: id.clone()
+        }),
+        Value::Null
+    );
+    let w = r.until_summary("archived", &id, |w| w["chat"]["archived"] == true);
+    assert_eq!(w["pane_count"], 0);
+    assert!(dir.is_dir());
+}
+
+#[test]
+fn a_turn_with_no_text_does_not_bring_back_an_older_reply_as_the_last_line() {
+    let mut r = rig();
+    let id = r.new_chat();
+    let node = r.conversation(&id);
+    r.say(&node, "hola");
+    r.until_summary("the first reply", &id, |w| {
+        w["chat"]["last"] == "Voy a mirar."
+    });
+    // the engine answers this one with a tool and no text
+    r.say(&node, "push");
+    r.until_summary("the turn", &id, |w| w["chat"]["last"] == "push");
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(r.summary(&id).unwrap()["chat"]["last"], "push");
 }

@@ -61,30 +61,24 @@ fn bad(why: &str) -> ErrorBody {
 /// The commands that make no sense for a chat answer `bad_request` (REQ-796): a chat is closed
 /// with `archive_chat` and removed with `delete_chat`, so no folder or session id is left behind.
 pub fn refuse(shared: &Shared, cmd: &Cmd) -> Result<(), ErrorBody> {
-    let core = shared.lock();
-    let chat_id = |id: &str| {
-        core.model
-            .workspaces
-            .iter()
-            .any(|w| w.id == id && w.chat.is_some())
-    };
-    let chat_path = |p: &str| {
-        core.model
-            .workspaces
-            .iter()
-            .any(|w| w.path == p && w.chat.is_some())
-    };
-    let hit = match cmd {
+    // Only these commands are looked at, and only they lock: every keystroke is a command too.
+    let (id, path) = match cmd {
         Cmd::OpenDiff { workspace, .. }
         | Cmd::OpenCommits { workspace, .. }
         | Cmd::SyncWorkspace { workspace }
         | Cmd::StartWorkspace { workspace, .. }
         | Cmd::MoveToGroup { workspace, .. }
         | Cmd::MoveRepo { workspace, .. }
-        | Cmd::RemoveWorkspace { workspace, .. } => chat_id(workspace),
-        Cmd::CreateWorktree { repo, .. } | Cmd::OpenWorktree { repo, .. } => chat_path(repo),
-        _ => false,
+        | Cmd::RemoveWorkspace { workspace, .. } => (Some(workspace.as_str()), None),
+        Cmd::CreateWorktree { repo, .. } | Cmd::OpenWorktree { repo, .. } => {
+            (None, Some(repo.as_str()))
+        }
+        _ => return Ok(()),
     };
+    let core = shared.lock();
+    let hit = core.model.workspaces.iter().any(|w| {
+        w.chat.is_some() && (id.is_some_and(|i| w.id == i) || path.is_some_and(|p| w.path == p))
+    });
     if hit {
         return Err(bad(
             "a conversation of its own has no git, group or worktree: archive_chat closes it and delete_chat removes it",
@@ -213,40 +207,45 @@ fn remove(shared: &Shared, id: &str) -> Result<(), ErrorBody> {
 
 /// `archive_chat` (REQ-798).
 pub fn archive(shared: &Shared, id: &Id) -> Done {
-    let empty = {
-        let mut core = shared.lock();
+    let (session, env, said) = {
+        let core = shared.lock();
         let ws = chat_of(&core, id)?;
         let chat = ws.chat.as_ref().expect("a chat");
         if chat.archived {
             return Ok(None);
         }
-        if chat.last.is_some() {
-            // The id the panel's conversation has, before the panel goes.
-            let session = ws
-                .panes
-                .iter()
-                .find_map(|p| p.resume.as_ref().and_then(|r| r.get(2).cloned()));
-            let ws = core
-                .model
-                .workspaces
-                .iter_mut()
-                .find(|w| w.id == *id)
-                .expect("found above");
-            ws.panes.clear();
-            ws.layout = None;
-            let chat = ws.chat.as_mut().expect("a chat");
-            chat.session = session.or(chat.session.take());
-            chat.archived = true;
-            core.refresh();
-            false
-        } else {
-            true
-        }
+        // The id the panel's conversation has, before the panel goes.
+        let session = ws
+            .panes
+            .iter()
+            .find_map(|p| p.resume.as_ref().and_then(|r| r.get(2).cloned()))
+            .or_else(|| chat.session.clone());
+        (session, core.env.clone(), chat.last.is_some())
     };
-    if empty {
+    // A conversation that did not go through the daemon's `send` still has its transcript: it is
+    // kept and not discarded as an empty one (the look is made with no lock held).
+    let spoke = said
+        || session
+            .as_deref()
+            .is_some_and(|s| crate::launch::transcript_exists(&env, s));
+    if !spoke {
         remove(shared, id)?;
         return Ok(Some(json!({ "discarded": true })));
     }
+    let mut core = shared.lock();
+    let ws = core
+        .model
+        .workspaces
+        .iter_mut()
+        .find(|w| w.id == *id)
+        .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {id}")))?;
+    ws.panes.clear();
+    ws.layout = None;
+    if let Some(chat) = ws.chat.as_mut() {
+        chat.session = session.or(chat.session.take());
+        chat.archived = true;
+    }
+    core.refresh();
     Ok(None)
 }
 
@@ -354,6 +353,10 @@ pub fn said(core: &mut Core, pane: &str, text: &str) {
         return;
     };
     let Some(chat) = ws.chat.as_mut() else { return };
+    // `/compact` and the like are the engine's, not something said.
+    if text.starts_with('/') {
+        return;
+    }
     chat.active = now();
     chat.last = Some(one_line(text, LAST));
     if ws.name == NEW_NAME {
@@ -364,10 +367,14 @@ pub fn said(core: &mut Core, pane: &str, text: &str) {
 /// A turn of the conversation of `pane` ended: its last line is what Claude wrote last.
 pub fn answered(core: &mut Core, pane: &str) {
     let said = core.convs.get(pane).and_then(|c| {
-        c.st.items.iter().rev().find_map(|i| match i {
-            Item::Text { text, .. } => Some(one_line(text, LAST)),
-            _ => None,
-        })
+        c.st.items
+            .iter()
+            .rev()
+            .take_while(|i| !matches!(i, Item::User { .. }))
+            .find_map(|i| match i {
+                Item::Text { text, .. } => Some(one_line(text, LAST)),
+                _ => None,
+            })
     });
     let Some(ws) = core
         .model
@@ -438,6 +445,7 @@ mod tests {
     #[test]
     fn only_a_folder_inside_the_chats_is_removed() {
         let tmp = std::env::temp_dir().join(format!("jw-chats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
         let root = tmp.join("chats");
         let inner = root.join("a");
         std::fs::create_dir_all(&inner).unwrap();
