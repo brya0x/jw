@@ -1280,7 +1280,6 @@ impl View {
             self.flash = "no hay un agente aquí: la referencia quedó copiada".into();
             return After::Copy(paths.iter().map(|p| format!("@{p} ")).collect());
         };
-        let folders: Vec<bool> = paths.iter().map(|p| p.ends_with('/')).collect();
         let from_its_folder = self.written_from_the_conversations_folder(
             workspace,
             &node,
@@ -1291,10 +1290,14 @@ impl View {
         );
         let text: String = from_its_folder
             .iter()
-            .zip(folders)
-            .map(|(p, folder)| match folder && !p.ends_with('/') {
-                true => format!("@{p}/ "),
-                false => format!("@{p} "),
+            .zip(&paths)
+            .map(|(p, picked)| {
+                let slash = if picked.ends_with('/') && !p.ends_with('/') {
+                    "/"
+                } else {
+                    ""
+                };
+                format!("@{p}{slash} ")
             })
             .collect();
         // The tree can be shown for a workspace that is only highlighted: the field takes the keys
@@ -5513,7 +5516,7 @@ impl View {
                 FileKind::File => ("·", dim),
             };
             g.put_over(lead, y, glyph, glyph_style);
-            if t.marks.contains(&r.mention()) {
+            if !t.marks.is_empty() && t.marks.contains(&r.mention()) {
                 g.put_over(x0 + 1, y, "●", Style::fg(look::yellow()).bold());
             }
             let mut style = if r.ignored {
