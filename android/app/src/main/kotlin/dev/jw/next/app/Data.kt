@@ -37,6 +37,7 @@ import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
 import dev.jw.next.contract.TextDoc
+import dev.jw.next.contract.ViewKind
 import dev.jw.next.contract.WorktreeInfo
 import dev.jw.next.contract.WorktreeList
 import java.util.concurrent.Executors
@@ -301,6 +302,14 @@ abstract class ProtocolSource : AppSource() {
 
     override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         command(Cmd.ClosePane(pane)) { reply(it.done("el PC no pudo cerrar el panel")) }
+    }
+
+    override fun openView(workspace: Id, kind: ViewKind, path: String?, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenView(workspace, kind, path)) { reply(it.made("view", "el panel", "el PC no pudo abrir el panel")) }
+    }
+
+    override fun closeView(view: Id, path: String?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.CloseView(view, path)) { reply(it.done("el PC no pudo cerrar el panel")) }
     }
 
     override fun conversationSend(node: Id, text: String, images: List<Image>, reply: (Result<Unit>) -> Unit) {

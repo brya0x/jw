@@ -53,7 +53,7 @@ internal fun ViewerDialog(doc: MarkdownDoc, plan: PlanAnswers?, close: () -> Uni
 }
 
 @Composable
-private fun ColumnScope.Viewer(doc: MarkdownDoc, plan: PlanAnswers?, close: () -> Unit) {
+internal fun ColumnScope.Viewer(doc: MarkdownDoc, plan: PlanAnswers?, close: () -> Unit) {
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var headings by remember { mutableStateOf(false) }

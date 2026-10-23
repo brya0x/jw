@@ -113,6 +113,8 @@ import dev.jw.next.contract.Id
 import dev.jw.next.contract.JobState
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.PaneSummary
+import dev.jw.next.contract.ViewKind
+import dev.jw.next.contract.ViewSummary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -451,7 +453,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     LaunchedEffect(screen.id) { source.open(screen.id) }
     // The root folder is asked for as the workspace opens, so the files screen has it when it is tapped (REQ-636).
     LaunchedEffect(screen.id) { FileListings.preload(source, screen.id) }
-    LaunchedEffect(ws?.panes?.map { it.id }) {
+    LaunchedEffect(ws?.panes?.map { it.id }, ws?.views?.map { it.id }) {
         ws?.panes?.forEach { source.open(it.id) }
         set(nav.settle(state))
     }
@@ -466,6 +468,17 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var waitingPane by remember(screen.id) { mutableStateOf<String?>(null) }
     var addError by remember(screen.id) { mutableStateOf<String?>(null) }
     LaunchedEffect(version, waitingPane) { waitingPane?.let { p -> nav.selectWhenShown(state, screen.id, p)?.let { set(it); waitingPane = null } } }
+    // The diff or a viewer asked for as a tab (REQ-724, REQ-725): the same wait as a shell's.
+    var wantedFile by remember(screen.id) { mutableStateOf<String?>(null) }
+    val askView = { kind: ViewKind, path: String? ->
+        if (kind == ViewKind.Viewer) wantedFile = path
+        asking = true
+        addError = null
+        source.openView(screen.id, kind, path) { result ->
+            result.onSuccess { waitingPane = it }.onFailure { addError = it.message ?: "el PC no pudo abrir el panel" }
+            asking = false
+        }
+    }
     // A shell that ends at once takes its pane with it before the workspace lists it: the `+` must not wait for ever.
     LaunchedEffect(waitingPane) { if (waitingPane != null) { delay(PANE_WAIT_MS); waitingPane = null } }
     var worktree by remember(screen.id) { mutableStateOf<WorktreeAt?>(null) }
@@ -503,7 +516,12 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { set(nav.files(state, screen.id)) }.semantics { contentDescription = "Archivos" }, contentAlignment = Alignment.Center) {
                     GlyphIcon(Glyph.Folder, Palette.blue, 20)
                 }
-                Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { nav.changes(state)?.let(set) }, contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable {
+                        ws?.views?.firstOrNull { it.kind == ViewKind.Diff }?.let { set(nav.selectPane(state, it.id)) } ?: askView(ViewKind.Diff, null)
+                    }.semantics { contentDescription = "Cambios" },
+                    contentAlignment = Alignment.Center,
+                ) {
                     Mono("±", Palette.blue, 18, bold = true)
                 }
             }
@@ -517,7 +535,8 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val convId = tabPane?.conversation
         val tabConv = remember(version, convId) { convId?.let { source.node(it) as? Node.Conversation } }
         PaneTabs(
-            ws.panes, screen.pane, state, adding = asking || waitingPane != null,
+            ws.panes, ws.views, screen.pane, state, adding = asking || waitingPane != null,
+            closeView = { v -> source.closeView(v.id, null) { r -> r.onFailure { addError = it.message ?: "el PC no pudo cerrar el panel" } } },
             select = { id -> if (id == screen.pane && tabConv != null) settingsAsked++ else set(nav.selectPane(state, id)) },
             hold = { paneMenu = it },
             named = tabConv?.let { c -> screen.pane?.let { it to ("claude · " + c.name) } },
@@ -532,6 +551,19 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         }
         addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         referenceNote?.let { Mono(it, Palette.yellow, 12, lines = 2, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
+        // The diff or a viewer is a tab like a pane, after the panes (REQ-724).
+        val tabView = ws.views.firstOrNull { it.id == screen.pane }
+        if (tabView != null) {
+            when (tabView.kind) {
+                ViewKind.Diff -> DiffPanel(source, screen.id, leave = { set(nav.back(state)) }) { path -> askView(ViewKind.Viewer, path) }
+                ViewKind.Viewer -> ViewerPanel(
+                    source, screen.id, tabView, wantedFile,
+                    closeFile = { f -> source.closeView(tabView.id, f) { r -> r.onFailure { addError = it.message ?: "el PC no pudo cerrar el archivo" } } },
+                    refer = { d -> set(nav.refer(state, screen.id, d)) },
+                )
+            }
+            return@Column
+        }
         val pane = tabPane
         // The conversation of a pane that runs `claude` takes the place of its blocks (REQ-440).
         LaunchedEffect(convId) { convId?.let { source.open(it) } }
@@ -831,8 +863,8 @@ private fun Composer(
 /** Open pane underlined in blue; an unseen mark sits beside the name. */
 @Composable
 private fun PaneTabs(
-    panes: List<PaneSummary>, current: String?, state: ClientState, adding: Boolean, select: (String) -> Unit, hold: (PaneSummary) -> Unit,
-    named: Pair<String, String>?, underline: Color?, add: () -> Unit,
+    panes: List<PaneSummary>, views: List<ViewSummary>, current: String?, state: ClientState, adding: Boolean, closeView: (ViewSummary) -> Unit,
+    select: (String) -> Unit, hold: (PaneSummary) -> Unit, named: Pair<String, String>?, underline: Color?, add: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth()) {
@@ -850,6 +882,23 @@ private fun PaneTabs(
                             unseen.firstOrNull()?.let { a -> a.mark().let { Mono(it.glyph, it.tone.color(), 14, bold = true) } }
                         }
                         Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) (underline ?: Palette.blue) else Color.Transparent))
+                    }
+                }
+                // The diff and the viewer come after the panes, each with a ✕ that closes it (REQ-724).
+                views.forEach { v ->
+                    val on = v.id == current
+                    Column(Modifier.clickable { select(v.id) }) {
+                        Row(
+                            Modifier.defaultMinSize(minHeight = 44.dp).padding(start = Gutter),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Mono(if (v.kind == ViewKind.Diff) "± diff" else "▤ ${v.title}", if (on) Palette.fg else Palette.dim, 13, bold = on)
+                            Box(
+                                Modifier.defaultMinSize(minWidth = 40.dp, minHeight = 44.dp).clickable { closeView(v) }.semantics { contentDescription = "Cerrar el panel" },
+                                contentAlignment = Alignment.Center,
+                            ) { Mono("✕", Palette.dim, 12) }
+                        }
+                        Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                     }
                 }
             }
