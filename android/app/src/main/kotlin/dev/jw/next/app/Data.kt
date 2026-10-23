@@ -13,6 +13,7 @@ import dev.jw.next.client.Seen
 import dev.jw.next.client.binaryNote
 import dev.jw.next.client.worktreeStarted
 import dev.jw.next.contract.Accent
+import dev.jw.next.contract.ArtifactDoc
 import dev.jw.next.contract.ClientMsg
 import dev.jw.next.contract.Cmd
 import dev.jw.next.contract.ConfigFrom
@@ -37,6 +38,7 @@ import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
 import dev.jw.next.contract.TextDoc
+import dev.jw.next.contract.Verdict
 import dev.jw.next.contract.ViewKind
 import dev.jw.next.contract.WorktreeInfo
 import dev.jw.next.contract.WorktreeList
@@ -182,6 +184,18 @@ abstract class ProtocolSource : AppSource() {
 
     override fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
         command(Cmd.OpenCommits(workspace)) { reply(it.nodeId()) }
+    }
+
+    override fun openArtifacts(workspace: Id, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenArtifacts(workspace)) { reply(it.nodeId()) }
+    }
+
+    override fun readArtifact(id: Id, n: Int?, reply: (Result<ArtifactDoc>) -> Unit) {
+        command(Cmd.ArtifactRead(id, n)) { r -> reply(r.read(ArtifactDoc.serializer(), "el artefacto")) }
+    }
+
+    override fun decideArtifact(id: Id, n: Int, hash: String, verdict: Verdict, text: String?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ArtifactDecide(id, n, hash, verdict, text)) { reply(it.done("el PC no pudo guardar el veredicto")) }
     }
 
     override fun refreshDiff(node: Id) {
@@ -431,7 +445,7 @@ abstract class ProtocolSource : AppSource() {
 
     /** The transport is up: say hello; the daemon answers with its root, and everything opened is opened again. */
     protected fun greet() {
-        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1), "diff" to listOf(1), "commits" to listOf(1), "conversation" to listOf(1))))
+        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1), "diff" to listOf(1), "commits" to listOf(1), "artifacts" to listOf(1), "conversation" to listOf(1))))
     }
 
     /** The transport is gone. */

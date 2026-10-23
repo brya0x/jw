@@ -1,0 +1,12 @@
+{
+  "t": "cmd",
+  "id": "c64",
+  "cmd": {
+    "cmd": "artifact_decide",
+    "id": "00000000-0000-4000-8000-0000000000e1",
+    "n": 2,
+    "hash": "fda3e9220af50387ff47fe7867b9e8009fe36fb710c46d2fd8d078ac34ce1298",
+    "type": "changes",
+    "text": "El botón es pequeño."
+  }
+}

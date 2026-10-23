@@ -56,6 +56,19 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   say); its setup runs there first. It prints the workspace's id and path, and on stderr what it
   copied and the ports it gave. With `--task` it opens `claude` and hands it the text, as `prompt`
   does.
+- `{bin} artifact publish <file> [--name N] [--title T] [--kind prototype|document|report|spec] [--wait [--timeout SECONDS]]`
+  publishes a file the person should look at (an interactive HTML prototype, an HTML document or
+  report, a rendered spec, or a Markdown file; up to 512 KiB, with its images and styles inside
+  it) so they can see it on their phone and approve it or ask for changes. It prints
+  `<id> v<n> <hash>`. Publishing the same `--name` again (the file's name by default) is a new
+  version. The person's verdict arrives as a message in your own pane, as if they had typed it:
+  `[{bin}] artefacto «…» v<n> (<hash>): APROBADO` or `CAMBIOS pedidos` and what to change. A pane that
+  is not a `claude` conversation gets no message. `--wait` waits for the verdict (up to 10 minutes
+  or `--timeout`) and prints `approved` and exits 0, or prints `changes` and what to change and
+  exits 4.
+  `{bin} artifact wait <id> [--timeout SECONDS]` does the same wait for the latest version of one
+  you published; `{bin} artifact ls [workspace] [--json]` lists what is published and its status
+  (`pending`, `approved` or `changes`) and `{bin} artifact rm <id>` removes one.
 - `{bin} group new <name>` makes a group (a name of up to 40 characters, not another group's) and
   prints its id. `{bin} group rename <group> <name>` renames it and `{bin} group rm <group>`
   deletes it: its workspaces stay open and belong to none. A group is named by its id or exactly by
@@ -71,7 +84,8 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
 ## Rules
 
 - Exit codes: 0 done, 1 it failed (the message is on stderr), 2 a use it does not accept, 3 the
-  agent waits for an answer (`prompt --wait`; the question is on stdout).
+  agent waits for an answer (`prompt --wait`; the question is on stdout), 4 the person asked for
+  changes to an artifact (`artifact wait`; what to change is on stdout).
 - Do not poll in a loop. Send the task, do your own work, and `read` when you need the result or
   when `ls` shows a mark on that workspace. Use `--wait` only when you cannot go on without the
   answer.

@@ -1,0 +1,35 @@
+{
+  "t": "reply",
+  "id": "c67",
+  "ok": true,
+  "result": {
+    "id": "00000000-0000-4000-8000-0000000000e3",
+    "n": 1,
+    "hash": "8f4e27a72c19f62e84020cdec1e4ae85cc462126a5cc710359f6ba5dcf1848f3",
+    "title": "N171",
+    "kind": "spec",
+    "format": "md",
+    "doc": {
+      "title": "N171",
+      "blocks": [
+        {
+          "t": "heading",
+          "level": 1,
+          "text": [
+            {
+              "t": "N171"
+            }
+          ]
+        },
+        {
+          "t": "para",
+          "text": [
+            {
+              "t": "Una spec."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

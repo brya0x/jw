@@ -439,3 +439,45 @@ fn a_phone_is_told_the_addresses_once_even_when_none_was_ever_set() {
     }
     assert_eq!(told, 1, "REQ-82: once, not on every tick");
 }
+
+/// N171c (REQ-774): a phone cannot publish or remove an artifact, and what it may send still
+/// reaches the daemon: the refused ones are answered by the bridge and never relayed.
+#[test]
+fn a_phone_cannot_publish_or_remove_an_artifact_but_can_read_and_decide() {
+    let r = rig();
+    let token = r.pairing.issue().unwrap();
+    let mut ws = r.connect("203.0.113.7").unwrap();
+    assert!(matches!(
+        pair(&mut ws, &token),
+        Some(BridgeMsg::Paired { .. })
+    ));
+    assert_eq!(hear(&mut ws), Some(ready()));
+    let cmd = |ws: &mut Ws, id: &str, name: &str| {
+        say(
+            ws,
+            serde_json::json!({"t": "cmd", "id": id, "cmd": {"cmd": name}}),
+        );
+        line(ws).unwrap()
+    };
+    for (id, name) in [("c1", "artifact_publish"), ("c2", "artifact_rm")] {
+        let reply = cmd(&mut ws, id, name);
+        assert_eq!(
+            (
+                reply["t"].as_str(),
+                reply["id"].as_str(),
+                reply["error"]["code"].as_str()
+            ),
+            (Some("reply"), Some(id), Some("unsupported")),
+            "{name}: {reply}"
+        );
+    }
+    for (id, name) in [
+        ("c3", "artifact_read"),
+        ("c4", "artifact_decide"),
+        ("c5", "write"),
+    ] {
+        let echo = cmd(&mut ws, id, name);
+        assert_eq!(echo["t"], "echo", "{name}: {echo}");
+        assert!(echo["line"].as_str().unwrap().contains(name), "{echo}");
+    }
+}

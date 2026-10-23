@@ -242,6 +242,7 @@ pub fn remove_workspace(
         let mut core = shared.lock();
         core.workspace(workspace)?;
         core.model.workspaces.retain(|w| w.id != *workspace);
+        core.forget_artifacts(workspace);
         core.refresh();
         return Ok(None);
     }

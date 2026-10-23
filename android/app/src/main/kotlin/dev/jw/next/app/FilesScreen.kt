@@ -75,7 +75,7 @@ internal object FileListings {
 @Composable
 fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav: Navigator, set: (ClientState) -> Unit) {
     val version = source.tick.intValue
-    val name = remember(version, screen.workspace) { source.session().workspaces.firstOrNull { it.id == screen.workspace }?.name ?: "workspace" }
+    val name = remember(version, screen.workspace) { workspaceName(source, screen.workspace) }
     var path by remember(screen.workspace) { mutableStateOf("") }
     var hidden by remember(screen.workspace) { mutableStateOf(false) }
     var listing by remember(screen.workspace) { mutableStateOf<FileListing?>(null) }

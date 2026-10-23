@@ -100,7 +100,12 @@ fn file_in(root: &Path, path: &str) -> Result<PathBuf, ErrorBody> {
 }
 
 /// The document of `text`; its title is the first heading, else `name`.
-fn document(text: &str, name: &str, path: Option<String>, truncated: bool) -> MarkdownDoc {
+pub(crate) fn document(
+    text: &str,
+    name: &str,
+    path: Option<String>,
+    truncated: bool,
+) -> MarkdownDoc {
     let blocks = parse(text);
     let title = blocks
         .iter()

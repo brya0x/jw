@@ -1,0 +1,14 @@
+{
+  "t": "cmd",
+  "id": "c60",
+  "cmd": {
+    "cmd": "artifact_publish",
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "name": "ajustes",
+    "title": "Prototipo de ajustes",
+    "kind": "prototype",
+    "format": "html",
+    "text": "<h1>Ajustes</h1>",
+    "pane": "00000000-0000-4000-8000-0000000000c1"
+  }
+}

@@ -1,18 +1,22 @@
 package dev.jw.next.client
 
 import dev.jw.next.contract.Attention
+import dev.jw.next.contract.AttentionKind
 import dev.jw.next.contract.ContractJson
 import dev.jw.next.contract.Id
 import kotlinx.serialization.Serializable
 
 /**
- * What this phone has looked at: node id to the revision it was at when opened. The daemon
- * never sees it (REQ-35). An attention is seen once its `rev` is not above the recorded one.
- * Revisions only mean something inside one daemon epoch, so a different epoch empties it.
+ * What this phone has looked at: node id to the revision it was at when opened. An attention is
+ * seen once its `rev` is not above the recorded one. Revisions only mean something inside one
+ * daemon epoch, so a different epoch empties it. The phone also tells the daemon (`mark_seen`),
+ * which ends what the node raised for every client (REQ-34), so this record is the part the
+ * phone keeps for itself, for what the daemon does not end.
  */
 @Serializable
 data class Seen(val epoch: String? = null, val nodes: Map<Id, Long> = emptyMap(), val jobs: Set<Id> = emptySet()) {
-    fun isSeen(a: Attention): Boolean = a.rev <= (nodes[a.node] ?: 0L)
+    /** An artifact waits for a verdict and not for a look: opening the workspace does not hide it (REQ-791). */
+    fun isSeen(a: Attention): Boolean = a.kind != AttentionKind.Artifact && a.rev <= (nodes[a.node] ?: 0L)
 
     /** A job that ended is seen once its tab has been shown with it in it (REQ-659); the daemon never hears of it either. */
     fun isJobSeen(job: Id): Boolean = job in jobs

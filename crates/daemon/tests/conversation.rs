@@ -2518,3 +2518,155 @@ fn a_conversation_whose_transcript_is_gone_starts_again_with_its_id_and_says_so(
     );
     r.stop();
 }
+
+/// N171b: a verdict goes to the conversation of the pane that published, as a private message
+/// (REQ-769), and what the artifact says goes nowhere (REQ-790).
+fn publish_from(r: &mut Rig, name: &str, title: &str, text: &str, pane: &str) -> (String, String) {
+    let reply = r
+        .cmd(Cmd::ArtifactPublish {
+            workspace: r.ws.clone(),
+            name: name.into(),
+            title: Some(title.into()),
+            kind: None,
+            format: contract::artifacts::ArtifactFormat::Html,
+            text: text.into(),
+            pane: Some(pane.into()),
+        })
+        .unwrap()
+        .unwrap();
+    (
+        reply["id"].as_str().unwrap().to_owned(),
+        reply["hash"].as_str().unwrap().to_owned(),
+    )
+}
+
+fn decide_with(
+    r: &mut Rig,
+    id: &str,
+    hash: &str,
+    verdict: contract::artifacts::Verdict,
+    text: Option<&str>,
+) -> Value {
+    r.cmd(Cmd::ArtifactDecide {
+        id: id.into(),
+        n: 1,
+        hash: hash.into(),
+        verdict,
+        text: text.map(Into::into),
+    })
+    .unwrap()
+    .unwrap()
+}
+
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                todo.push(p);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_verdict_reaches_the_conversation_that_published_and_is_not_kept_for_up_arrow() {
+    use contract::artifacts::Verdict;
+    let mut r = rig();
+    r.open();
+    let pane = r.pane.clone();
+    let marker = "MARKER-d41d-the-artifact-itself";
+    let (id, hash) = publish_from(
+        &mut r,
+        "ajustes",
+        "Prototipo\n  de ajustes",
+        &format!("<p>{marker}"),
+        &pane,
+    );
+    let told = decide_with(&mut r, &id, &hash, Verdict::Changes, Some("más grande"));
+    assert_eq!(told["delivered"], "agent");
+    let head = format!(
+        "[{}] artefacto «Prototipo de ajustes» v1 ({})",
+        identity::get().label,
+        &hash[..6]
+    );
+    wait_for("the engine to get the verdict", || {
+        log_lines(&r.log).iter().any(|l| {
+            l.starts_with("user")
+                && l.contains(&head)
+                && l.contains("CAMBIOS pedidos desde el teléfono:")
+                && l.contains("más grande")
+        })
+    });
+    // An approval is one line.
+    let (id2, hash2) = publish_from(&mut r, "otro", "Otro", "<p>x", &pane);
+    assert_eq!(
+        decide_with(&mut r, &id2, &hash2, Verdict::Approved, None)["delivered"],
+        "agent"
+    );
+    wait_for("the approval", || {
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l.contains("«Otro» v1") && l.contains("APROBADO desde el teléfono."))
+    });
+    // What was kept says it was told; nothing the person sent or the artifact said is in the log
+    // of the engine or in the history of ↑ (private), and the artifact's text is nowhere else.
+    let meta = files_under(&r.sb.dir.join("state").join("artifacts"))
+        .into_iter()
+        .find(|p| {
+            p.ends_with("meta.json") && std::fs::read_to_string(p).unwrap().contains("ajustes")
+        })
+        .expect("the meta of the first artifact");
+    assert!(
+        std::fs::read_to_string(meta)
+            .unwrap()
+            .contains("\"delivered\":\"agent\"")
+    );
+    assert!(!log_lines(&r.log).iter().any(|l| l.contains(marker)));
+    for f in files_under(&r.sb.dir.join("state").join("sent")) {
+        assert!(
+            !std::fs::read_to_string(f)
+                .unwrap()
+                .contains(&format!("[{}] artefacto", identity::get().label))
+        );
+    }
+}
+
+#[test]
+fn a_verdict_for_a_pane_without_a_conversation_or_a_pane_that_is_gone_is_kept_and_told_to_no_one() {
+    use contract::artifacts::Verdict;
+    let mut r = rig();
+    let plain = r.pane.clone();
+    let (id, hash) = publish_from(&mut r, "a", "A", "<p>a", &plain);
+    assert_eq!(
+        decide_with(&mut r, &id, &hash, Verdict::Approved, None)["delivered"],
+        "none"
+    );
+    let gone = "00000000-0000-4000-8000-0000000000dd";
+    let (id, hash) = publish_from(&mut r, "b", "B", "<p>b", gone);
+    assert_eq!(
+        decide_with(&mut r, &id, &hash, Verdict::Changes, Some("x"))["delivered"],
+        "none"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    // The shell of the plain pane was typed nothing, and the engine was told nothing.
+    r.client.poll(Duration::from_millis(100)).unwrap();
+    let screen = r.client.nodes[&plain]["screen"]["lines"].to_string();
+    assert!(
+        !screen.contains(&format!("[{}]", identity::get().label)),
+        "{screen}"
+    );
+    assert!(!log_lines(&r.log).iter().any(|l| l.starts_with("user")));
+    let kept = files_under(&r.sb.dir.join("state").join("artifacts"))
+        .into_iter()
+        .filter(|p| p.ends_with("meta.json"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(kept.matches("\"delivered\":\"none\"").count(), 2);
+}
