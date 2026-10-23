@@ -1413,6 +1413,7 @@ impl Core {
                     .any(|p| self.convs.get(&p.id).is_some_and(|c| c.st.works())),
                 removing: self.removing.contains(&ws.id),
                 group,
+                chat: ws.chat.as_ref().map(crate::model::Chat::info),
             });
             nodes.push(Node::Workspace(Workspace {
                 head: head(&ws.id, attention),
@@ -1435,13 +1436,14 @@ impl Core {
                     .collect(),
                 review: ws.review.clone(),
                 removing: self.removing.contains(&ws.id),
+                chat: ws.chat.as_ref().map(crate::model::Chat::info),
             }));
         }
         let order: Vec<Id> = self.model.groups.iter().map(|g| g.id.clone()).collect();
         nodes.push(Node::Session(Session {
             head: head(&self.model.session_id, session_attention),
             name: self.model.name.clone(),
-            workspaces: crate::grouping::group(summaries, &order),
+            workspaces: crate::chats::arrange(summaries, &order),
             jobs: self.jobs.clone(),
             groups: self.model.groups.clone(),
         }));
@@ -1579,6 +1581,7 @@ mod tests {
             ports: None,
             review: None,
             github: None,
+            chat: None,
         });
         (model, ws, pane)
     }

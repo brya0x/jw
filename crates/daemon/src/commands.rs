@@ -42,6 +42,7 @@ pub fn outcome(done: Done) -> Outcome {
 }
 
 pub fn run(shared: &Shared, cmd: Cmd) -> Done {
+    crate::chats::refuse(shared, &cmd)?;
     match cmd {
         Cmd::RenameSession { name } => {
             let name = name.trim();
@@ -55,6 +56,15 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         }
         Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
         Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
+        Cmd::ChatNew {} => crate::chats::new(shared),
+        Cmd::ArchiveChat { workspace } => crate::chats::archive(shared, &workspace),
+        Cmd::ResumeChat { workspace } => crate::chats::resume(shared, &workspace),
+        Cmd::DeleteChat { workspace } => crate::chats::delete(shared, &workspace),
+        Cmd::PromoteChat {
+            workspace,
+            to,
+            summary,
+        } => crate::chats::promote(shared, &workspace, &to, summary),
         Cmd::CreateGroup { name } => groups::create(shared, &name),
         Cmd::RenameGroup { group, name } => groups::rename(shared, &group, &name),
         Cmd::DeleteGroup { group } => groups::delete(shared, &group),

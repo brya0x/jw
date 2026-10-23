@@ -1,7 +1,7 @@
 //! The product identity, read from `identity.toml` at the root. Nothing else in the
 //! workspace spells a product name, env prefix, directory or socket by hand.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -58,6 +58,12 @@ pub fn state_dir() -> PathBuf {
     }
 }
 
+/// Where the conversations of their own have their folders: `<state>/chats` (N172, REQ-793).
+/// The state directory is the caller's, as the daemon's is (a test gives it its own).
+pub fn chats_dir(state: &Path) -> PathBuf {
+    state.join("chats")
+}
+
 /// The daemon's socket: `$<PREFIX>_SOCKET`, else `<state_dir>/<name>.sock`.
 pub fn socket_path() -> PathBuf {
     match std::env::var_os(env_var("SOCKET")) {
@@ -78,5 +84,6 @@ mod tests {
             _ => assert!(state_dir().ends_with(&get().name)),
         }
         assert!(config_dir().ends_with(&get().name));
+        assert_eq!(chats_dir(Path::new("/s")), PathBuf::from("/s/chats"));
     }
 }

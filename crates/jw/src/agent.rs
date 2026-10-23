@@ -1162,6 +1162,7 @@ mod tests {
             working: false,
             removing: false,
             group: None,
+            chat: None,
         }
     }
 

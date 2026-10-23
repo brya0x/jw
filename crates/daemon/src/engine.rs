@@ -462,6 +462,7 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
             continue;
         };
         let delta = is_delta(&msg);
+        let result = msg["type"] == "result";
         let mut core = shared.lock();
         let fx = match core
             .convs
@@ -477,6 +478,9 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
             None => break,
         };
         run_effects(&mut core, pane, fx);
+        if result {
+            crate::chats::answered(&mut core, pane);
+        }
         if delta {
             feed.dirty.store(true, Ordering::Relaxed);
         } else {
@@ -987,6 +991,7 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
     // Sending is moving on: what the last turn asked of the person is over.
     core.clear_agent(&pane);
     run_effects(&mut core, &pane, fx);
+    crate::chats::said(&mut core, &pane, line);
     core.refresh();
     drop(core);
     save_due(shared, true);

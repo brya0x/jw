@@ -108,6 +108,7 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
             ports: None,
             review: None,
             github: None,
+            chat: None,
         },
     )
 }
@@ -215,6 +216,7 @@ pub fn create_worktree(
             }),
             review: None,
             github: None,
+            chat: None,
         },
     )?;
     Ok(reply.map(|mut r| {

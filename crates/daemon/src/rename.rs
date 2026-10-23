@@ -52,14 +52,20 @@ pub fn workspace(shared: &Shared, workspace: &str, name: &str) -> Done {
             format!("no workspace {workspace}"),
         ));
     };
-    if ws.kind != WorkspaceKind::Worktree {
+    // A chat's folder is the daemon's, not the person's (REQ-802).
+    if ws.kind != WorkspaceKind::Worktree && ws.chat.is_none() {
         return Err(err(
             ErrorCode::BadRequest,
             "only a worktree is renamed: a folder is a directory on disk",
         ));
     }
-    ws.name =
-        name.unwrap_or_else(|| automatic(&ws.path, ws.project.as_deref(), ws.branch.as_deref()));
+    ws.name = name.unwrap_or_else(|| {
+        if ws.chat.is_some() {
+            crate::chats::NEW_NAME.to_owned()
+        } else {
+            automatic(&ws.path, ws.project.as_deref(), ws.branch.as_deref())
+        }
+    });
     core.refresh();
     Ok(None)
 }

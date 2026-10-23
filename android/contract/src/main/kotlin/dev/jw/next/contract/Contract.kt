@@ -271,6 +271,26 @@ sealed interface Cmd {
     @Serializable @SerialName("move_repo")
     data class MoveRepo(val workspace: Id, val delta: Int) : Cmd
 
+    /** Make a conversation of its own: an empty folder, a workspace with `chat` and one panel. The reply is `{workspace}`. */
+    @Serializable @SerialName("chat_new")
+    data object ChatNew : Cmd
+
+    /** Close a chat's panel and keep the chat; a chat with no message is removed (`{discarded: true}`). */
+    @Serializable @SerialName("archive_chat")
+    data class ArchiveChat(val workspace: Id) : Cmd
+
+    /** Open a panel again in an archived chat's folder, on its saved session. The reply is `{pane}`. */
+    @Serializable @SerialName("resume_chat")
+    data class ResumeChat(val workspace: Id) : Cmd
+
+    /** Remove a chat's folder and the chat; Claude's own transcripts are not touched. */
+    @Serializable @SerialName("delete_chat")
+    data class DeleteChat(val workspace: Id) : Cmd
+
+    /** Start a new conversation in [to]; the reply is `{pane, text}`, the summary for the client's field unless [summary] is false. */
+    @Serializable @SerialName("promote_chat")
+    data class PromoteChat(val workspace: Id, val to: Id, val summary: Boolean? = null) : Cmd
+
     @Serializable @SerialName("rename_pane")
     data class RenamePane(val pane: Id, val name: String) : Cmd
 
@@ -624,6 +644,19 @@ data class WorkspaceSummary(
     val removing: Boolean = false,
     /** The group of the workspace's repository, when it has one. */
     val group: Id? = null,
+    /** The workspace is a conversation of its own. */
+    val chat: ChatInfo? = null,
+)
+
+/** What makes a workspace a conversation of its own, and what Home draws of it without opening it. */
+@Serializable
+data class ChatInfo(
+    /** The panel is closed and the chat waits to be resumed. */
+    val archived: Boolean = false,
+    /** When the last item was added to its conversation, in seconds: a chat is ordered by it. */
+    val active: Long,
+    /** The text of that item on one line, clipped to 80 characters. */
+    val last: String? = null,
 )
 
 /** A name that gathers workspaces; it holds nothing open. */
@@ -770,6 +803,8 @@ sealed interface Node {
         val review: Review? = null,
         /** A worktree is being removed: nothing can be done with the workspace. */
         val removing: Boolean = false,
+        /** The workspace is a conversation of its own. */
+        val chat: ChatInfo? = null,
     ) : Node
 
     /** Level 2: one pane, a terminal. */
