@@ -2235,7 +2235,7 @@ fn engine_starts(log: &Path) -> Vec<String> {
         .collect()
 }
 
-/// REQ-743 (B-28): a `--session-id` typed for a session whose transcript is on disk starts the
+/// REQ-754 (B-28): a `--session-id` typed for a session whose transcript is on disk starts the
 /// engine with `--resume`, which the flag of the conversation (off: it is new) does not say.
 #[test]
 fn a_conversation_started_with_a_session_id_whose_transcript_exists_resumes_it() {
@@ -2261,7 +2261,7 @@ fn a_conversation_started_with_a_session_id_whose_transcript_exists_resumes_it()
     r.stop();
 }
 
-/// REQ-743, REQ-744: the daemon stops with the first turn running: the transcript is on disk (the
+/// REQ-754, REQ-755: the daemon stops with the first turn running: the transcript is on disk (the
 /// engine writes it at the first message) and the conversation saved had none. The next message
 /// starts the engine with `--resume`.
 #[test]
@@ -2335,7 +2335,7 @@ fn a_daemon_stopped_in_the_first_turn_resumes_the_conversation_at_the_next_messa
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// REQ-743, REQ-744 (RAT-101): the conversation says it has a transcript and the file is gone: the
+/// REQ-754, REQ-755 (RAT-108): the conversation says it has a transcript and the file is gone: the
 /// engine starts with `--session-id` under the same id, and a note says nothing of before is in it.
 #[test]
 fn a_conversation_whose_transcript_is_gone_starts_again_with_its_id_and_says_so() {

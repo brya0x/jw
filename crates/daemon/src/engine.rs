@@ -269,7 +269,7 @@ fn launch_of(c: &Conv) -> Launch {
     ]
     .map(str::to_owned)
     .into();
-    // `--resume` needs the transcript and `--session-id` makes it: `start_engine` has set the flag from the disk (REQ-743).
+    // `--resume` needs the transcript and `--session-id` makes it: `start_engine` has set the flag from the disk (REQ-754).
     args.extend([
         if c.st.has_transcript {
             "--resume"
@@ -587,7 +587,7 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
     }
     // The disk says whether the session has a transcript, not the flag of the conversation: the
     // engine writes the file at the first message and the flag is on at the end of the first turn
-    // (REQ-743). The folder is the one the engine runs with, and no lock is held for the look.
+    // (REQ-754). The folder is the one the engine runs with, and no lock is held for the look.
     let lookup: Vec<(String, String)> = match &env {
         Some(e) => e.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         None => cfg_env.clone(),

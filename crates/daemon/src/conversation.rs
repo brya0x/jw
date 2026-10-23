@@ -2426,9 +2426,9 @@ impl State {
         }
     }
 
-    /// What the look for the session's transcript found as the engine is about to start (REQ-744):
+    /// What the look for the session's transcript found as the engine is about to start (REQ-755):
     /// the flag becomes what the disk says; a transcript that came to be is the pane's resume, and
-    /// one the flag said was there and is not is said in a note (RAT-101).
+    /// one the flag said was there and is not is said in a note (RAT-108).
     pub fn transcript_found(&mut self, found: bool) -> Vec<Effect> {
         let had = std::mem::replace(&mut self.has_transcript, found);
         match (had, found) {
