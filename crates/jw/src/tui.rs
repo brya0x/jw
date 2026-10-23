@@ -316,10 +316,11 @@ fn clip(text: &str, cols: usize) -> String {
 }
 
 /// Most urgent first: the order of the legend.
-pub(crate) const URGENCY: [AttentionKind; 8] = [
+pub(crate) const URGENCY: [AttentionKind; 9] = [
     AttentionKind::Permission,
     AttentionKind::Question,
     AttentionKind::Plan,
+    AttentionKind::Artifact,
     AttentionKind::CiFailed,
     AttentionKind::ShellDone,
     AttentionKind::Screen,
@@ -339,6 +340,7 @@ fn mark(a: &Attention) -> (&'static str, Rgb) {
         AttentionKind::Permission => ("!", look::red()),
         AttentionKind::Question => ("?", look::yellow()),
         AttentionKind::Plan => ("◆", look::magenta()),
+        AttentionKind::Artifact => ("▣", look::cyan()),
         AttentionKind::CiFailed => ("✗", look::red()),
         AttentionKind::ShellDone if a.exit_code.unwrap_or(0) != 0 => ("✗", look::red()),
         AttentionKind::ShellDone => ("❯", look::green()),
@@ -353,6 +355,7 @@ fn what(a: &Attention) -> String {
         AttentionKind::Permission => "pide permiso".into(),
         AttentionKind::Question => "hace una pregunta".into(),
         AttentionKind::Plan => "plan listo".into(),
+        AttentionKind::Artifact => "artefacto por revisar".into(),
         AttentionKind::CiFailed => "CI falló".into(),
         AttentionKind::ShellDone => format!("salió {}", a.exit_code.unwrap_or(0)),
         AttentionKind::Screen => "espera en pantalla".into(),
@@ -1277,6 +1280,8 @@ impl View {
                 Node::Commits(c) => {
                     self.commit_lists.insert(id, c);
                 }
+                // The terminal client does not open artifacts: the phone is where they are seen (OPEN-57).
+                Node::Artifacts(_) => {}
                 Node::Conversation(c) => {
                     // The older items that were asked for stay before the node's (REQ-567).
                     let ui = self.conv_ui.entry(id.clone()).or_default();

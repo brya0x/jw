@@ -22,6 +22,7 @@ pub fn default_accepts() -> std::collections::BTreeMap<String, Vec<u32>> {
         "blocks",
         "diff",
         "commits",
+        "artifacts",
         "conversation",
     ]
     .map(|t| (t.to_owned(), vec![1]))

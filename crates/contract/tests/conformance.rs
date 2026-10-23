@@ -532,3 +532,23 @@ fn the_reply_of_list_worktrees_is_a_list_of_worktree_infos() {
         doc["result"]["worktrees"]
     );
 }
+
+/// The result of `artifact_read` is an `ArtifactDoc`: an `html` artifact carries `html`, a `md` one
+/// the blocks `read_markdown` makes (N171, REQ-766), and each fixture says only what it carries.
+#[test]
+fn the_reply_of_artifact_read_is_a_document_with_html_or_blocks() {
+    let docs = fixtures("daemon");
+    let doc = |name: &str| -> contract::artifacts::ArtifactDoc {
+        let (_, d) = docs.iter().find(|(n, _)| n == name).expect("the fixture");
+        let got: contract::artifacts::ArtifactDoc =
+            serde_json::from_value(d["result"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(&got).unwrap(), d["result"]);
+        got
+    };
+    let html = doc("reply-ok-artifact-read.json");
+    assert_eq!(html.html.as_deref(), Some("<h1>Ajustes v2</h1>"));
+    assert!(html.doc.is_none());
+    let md = doc("reply-ok-artifact-read-md.json");
+    assert!(md.html.is_none());
+    assert_eq!(md.doc.unwrap().blocks.len(), 2);
+}

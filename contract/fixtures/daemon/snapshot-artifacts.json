@@ -1,0 +1,63 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000e2",
+    "type": "artifacts",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 4,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "items": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000e1",
+        "name": "ajustes",
+        "title": "Prototipo de ajustes",
+        "kind": "prototype",
+        "format": "html",
+        "versions": [
+          {
+            "n": 1,
+            "hash": "8f4e27a72c19f62e84020cdec1e4ae85cc462126a5cc710359f6ba5dcf1848f3",
+            "size": 16,
+            "at": 1791950000,
+            "publisher": "00000000-0000-4000-8000-0000000000c1",
+            "verdict": {
+              "type": "changes",
+              "text": "El botón es pequeño.",
+              "at": 1791950100,
+              "delivered": "agent"
+            }
+          },
+          {
+            "n": 2,
+            "hash": "fda3e9220af50387ff47fe7867b9e8009fe36fb710c46d2fd8d078ac34ce1298",
+            "size": 19,
+            "at": 1791950200,
+            "publisher": "00000000-0000-4000-8000-0000000000c1"
+          }
+        ]
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000e3",
+        "name": "n171",
+        "title": "N171",
+        "kind": "spec",
+        "format": "md",
+        "versions": [
+          {
+            "n": 1,
+            "hash": "8f4e27a72c19f62e84020cdec1e4ae85cc462126a5cc710359f6ba5dcf1848f3",
+            "size": 16,
+            "at": 1791950300,
+            "verdict": {
+              "type": "approved",
+              "at": 1791950400,
+              "delivered": "none"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
