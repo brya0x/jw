@@ -378,6 +378,9 @@ pub struct ConvCommand {
     pub kind: CommandKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The section of a `plugin` (REQ-794): the plugin's name, or `claude.ai`; none for the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

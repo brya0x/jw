@@ -261,26 +261,59 @@ pub fn own_commands() -> Vec<ConvCommand> {
         source: CommandSource::Jwn,
         kind: CommandKind::Local,
         description: Some((*description).to_owned()),
+        group: None,
     });
     let panels = PANELS.iter().map(|(name, description)| ConvCommand {
         name: format!("/{name}"),
         source: CommandSource::Jwn,
         kind: CommandKind::Panel,
         description: Some((*description).to_owned()),
+        group: None,
     });
     let screens = INTERACTIVE.iter().map(|(name, description)| ConvCommand {
         name: format!("/{name}"),
         source: CommandSource::Claude,
         kind: CommandKind::Screen,
         description: Some((*description).to_owned()),
+        group: None,
     });
     own.chain(panels).chain(screens).collect()
 }
 
+/// Where the engine says a command that is not Claude's is defined, which it says in the end of
+/// the description (or the beginning, for a plugin's) and in no field (REQ-792): the source, the
+/// plugin's name when it is one, and the description without that mark.
+fn origin<'a>(
+    name: &str,
+    description: &'a str,
+) -> Option<(CommandSource, Option<String>, &'a str)> {
+    if let Some((plugin, _)) = name.split_once(':') {
+        let rest = description
+            .strip_prefix('(')
+            .and_then(|d| d.strip_prefix(plugin))
+            .and_then(|d| d.strip_prefix(") "))
+            .unwrap_or(description);
+        return Some((CommandSource::Plugin, Some(plugin.to_owned()), rest));
+    }
+    let marks = [
+        ("(user)", CommandSource::Skill, None),
+        ("(project)", CommandSource::Project, None),
+        ("(claude.ai sync)", CommandSource::Plugin, Some("claude.ai")),
+    ];
+    let text = description.trim_end();
+    marks.into_iter().find_map(|(mark, source, group)| {
+        let rest = text.strip_suffix(mark)?;
+        Some((source, group.map(str::to_owned), rest.trim_end()))
+    })
+}
+
 /// The `/` list: jwn's own, then what the engine lists, each tagged by where it is defined
-/// (REQ-417). `skills` are the names the engine's `init` calls skills, when it has said them.
-pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCommand> {
+/// (REQ-417, REQ-792). `skills` are the names the engine's `init` calls skills, when it has said
+/// them; they tell a skill from a project's command for the ones the engine marks nothing on
+/// (REQ-793), whose names come back as the second part.
+fn classify(listed: &Value, skills: Option<&[&str]>) -> (Vec<ConvCommand>, Vec<String>) {
     let mut out = own_commands();
+    let mut unmarked = Vec::new();
     for c in listed.as_array().into_iter().flatten() {
         let Some(name) = c["name"].as_str().filter(|n| !n.is_empty()) else {
             continue;
@@ -288,6 +321,8 @@ pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCom
         if OWN.iter().any(|(own, _)| *own == name) || PANELS.iter().any(|(p, _)| *p == name) {
             continue;
         }
+        let described = c["description"].as_str().unwrap_or("");
+        let (mut group, mut description) = (None, described);
         let (source, kind) = if c["builtin"].as_bool().unwrap_or(false) {
             let kind = if SCREEN.contains(&name) {
                 CommandKind::Screen
@@ -297,12 +332,17 @@ pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCom
                 CommandKind::Text
             };
             (CommandSource::Claude, kind)
-        } else if name.contains(':') {
-            (CommandSource::Plugin, CommandKind::Prompt)
-        } else if skills.is_some_and(|s| !s.contains(&name)) {
-            (CommandSource::Project, CommandKind::Prompt)
+        } else if let Some((source, g, rest)) = origin(name, described) {
+            (group, description) = (g, rest);
+            (source, CommandKind::Prompt)
         } else {
-            (CommandSource::Skill, CommandKind::Prompt)
+            unmarked.push(name.to_owned());
+            let source = if skills.is_some_and(|s| !s.contains(&name)) {
+                CommandSource::Project
+            } else {
+                CommandSource::Skill
+            };
+            (source, CommandKind::Prompt)
         };
         // What the engine serves replaces what was only listed.
         out.retain(|k| k.name.trim_start_matches('/') != name);
@@ -310,13 +350,18 @@ pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCom
             name: format!("/{name}"),
             source,
             kind,
-            description: c["description"]
-                .as_str()
+            description: Some(description)
                 .filter(|d| !d.is_empty())
                 .map(|d| clip(d, 160)),
+            group,
         });
     }
-    out
+    (out, unmarked)
+}
+
+#[cfg(test)]
+fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCommand> {
+    classify(listed, skills).0
 }
 
 pub fn parse_args(args: &[String]) -> Result<OpenArgs, String> {
@@ -529,6 +574,8 @@ pub struct State {
     wanted_model: Option<String>,
     /// The names the engine's `init` calls skills: they tell a skill from a project's command.
     skills: Option<Vec<String>>,
+    /// The commands the engine marked no origin on (REQ-793): the only ones `init`'s skills may retag.
+    unmarked: Vec<String>,
     pub limits: Option<Limits>,
     /// Allowed for this session: what the person said yes to for the rest of the conversation.
     allowed: Vec<String>,
@@ -740,6 +787,7 @@ impl State {
             reloading: false,
             wanted_model: None,
             skills: None,
+            unmarked: Vec::new(),
             limits: None,
             allowed: Vec::new(),
             inflight: None,
@@ -2543,7 +2591,7 @@ impl State {
                 .skills
                 .as_ref()
                 .map(|s| s.iter().map(String::as_str).collect());
-            self.commands = classify_commands(&resp["commands"], skills.as_deref());
+            (self.commands, self.unmarked) = classify(&resp["commands"], skills.as_deref());
             self.commands_at = stamp();
         }
         // Still the placeholder, or the name it was asked with (`opus`): the engine says which model that is.
@@ -2582,7 +2630,8 @@ impl State {
         }
     }
 
-    /// The skills `init` lists tell the commands that are skills from those of the project.
+    /// The skills `init` lists tell the commands that are skills from those of the project, for the
+    /// ones the engine marked no origin on (REQ-793): a mark is not undone.
     fn learn_skills(&mut self, listed: &Value) {
         let names: Vec<String> = listed
             .as_array()
@@ -2591,8 +2640,8 @@ impl State {
             .filter_map(|n| n.as_str().map(|n| n.trim_start_matches('/').to_owned()))
             .collect();
         for c in &mut self.commands {
-            if matches!(c.source, CommandSource::Skill | CommandSource::Project) {
-                let name = c.name.trim_start_matches('/');
+            let name = c.name.trim_start_matches('/');
+            if self.unmarked.iter().any(|u| u == name) {
                 c.source = if names.iter().any(|n| n == name) {
                     CommandSource::Skill
                 } else {
@@ -4131,6 +4180,129 @@ mod tests {
         );
     }
 
+    /// What claude 2.1.309 answered to `initialize` for a few of 124 commands, in a private
+    /// folder with a project skill and command (`docs/claude-engine.md`).
+    const LISTED: &str = include_str!("../tests/captures/initialize-commands-2.1.309.json");
+
+    #[test]
+    fn the_marks_of_the_description_say_where_a_command_is_defined() {
+        let listed: Value = serde_json::from_str(LISTED).unwrap();
+        let all = classify_commands(&listed, None);
+        let find = |n: &str| all.iter().find(|c| c.name == format!("/{n}")).unwrap();
+        let (skill, command) = (find("android-review"), find("commit"));
+        assert_eq!(
+            (skill.source, command.source),
+            (CommandSource::Skill, CommandSource::Skill)
+        );
+        let described = skill.description.as_deref().unwrap();
+        assert!(
+            described.starts_with("Reviews Kotlin") && !described.contains("(user)"),
+            "the mark is read on the whole description, which is longer than the clip: {described}"
+        );
+        assert_eq!(
+            command
+                .description
+                .as_deref()
+                .map(|d| d.ends_with("(user)")),
+            Some(false)
+        );
+        for (n, text) in [
+            ("proj-skill", "a project skill"),
+            ("proj-cmd", "a project command"),
+        ] {
+            let c = find(n);
+            assert_eq!(
+                (c.source, c.description.as_deref()),
+                (CommandSource::Project, Some(text))
+            );
+        }
+        let (deploy, sdk, ponytail) = (
+            find("vercel:deploy"),
+            find("vercel:ai-sdk"),
+            find("ponytail:ponytail"),
+        );
+        for (c, group) in [(deploy, "vercel"), (sdk, "vercel"), (ponytail, "ponytail")] {
+            assert_eq!(
+                (c.source, c.group.as_deref()),
+                (CommandSource::Plugin, Some(group))
+            );
+            assert!(
+                !c.description.as_deref().unwrap().starts_with('('),
+                "{:?}",
+                c.description
+            );
+        }
+        let docs = find("docs");
+        assert_eq!(
+            (docs.source, docs.group.as_deref()),
+            (CommandSource::Plugin, Some("claude.ai"))
+        );
+        assert!(
+            !docs
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("(claude.ai sync)")
+        );
+        for n in ["dataviz", "deep-research", "code-review"] {
+            assert_eq!(
+                (find(n).source, find(n).group.as_deref()),
+                (CommandSource::Claude, None),
+                "{n}"
+            );
+        }
+        assert!(
+            find("deep-research")
+                .description
+                .as_deref()
+                .unwrap()
+                .ends_with("(dynamic workflow)")
+        );
+        assert!(
+            all.iter()
+                .all(|c| c.group.is_none() || c.source == CommandSource::Plugin),
+            "only a plugin has a group (REQ-794)"
+        );
+    }
+
+    #[test]
+    fn a_command_with_no_mark_is_tagged_as_before_and_init_skills_retag_only_it() {
+        let mut listed: Vec<Value> = serde_json::from_str(LISTED).unwrap();
+        listed.push(json!({"name": "deploy", "description": "publicar"}));
+        let mut s = st();
+        s.initialized(&json!({ "commands": listed }));
+        let source = |s: &State, n: &str| {
+            s.commands
+                .iter()
+                .find(|c| c.name == format!("/{n}"))
+                .unwrap()
+                .source
+        };
+        assert_eq!(
+            source(&s, "deploy"),
+            CommandSource::Skill,
+            "until init says which are skills"
+        );
+        // `init` lists the project's skill and not the person's command
+        s.learn_skills(&json!(["proj-skill", "android-review"]));
+        assert_eq!(
+            source(&s, "deploy"),
+            CommandSource::Project,
+            "no mark, not a skill"
+        );
+        assert_eq!(
+            source(&s, "proj-skill"),
+            CommandSource::Project,
+            "a mark is not undone"
+        );
+        assert_eq!(
+            source(&s, "commit"),
+            CommandSource::Skill,
+            "a mark is not undone"
+        );
+        assert_eq!(source(&s, "android-review"), CommandSource::Skill);
+    }
+
     #[test]
     fn initialize_gives_the_commands_and_the_model_before_any_turn() {
         let mut s = st();
@@ -4268,6 +4440,7 @@ mod tests {
             source: CommandSource::Skill,
             kind: CommandKind::Prompt,
             description: None,
+            group: None,
         }];
         let names: Vec<String> = State::restored(older, "20:00")
             .commands

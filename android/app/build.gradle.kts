@@ -22,6 +22,7 @@ android {
         versionName = "0.0.1"
         manifestPlaceholders["appLabel"] = identity("label")
         buildConfigField("String", "LINK_SCHEME", "\"${identity("name")}\"")
+        buildConfigField("String", "PRODUCT", "\"${identity("name")}\"")
     }
 
     compileOptions {

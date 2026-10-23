@@ -227,7 +227,9 @@
       {
         "name": "/vercel:deploy",
         "source": "plugin",
-        "kind": "prompt"
+        "kind": "prompt",
+        "description": "Deploy the current project to Vercel",
+        "group": "vercel"
       },
       {
         "name": "/jwn",

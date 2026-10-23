@@ -150,13 +150,11 @@ class ConversationTest {
     fun theSlashListHoldsTheCommandsWithTheLettersTheOnesThatBeginWithThemFirst() {
         val c = conversation()
         val names = { line: String -> slashMenu(c.commands, line).map { it.name } }
-        assertEquals(listOf("/exit", "/tasks", "/context", "/doctor", "/deploy", "/jwn", "/vercel:deploy"), names("/"))
+        assertEquals(listOf("/exit", "/tasks", "/jwn", "/deploy", "/vercel:deploy", "/context", "/doctor"), names("/"), "by section: jw, Personales, Proyecto, plugins, Claude (REQ-795)")
         assertEquals(listOf("/deploy", "/vercel:deploy"), names("/de"))
         assertEquals(emptyList(), names("/dex"))
         assertEquals(emptyList(), names("/model "), "a space ends the word")
         assertEquals(emptyList(), names("hola"))
-        assertEquals("jwn", CommandSource.Jwn.word())
-        assertEquals("proyecto", CommandSource.Project.word())
     }
 
     @Test
@@ -170,6 +168,35 @@ class ConversationTest {
         assertEquals(emptyList(), names("a/de", 4), "a slash inside a word is not one")
         assertEquals(emptyList(), names("mira /de y mas", 14), "the cursor is past the word")
         assertEquals(listOf("/deploy", "/vercel:deploy"), names("mira /de y mas", 8), "the cursor ends the word")
+    }
+
+    @Test
+    fun theSectionsAreJwPersonalesProyectoPluginsClaudeAiClaudeAndAnEmptyOneIsNotThere() {
+        fun cmd(name: String, source: CommandSource, group: String? = null) = ConvCommand(name, source, CommandKind.Prompt, null, group)
+        val all = listOf(
+            cmd("/init", CommandSource.Claude), cmd("/docs", CommandSource.Plugin, "claude.ai"), cmd("/vercel:deploy", CommandSource.Plugin, "vercel"),
+            cmd("/ponytail:ponytail", CommandSource.Plugin, "Ponytail"), cmd("/proj", CommandSource.Project), cmd("/commit", CommandSource.Skill),
+            cmd("/exit", CommandSource.Jwn), cmd("/other:x", CommandSource.Plugin),
+        )
+        val sections = commandSections(slashMenu(all, "/"), "jw")
+        assertEquals(listOf("jw", "Personales", "Proyecto", "other", "Ponytail", "vercel", "claude.ai", "Claude"), sections.map { it.head.title }, "a plugin of a daemon that sent no group is the text before its `:`")
+        assertEquals(
+            listOf(Tint.Jwn, Tint.Personal, Tint.Project, Tint.Plugin, Tint.Plugin, Tint.Plugin, Tint.ClaudeAi, Tint.Claude),
+            sections.map { it.head.tint },
+        )
+        // a plugin whose group is named as another section is a section of its own (its sticky title is keyed by the section)
+        assertEquals(2, commandSections(slashMenu(listOf(cmd("/a", CommandSource.Project), cmd("/b", CommandSource.Plugin, "Proyecto")), "/"), "jw").size)
+        // typing keeps the commands that hold the letters in every section, and a section with none is not drawn
+        assertEquals(listOf("Proyecto"), commandSections(slashMenu(all, "/pro"), "jw").map { it.head.title })
+        assertEquals(listOf("claude.ai"), commandSections(slashMenu(all, "/docs"), "jw").map { it.head.title })
+        assertEquals(emptyList(), commandSections(slashMenu(all, "/zzz"), "jw"))
+        // what begins with the letters comes first inside a section
+        val jw = listOf("/rename", "/resume", "/status", "/cost").map { cmd(it, CommandSource.Jwn) }
+        assertEquals(listOf("/status", "/cost", "/resume"), commandSections(slashMenu(jw, "/s"), "jw").single().commands.map { it.name })
+        // the colour of a command word in the line is its section's, claude.ai's red among them
+        assertEquals(listOf(Triple(0, 5, Tint.ClaudeAi), Triple(6, 20, Tint.Plugin)), commandWords(all, "/docs /vercel:deploy"))
+        // a tap on a command is the same whatever the section: the list is one list
+        assertEquals(slashMenu(all, "/").map { it.name }, sections.flatMap { s -> s.commands.map { it.name } })
     }
 
     @Test
@@ -189,7 +216,7 @@ class ConversationTest {
         val c = conversation()
         val line = "mira /deploy y /nope o /jwn, /exit"
         val words = commandWords(c.commands, line).map { (a, b, s) -> line.substring(a, b) to s }
-        assertEquals(listOf("/deploy" to CommandSource.Project, "/exit" to c.commands.first { it.name == "/exit" }.source), words)
+        assertEquals(listOf("/deploy" to Tint.Project, "/exit" to Tint.Jwn), words)
         assertEquals(emptyList(), commandWords(c.commands, "no/deploy"))
     }
 
@@ -245,8 +272,10 @@ class ConversationTest {
         assertEquals("62 %", at("límite de 5 horas"))
         assertEquals("31 %", at("límite de 7 días"))
         val skills = skillsPanel(c)
-        assertEquals(listOf("/deploy", "/vercel:deploy", "/jwn"), skills.rows.map { it.label })
-        assertEquals(RowAct.Insert("/deploy "), skills.rows[0].act)
+        assertEquals(listOf("/jwn", "/deploy", "/vercel:deploy"), skills.rows.map { it.label }, "by section (REQ-803)")
+        assertEquals(listOf("Personales", "Proyecto", "vercel"), skills.rows.map { it.group?.title })
+        assertTrue(skills.rows.all { it.tag == null }, "no word of origin")
+        assertEquals(RowAct.Insert("/jwn "), skills.rows[0].act)
         val tasks = tasksPanel(c)
         assertEquals(listOf("en curso", "detenido"), tasks.rows.map { it.tag })
         assertEquals(Tone.Warn, tasks.rows[0].tone)

@@ -1,0 +1,78 @@
+[
+ {
+  "name": "android-review",
+  "description": "Reviews Kotlin and Android code for duplicated functions, overly complex logic, unnecessary comments, and violations of the repo's own rules (AGENTS.md / CLAUDE.md, module boundaries, specs and their REQ ids) plus the Android hazards Lint doesn't flag by default (secrets in logs, backup and cleartext settings, Keystore misuse, leaked contexts and coroutine scopes, work on the main thread, silent wire-format changes, junk committed to git), fixes what it finds, verifies Gradle lint, the unit tests and assembleDebug still pass, and reports what changed and why it mattered. Use this whenever the user asks for an Android or Kotlin code review or cleanup, a pre-PR or pre-commit pass on an Android module, or says things like \"review my changes\", \"clean this up before I push\", \"remove the duplicate code\", \"simplify this\", or invokes /android-review. Also use it when the user is about to open a pull request on an Android project and wants the obvious problems fixed rather than listed. (user)",
+  "argumentHint": ""
+ },
+ {
+  "name": "commit",
+  "description": "Run `git status`, `git diff --stat`, `git log --oneline -5` and `git branch --show-current` to un... (user)",
+  "argumentHint": ""
+ },
+ {
+  "name": "proj-skill",
+  "description": "a project skill (project)",
+  "argumentHint": ""
+ },
+ {
+  "name": "proj-cmd",
+  "description": "a project command (project)",
+  "argumentHint": ""
+ },
+ {
+  "name": "vercel:deploy",
+  "description": "(vercel) Deploy the current project to Vercel. Pass \"prod\" o … to production. Default is preview deployment.",
+  "argumentHint": ""
+ },
+ {
+  "name": "vercel:ai-sdk",
+  "description": "(vercel) Vercel AI SDK expert guidance. Use when building AI … generation, or working with any LLM provider.",
+  "argumentHint": "",
+  "aliases": [
+   "ai-sdk"
+  ]
+ },
+ {
+  "name": "ponytail:ponytail",
+  "description": "(ponytail) Lazy senior dev mode: the smallest change that fu … r bloat. Levels: lite, full (default), ultra.",
+  "argumentHint": "[lite|full|ultra|off]",
+  "aliases": [
+   "ponytail"
+  ]
+ },
+ {
+  "name": "docs",
+  "description": "docs (editable docs people share and comment on; the default … n, even with files attached. (claude.ai sync)",
+  "argumentHint": "",
+  "aliases": [
+   "anthropic-skills:docs"
+  ]
+ },
+ {
+  "name": "dataviz",
+  "description": "Use this skill whenever you are about to create ANY chart, g … \"tooltip\", \"chart colors\", \"color by series\".",
+  "argumentHint": "",
+  "builtin": true
+ },
+ {
+  "name": "deep-research",
+  "description": "Deep research harness — fan-out web searches, fetch sources, … synthesize a cited report. (dynamic workflow)",
+  "argumentHint": "",
+  "builtin": true
+ },
+ {
+  "name": "code-review",
+  "description": "Review the current diff, or a PR number/branch/path target, … stays until you pass --max-findings default.",
+  "argumentHint": "[low|medium|high|xhigh|max] [--fix] [--comment] [<pr#>|<branch>|<path>] [--max-findings <n>|all]",
+  "aliases": [
+   "review"
+  ],
+  "builtin": true
+ },
+ {
+  "name": "init",
+  "description": "Initialize a new CLAUDE.md file with codebase documentation",
+  "argumentHint": "",
+  "builtin": true
+ }
+]
