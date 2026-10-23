@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<title>jw · actualizar claude en segundo plano</title>
+<style>
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:18px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.row{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-chip{background:var(--blue);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}.c-chipm{background:var(--magenta);color:var(--bg);font-weight:700}
+.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;align-items:center}
+button,select{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer}
+button:hover{border-color:var(--blue)}button:disabled{opacity:.45;cursor:default}
+label{font-size:12px;color:var(--mut)}
+.sp::before{content:'⠋';animation:sp .9s steps(1) infinite}
+@keyframes sp{0%{content:'⠋'}10%{content:'⠙'}20%{content:'⠹'}30%{content:'⠸'}40%{content:'⠼'}50%{content:'⠴'}60%{content:'⠦'}70%{content:'⠧'}80%{content:'⠇'}90%{content:'⠏'}}
+.phone{position:relative;width:360px;height:660px;background:var(--bg);border:1px solid var(--line);border-radius:30px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.4 var(--mono);color:var(--fg)}
+.phone .hd{display:flex;align-items:center;gap:8px;padding:14px 14px 8px}
+.phone .hd b{font-size:15px;color:#e6e9ef;flex:1}
+.phone .bell{position:relative;background:none;border:0;font-size:16px;padding:4px 8px;min-width:48px;min-height:44px}
+.phone .bell .bdg{position:absolute;top:2px;right:2px;background:var(--yellow);color:var(--bg);border-radius:8px;font-size:10px;padding:0 5px;font-weight:700}
+.phone .bell .jd{position:absolute;bottom:4px;right:4px;font-size:11px}
+.phone .body{flex:1;overflow:auto;padding:0 14px}
+.phone .sub{color:var(--dim);font-size:11.5px}
+.phone .msg{margin:8px 0}.phone .msg b{display:block;font-size:11px;color:var(--dim)}
+.phone .chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px}
+.phone .chip{min-height:48px;display:flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:12px;background:#222630;color:var(--fg);font:inherit;font-size:12px}
+.phone .chip.warn{border-color:var(--yellow);color:var(--yellow)}
+.phone .field{margin:0 14px 14px;border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--dim)}
+.phone .tabs{display:flex;gap:6px;padding:0 14px 8px}
+.phone .tab{flex:1;min-height:44px;border-radius:10px;border:1px solid var(--line);background:#222630;color:var(--dim);font:inherit;font-size:12.5px}
+.phone .tab[aria-selected=true]{color:#e6e9ef;border-color:var(--blue);background:var(--sel)}
+.phone .jr{display:flex;gap:10px;align-items:center;width:100%;min-height:56px;padding:8px 0;background:none;border:0;border-bottom:1px solid #2d323c;color:var(--fg);font:inherit;text-align:left;border-radius:0}
+.phone .jr .tt{flex:1;min-width:0}.phone .jr .tt b{display:block;color:#e6e9ef;font-weight:500}.phone .jr .tt span{color:var(--dim);font-size:11.5px}
+.phone .sec{color:var(--dim);font-size:11px;padding:10px 0 2px;letter-spacing:.04em}
+.phone .back{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+.phone .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--panel);border-radius:14px 14px 0 0;padding:10px 14px 18px;border-top:1px solid var(--line)}
+.phone .sheet h3{margin:4px 0 6px;font-size:14px;color:#e6e9ef}.phone .sheet p{color:var(--fg);font-size:12.5px;margin:6px 0}
+.phone .sheet .bad{color:var(--red);white-space:pre-wrap}
+.phone .sheet button{width:100%;min-height:48px;margin-top:6px;font-size:13px}
+.phone .toast{position:absolute;left:14px;right:14px;top:62px;background:#2c313a;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12px}
+.note{max-width:920px}
+fieldset{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:6px 12px 8px;max-width:920px}
+legend{color:var(--ink);font-size:13px;padding:0 6px}
+fieldset label{display:block;color:var(--fg);font-size:13px;margin:3px 0}
+fieldset label small{color:var(--mut);font-size:12px}
+.rec{color:var(--green);font-weight:700}
+</style></head><body>
+<h1>jw · avisar y actualizar claude en segundo plano</h1>
+<p class="note">Prototipo para aprobar antes del spec (N178). Pasa por cuatro estados: <b>buscando / actualizando</b> (un solo comando: <code>claude update</code> no tiene modo «solo comprobar»), <b>actualizado a X</b> (las conversaciones abiertas siguen en la anterior), <b>falló</b> (con el motivo) y <b>una conversación cuyo motor es más viejo que lo instalado</b>. El aviso es un <b>trabajo</b> (pestaña «trabajos» de avisos, marca de la barra) y un <b>chip</b> en la conversación vieja; nunca suma a <code>avisos N</code> (RAT-80). Los mensajes de error son ejemplos: los reales los dirá <code>claude update</code> (no se ha ejecutado aquí). Elige abajo las decisiones y prueba el efecto.</p>
+
+<div class="ctl">
+  <label>claude update respondería:
+    <select id="outcome">
+      <option value="new">hay 2.1.312 (4 s)</option>
+      <option value="none">ya está al día (1 s)</option>
+      <option value="perm">falla: sin permisos</option>
+      <option value="net">falla: sin red</option>
+      <option value="pm">falla: gestor de paquetes</option>
+    </select></label>
+  <button data-act="start">▶ el daemon arranca (revisa)</button>
+  <button data-act="tick" id="tickBtn">▶ pasan 6 h (revisión periódica)</button>
+  <button data-act="daemon">↻ reiniciar el daemon</button>
+  <button data-act="other">otra terminal actualizó claude a 2.1.312</button>
+</div>
+<div class="ctl">
+  <label>conversación seleccionada:</label>
+  <button data-act="c-idle">libre</button>
+  <button data-act="c-turn">a mitad de un turno</button>
+  <button data-act="c-task">libre con una tarea en segundo plano (⚙ 1)</button>
+  <button data-act="c-ask">esperando tu respuesta</button>
+  <button data-act="new">abrir una conversación nueva en sales-assist</button>
+  <button data-act="reset">reiniciar prototipo</button>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p class="note" style="max-width:760px">Teclas: <kbd>j</kbd><kbd>k</kbd> mover · <kbd>u</kbd> reiniciar el motor de la conversación con la versión nueva (en la app real sería <kbd>^␣</kbd> <kbd>u</kbd>; nunca Alt) · <kbd>n</kbd> abrir conversación en un workspace sin ella · <kbd>^␣</kbd> luego <kbd>a</kbd> avisos (aquí vale <kbd>a</kbd>). En avisos: <kbd>Tab</kbd> alertas/trabajos · <kbd>↑</kbd><kbd>↓</kbd> · <kbd>↵</kbd> ir · <kbd>x</kbd> descartar · <kbd>X</kbd> los terminados · <kbd>esc</kbd> cerrar.</p>
+  </div>
+  <div>
+    <div class="phone" id="phone"></div>
+    <p class="note" style="max-width:360px">El teléfono lee el mismo estado: la campana (con la marca de trabajos) y, en la conversación, el chip de motor viejo; tocarlo abre una hoja.</p>
+  </div>
+</div>
+
+<h2>Decisiones (en verde, mi recomendación: lo más pequeño que cumple lo pedido)</h2>
+
+<fieldset><legend>1. Modo (config personal, <code>config.toml</code>; se lee en cada revisión, sin reiniciar jw)</legend>
+  <label><input type="radio" name="mode" value="auto" checked> <b>auto</b>: ejecuta <code>claude update</code> y avisa lo que pasó <small>(lo que pediste)</small></label>
+  <label><input type="radio" name="mode" value="notify"> <b>notify</b>: no ejecuta nada; solo avisa si lo instalado es más nuevo que el motor de una conversación <small>(hoy no hay forma verificada de saber «hay una versión nueva» sin instalarla; claude ya se actualiza solo al arrancar: tu <code>settings.json</code> tiene <code>autoUpdatesChannel</code>)</small></label>
+  <label><input type="radio" name="mode" value="off"> <b>off</b>: ni revisa ni avisa</label>
+</fieldset>
+<fieldset><legend>2. Valor por defecto (quien no toca la config)</legend>
+  <label><input type="radio" name="defmode" value="auto" checked> <span class="rec">auto (recomendado)</span> <small>como pediste; se apaga con <code>off</code></small></label>
+  <label><input type="radio" name="defmode" value="notify"> notify <small>más prudente: jw no toca la instalación de nadie</small></label>
+</fieldset>
+<fieldset><legend>3. Cada cuánto</legend>
+  <label><input type="radio" name="every" value="6" checked> <span class="rec">al arrancar el daemon y cada 6 h (recomendado)</span></label>
+  <label><input type="radio" name="every" value="0"> solo al arrancar el daemon</label>
+  <label><input type="radio" name="every" value="1"> cada hora</label>
+</fieldset>
+<fieldset><legend>4. Cuándo aparece el trabajo en «trabajos»</legend>
+  <label><input type="radio" name="when" value="changed" checked> <span class="rec">solo si cambió la versión o falló (recomendado)</span> <small>una revisión sin novedad no deja nada: ni fila, ni marca verde cada 6 h (como OPEN-24: empujar sin nada que empujar no es un trabajo)</small></label>
+  <label><input type="radio" name="when" value="always"> siempre, desde que empieza <small>muestra «buscando» con spinner, pero también deja <code>✓ ya al día</code> cada revisión</small></label>
+</fieldset>
+<fieldset><legend>5. Dónde se ve</legend>
+  <label><input type="radio" name="where" value="chip" checked> <span class="rec">trabajos + barra + chip en la conversación vieja, en la TUI y el teléfono (recomendado)</span> <small>la lista <code>jobs</code> del session ya llega a los dos; el chip necesita un campo nuevo, aditivo, en el nodo de la conversación (la versión sale de <code>system/init</code>, que llega en cada turno)</small></label>
+  <label><input type="radio" name="where" value="jobs"> solo trabajos y barra <small>la conversación vieja no avisa</small></label>
+  <label><input type="radio" disabled> como alerta (<code>avisos N</code>) <small>descartado: una alerta espera algo de ti (RAT-80) y no hay marca sin nodo: <code>Attention.node</code> es obligatorio</small></label>
+</fieldset>
+<fieldset><legend>6. Si <code>claude update</code> falla</legend>
+  <label><input type="radio" name="retry" value="never" checked> <span class="rec">avisa una vez y no reintenta hasta que el daemon arranque otra vez (recomendado)</span> <small>los trabajos no se guardan (REQ-653): reintentar cada 6 h sumaría una ✗ nueva cada vez</small></label>
+  <label><input type="radio" name="retry" value="replace"> reintenta en cada revisión, con una sola fila ✗ que se reemplaza</label>
+</fieldset>
+<fieldset><legend>7. «Reiniciar con la versión nueva» (un motor viejo pasa a la versión instalada con <code>--resume</code>, solo con la conversación libre)</legend>
+  <label><input type="radio" name="restart" value="apart" checked> <span class="rec">va aparte, en N178b (recomendado)</span> <small>esta parte trae el aviso y el chip; el chip dice «ciérrala y ábrela». Falta comprobar que cerrar y abrir retoma sin perder nada</small></label>
+  <label><input type="radio" name="restart" value="here"> entra aquí <small>tecla <kbd>u</kbd> y botón; actúa solo si está libre: sin turno, sin pregunta, sin tareas (un reinicio mataría shells, monitores y subagentes), con transcripción en disco (REQ-754) y sin otro <code>claude</code> con la sesión (REQ-575)</small></label>
+</fieldset>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>Un solo trabajo, <code>update_claude</code>:</b> el daemon ejecuta <code>claude update</code> en un hilo (nunca con el candado), compara <code>claude --version</code> antes y después y termina <span class="c-green">✓ actualizar claude 2.1.309 → 2.1.312</span> o <span class="c-red">✗</span> con lo que dijo el comando. No se analiza su salida.</li>
+  <li><b>Sin workspace:</b> hoy <code>Job.workspace</code> es obligatorio. Pasaría a opcional (cambio aditivo: contrato, esquema, fixtures, Kotlin) y <kbd>↵</kbd> «ir al workspace» no haría nada en este trabajo. Un cliente viejo mostraría el tipo tal cual (OPEN-23).</li>
+  <li><b>Las conversaciones abiertas no cambian solas:</b> cada motor es un proceso de larga vida. Una conversación nueva ya usa el binario nuevo (el daemon resuelve <code>claude</code> al arrancar cada motor). Por eso el chip: <code>motor 2.1.309 ↑ 2.1.312</code>.</li>
+  <li><b>Qué binario se actualiza:</b> el que resolvería un motor (el PATH del panel y luego el del daemon). Si el daemon arranca desde launchd su PATH puede ser otro: no verificado.</li>
+  <li><b>Nada se guarda:</b> si el daemon se reinicia se pierden los trabajos y se revisa otra vez al arrancar.</li>
+</ul>
+
+<script>
+const COLS=100, ROWS=28, SB=27;
+const SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const NEW='2.1.312';
+const now=()=>performance.now();
+const spin=()=>SPIN[Math.floor(now()/110)%SPIN.length];
+const fmt=ms=>{const s=ms/1000;return s<10?s.toFixed(1).replace('.',',')+' s':Math.round(s)+' s'};
+const opt=n=>document.querySelector(`input[name=${n}]:checked`).value;
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const REASONS={
+  perm:'No se pudo escribir en la instalación de claude: permission denied (~/.local/share/claude). Arréglalo con los permisos de esa carpeta.',
+  net:'No se pudo consultar la última versión: sin conexión de red.',
+  pm:'claude se instaló con un gestor de paquetes: actualízalo con él (p. ej. brew upgrade claude-code).'
+};
+
+let installed, ws, jobs, ui, nextId, daemon;
+function reset(){
+  installed='2.1.309';
+  ws=[
+    {name:'jw · feat/auto-update',branch:'feat/auto-update',conv:{engine:'2.1.309',st:'idle',tasks:0}},
+    {name:'jitsubai-api',branch:'feat/api',conv:{engine:'2.1.309',st:'turn',tasks:0}},
+    {name:'sales-assist',branch:'main',conv:null},
+  ];
+  jobs=[];nextId=1;
+  daemon={checking:false,failedSticky:false};
+  ui={sel:0,mode:'move',tab:'trabajos',panel:0,flash:'',flashCls:'',leader:false,pv:'conv',ptab:'trabajos',sheet:null,toast:''};
+  draw();
+}
+const running=()=>jobs.filter(j=>j.state==='running');
+const finished=()=>jobs.filter(j=>j.state!=='running');
+const unseen=()=>jobs.filter(j=>j.state!=='running'&&!j.seen);
+const stale=c=>!!c&&c.engine!==installed&&opt('mode')!=='off';
+const chipOn=()=>opt('where')==='chip';
+function say(t,cls){ui.flash=t;ui.flashCls=cls||'c-green';clearTimeout(say.t);say.t=setTimeout(()=>{ui.flash='';draw()},6000)}
+
+// ---- the check: one command, `claude update`, compared by `claude --version`
+function newJob(title,start){
+  const j={id:nextId++,title,state:'running',start:start||now(),end:0,dur:0,msg:'',seen:false};
+  jobs.unshift(j);return j;
+}
+function endJob(j,state,msg){j.state=state;j.end=now();j.dur=j.end-j.start;j.msg=msg}
+function check(why){
+  const mode=opt('mode');
+  if(mode==='off'){say('claude: la revisión está apagada en la config','c-dim');draw();return}
+  if(daemon.checking){say('ya se está revisando','c-yellow');draw();return}
+  if(why==='tick'&&opt('every')==='0'){say('«solo al arrancar»: no hay revisión periódica','c-dim');draw();return}
+  if(why==='tick'&&daemon.failedSticky&&opt('retry')==='never'){say('no se reintenta: falló antes; se vuelve a intentar cuando el daemon arranque','c-yellow');draw();return}
+  if(mode==='notify'){say('modo notify: no se ejecuta claude update; solo se compara lo instalado ('+installed+') con cada motor','c-dim');draw();return}
+  const out=document.getElementById('outcome').value;
+  const dur=out==='new'?4200:out==='none'?1000:1800;
+  daemon.checking=true;
+  const j=opt('when')==='always'?newJob('buscar actualización de claude'):null;
+  setTimeout(()=>endCheck(out,dur,j),dur);
+  draw();
+}
+function endCheck(out,dur,j){
+  daemon.checking=false;
+  if(out==='new'&&installed===NEW)out='none';
+  if(out==='none'){
+    if(j)endJob(j,'done','claude '+installed+' ya es la última · '+fmt(dur));
+    draw();return;
+  }
+  if(out==='new'){
+    const from=installed;installed=NEW;daemon.failedSticky=false;
+    const k=j||newJob('',now()-dur);
+    k.title='actualizar claude '+from+' → '+NEW;
+    endJob(k,'done',from+' → '+NEW+' · '+fmt(dur)+' · las conversaciones abiertas siguen en '+from);
+    say('✓ claude '+NEW+' instalado · las abiertas siguen en '+from,'c-green');
+    draw();return;
+  }
+  daemon.failedSticky=true;
+  if(opt('retry')==='replace')jobs=jobs.filter(x=>!(x.state==='failed'&&x.title.startsWith('actualizar claude')));
+  const k=j||newJob('',now()-dur);
+  k.title='actualizar claude';
+  endJob(k,'failed',REASONS[out]);
+  say('✗ no se pudo actualizar claude','c-red');
+  draw();
+}
+
+// ---- the conversation whose engine is older than what is installed
+function whyNot(c){
+  if(c.st==='turn')return 'Claude está a mitad de un turno: se puede al terminar';
+  if(c.st==='ask')return 'Claude espera tu respuesta: respóndela primero';
+  if(c.st==='resuming')return 'ya se está reiniciando';
+  if(c.tasks)return `hay ${c.tasks} tarea en segundo plano (⚙ ${c.tasks}) que el reinicio mataría`;
+  return '';
+}
+function restart(i){
+  const c=ws[i].conv;
+  if(!c){say('no hay conversación aquí','c-yellow');draw();return}
+  if(opt('restart')==='apart'){say('el reinicio es de otra parte (N178b): por ahora cierra y abre la conversación','c-dim');draw();return}
+  if(!stale(c)){say('el motor ya corre '+c.engine,'c-dim');draw();return}
+  const w=whyNot(c);
+  if(w){say('no ahora: '+w,'c-yellow');draw();return}
+  c.st='resuming';say('reiniciando el motor con '+installed+'…','c-blue');draw();
+  setTimeout(()=>{c.engine=installed;c.st='idle';say('✓ motor '+installed+' · conversación retomada con --resume, nada se perdió','c-green');draw()},1600);
+}
+function openConv(i){
+  if(ws[i].conv){say('ya tiene conversación','c-dim');draw();return}
+  ws[i].conv={engine:installed,st:'idle',tasks:0};
+  say('conversación nueva con claude '+installed+(installed!==NEW?'':' (la versión nueva, sin reiniciar jw)'),'c-green');draw();
+}
+const cur=()=>ws[ui.sel].conv;
+
+// ---- cell grid
+let G;
+function grid(){G=Array.from({length:ROWS},()=>Array.from({length:COLS},()=>[' ','']))}
+function put(r,c,t,cls){for(const ch of [...t]){if(r<0||r>=ROWS||c<0||c>=COLS)return;G[r][c]=[ch,cls||''];c++}}
+function fill(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<COLS)G[r][c+i]=[' ',cls||'']}
+function paint(){
+  const out=G.map(row=>{let s='',cl0=null,buf='';
+    for(const [ch,cl] of row){if(cl!==cl0){if(buf)s+=cl0?`<span class="${cl0}">${esc(buf)}</span>`:esc(buf);buf='';cl0=cl}buf+=ch}
+    if(buf)s+=cl0?`<span class="${cl0}">${esc(buf)}</span>`:esc(buf);return s});
+  document.getElementById('scr').innerHTML=out.join('\n');
+}
+function chipText(c){
+  const how=opt('restart')==='here'?(whyNot(c)?'· al estar libre, u':'· u reinicia'):'· ciérrala y ábrela';
+  return ` motor ${c.engine} ↑ ${installed} ${how} `;
+}
+
+function draw(){
+  renderPhone();
+  grid();
+  const w=ws[ui.sel],c=w.conv;
+  put(0,1,'jw','c-bold');put(0,4,'· '+w.branch,'c-dim');
+  for(let r=1;r<ROWS-1;r++)put(r,SB-1,'│','c-dim');
+  put(1,1,'WORKSPACES','c-dim');
+  ws.forEach((x,i)=>{
+    const sel=i===ui.sel,r=2+i;
+    if(sel)fill(r,0,SB-1,'c-sel');
+    put(r,1,('⎇ '+x.name).slice(0,SB-7),sel?'c-sel c-bold':'');
+    if(x.conv&&x.conv.st==='turn')put(r,SB-4,spin(),'c-blue'+(sel?' c-sel':''));
+  });
+  put(ROWS-5,1,'u reiniciar el motor','c-dim');put(ROWS-4,1,'n abrir conversación','c-dim');put(ROWS-3,1,'^␣ a avisos','c-dim');
+  const c0=SB+1;
+  put(1,c0,w.name,'c-bold');put(1,c0+w.name.length+2,'conversación','c-dim');
+  if(!c){
+    put(3,c0,'sin conversación en este workspace','c-dim');
+    put(4,c0,'n abre una: usaría claude '+installed,'c-dim');
+  }else{
+    put(3,c0,'tú','c-blue');put(3,c0+4,'añade el aviso de actualizar claude','');
+    put(5,c0,'Claude','c-mag');put(5,c0+7,'Voy a leer crates/daemon/src/engine.rs para ver dónde se resuelve el binario.','');
+    put(6,c0+7,'⚙ Read engine.rs','c-dim');
+    const wl=c.st==='turn'?[spin()+' Trabajando…','c-blue']:c.st==='ask'?['? Espera tu respuesta','c-yellow']:c.st==='resuming'?[spin()+' retomando conversación…','c-blue']:null;
+    if(wl)put(ROWS-8,c0,wl[0],wl[1]);
+    if(c.tasks)put(ROWS-7,c0,'⚙ 1 shell en segundo plano · cargo test --workspace','c-dim');
+    // chips row, then the line
+    let x=c0;
+    const pill=(t,cl)=>{put(ROWS-5,x,t,cl);x+=[...t].length+1};
+    pill(' jw ','c-box');pill(' ⎇ '+w.branch+' ','c-box');
+    if(c.tasks)pill(' ⚙ '+c.tasks+' ','c-box c-cyan');
+    if(stale(c)&&chipOn())pill(chipText(c),'c-chipy');
+    put(ROWS-4,c0,'❯ ','c-green');put(ROWS-4,c0+2,'█','c-blue');
+  }
+  if(ui.mode==='panel')drawPanel();
+  const sbr=ROWS-1;fill(sbr,0,COLS,'c-sel');
+  const chip=ui.mode==='panel'?' AVISOS ':' WORKSPACE ';
+  put(sbr,0,chip,ui.mode==='panel'?'c-chipm':'c-chip');
+  const hint=ui.mode==='panel'?'Tab alertas/trabajos · ↵ ir · x descartar · X los terminados · esc cerrar':ui.leader?'^␣ …  a avisos · u reiniciar':'j k mover · u reiniciar motor · n conversación · ^␣ a avisos';
+  if(ui.flash&&ui.mode!=='panel')put(sbr,chip.length+1,ui.flash.slice(0,COLS-chip.length-30),ui.flashCls+' c-sel');
+  else put(sbr,chip.length+1,hint,'c-dim c-sel');
+  const right=[];
+  const n=running().length;
+  if(n)right.push([`${spin()} ${n} trabajo${n>1?'s':''}`,'c-blue']);
+  else{
+    const f=unseen().filter(j=>j.state==='failed').length,d=unseen().filter(j=>j.state==='done').length;
+    if(f)right.push([`✗ ${f}`,'c-red']);else if(d)right.push([`✓ ${d}`,'c-green']);
+    else if(daemon.checking)right.push(['claude…','c-dim']);
+  }
+  if(!alertSeen)right.push(['avisos 1','c-yellow']);
+  let x=COLS-1;for(const [t,cl] of right.reverse()){x-=[...t].length+1;put(sbr,x,t,cl+' c-sel')}
+  paint();
+}
+let alertSeen=false;
+function drawPanel(){
+  const W=72,H=18,c0=SB+3,r0=3;
+  for(let r=0;r<H;r++)fill(r0+r,c0,W,'c-box');
+  put(r0,c0,'┌'+'─'.repeat(W-2)+'┐','c-dim c-box');
+  for(let r=1;r<H-1;r++){put(r0+r,c0,'│','c-dim c-box');put(r0+r,c0+W-1,'│','c-dim c-box')}
+  put(r0+H-1,c0,'└'+'─'.repeat(W-2)+'┘','c-dim c-box');
+  put(r0,c0+2,' avisos ','c-bold c-box');
+  const run=running(),fin=finished();
+  const t1=` alertas${alertSeen?'':' 1'} `,t2=` trabajos${run.length?' ⠋'+run.length:fin.length?' '+fin.length:''} `;
+  put(r0+1,c0+2,t1,ui.tab==='alertas'?'c-chip':'c-dim c-box');
+  put(r0+1,c0+3+t1.length,t2,ui.tab==='trabajos'?'c-chip':'c-dim c-box');
+  put(r0+2,c0+1,'─'.repeat(W-2),'c-dim c-box');
+  if(ui.tab==='alertas'){
+    if(alertSeen)put(r0+4,c0+3,'nada espera algo de ti','c-dim c-box');
+    else{fill(r0+3,c0+1,W-2,'c-sel');put(r0+3,c0+2,'!','c-yellow c-sel');put(r0+3,c0+4,'Claude pide permiso · cargo test --workspace','c-bold c-sel');put(r0+3,c0+W-15,'jitsubai-api','c-dim c-sel')}
+    put(r0+H-3,c0+3,'una actualización de claude nunca es una alerta: mira «trabajos»','c-dim c-box');
+    return;
+  }
+  const list=[...run,...fin];
+  if(ui.panel>=list.length)ui.panel=Math.max(0,list.length-1);
+  if(!list.length)put(r0+4,c0+3,'nada corre ni ha corrido: las revisiones sin novedad no dejan fila','c-dim c-box');
+  list.slice(0,H-8).forEach((j,k)=>{
+    const y=r0+3+k,sel=k===ui.panel,bg=sel?'c-sel':'c-box';
+    fill(y,c0+1,W-2,bg);
+    const g=j.state==='running'?[spin(),'c-blue']:j.state==='done'?['✓','c-green']:['✗','c-red'];
+    put(y,c0+2,g[0],g[1]+' '+bg);
+    put(y,c0+4,j.title.slice(0,W-26),(sel?'c-bold ':'')+bg);
+    const t=j.state==='running'?fmt(now()-j.start):fmt(j.dur)+' · hace '+fmt(now()-j.end);
+    put(y,c0+W-2-[...t].length,t,'c-dim '+bg);
+  });
+  const sel=list[ui.panel];
+  put(r0+H-5,c0+1,'─'.repeat(W-2),'c-dim c-box');
+  if(sel){
+    const m=sel.state==='running'?'corriendo · no se cancela':sel.msg;
+    put(r0+H-4,c0+3,m.slice(0,W-6),(sel.state==='failed'?'c-red':'c-dim')+' c-box');
+    if(m.length>W-6)put(r0+H-3,c0+3,m.slice(W-6,2*(W-6)),(sel.state==='failed'?'c-red':'c-dim')+' c-box');
+    if(sel.state==='failed')put(r0+H-2,c0+3,opt('retry')==='never'?'no se reintenta hasta que el daemon arranque otra vez':'se reintenta en la próxima revisión; esta fila se reemplaza','c-dim c-box');
+  }
+}
+
+// ---- phone: same state, drawn as the app would
+let lastPhone='';
+function renderPhone(){
+  const w=ws[ui.sel],c=w.conv,dots=running().length?'<span class="jd c-blue sp"></span>':unseen().some(j=>j.state==='failed')?'<span class="jd c-red">●</span>':unseen().length?'<span class="jd c-green">●</span>':'';
+  let h=`<div class="hd"><b>${esc(w.name)}</b><button class="bell" onclick="P.bell()">🔔${alertSeen?'':'<span class="bdg">1</span>'}${dots}</button></div>`;
+  if(ui.pv==='conv'){
+    h+='<div class="body">';
+    if(!c)h+='<p class="sub">sin conversación en este workspace</p>';
+    else{
+      h+='<div class="msg"><b>tú</b>añade el aviso de actualizar claude</div><div class="msg"><b>Claude</b>Voy a leer engine.rs para ver dónde se resuelve el binario.</div>';
+      if(c.st==='turn')h+='<div class="c-blue"><span class="sp"></span> Trabajando…</div>';
+      if(c.st==='ask')h+='<div class="c-yellow">? Espera tu respuesta</div>';
+      if(c.st==='resuming')h+='<div class="c-blue"><span class="sp"></span> retomando conversación…</div>';
+    }
+    h+='</div>';
+    if(c){
+      h+='<div class="chips"><span class="chip">⎇ '+esc(w.branch)+'</span>'+(c.tasks?'<span class="chip">⚙ '+c.tasks+'</span>':'');
+      if(stale(c)&&chipOn())h+=`<button class="chip warn" onclick="P.engine()">motor ${c.engine} ↑ ${installed}</button>`;
+      h+='</div><div class="field">escribe…</div>';
+    }
+  }else{
+    h+=`<div class="tabs"><button class="tab" aria-selected="${ui.ptab==='alertas'}" onclick="P.tab('alertas')">alertas${alertSeen?'':' <span class="c-yellow">1</span>'}</button><button class="tab" aria-selected="${ui.ptab==='trabajos'}" onclick="P.tab('trabajos')">trabajos${running().length?' <span class="sp c-blue"></span>':''}</button></div><div class="body">`;
+    if(ui.ptab==='alertas')h+=alertSeen?'<p class="sub">nada espera algo de ti</p>':'<button class="jr"><span class="c-yellow">!</span><span class="tt"><b>Claude pide permiso</b><span>jitsubai-api · cargo test</span></span></button>';
+    else{
+      const run=running(),fin=finished();
+      if(!run.length&&!fin.length)h+='<p class="sub">nada corre ni ha corrido</p>';
+      if(run.length)h+='<div class="sec">CORRIENDO</div>'+run.map(j=>jrow(j)).join('');
+      if(fin.length)h+='<div class="sec">TERMINADOS</div>'+fin.map(j=>jrow(j)).join('');
+    }
+    h+='</div>';
+  }
+  if(ui.sheet)h+=sheetHtml();
+  if(ui.toast)h+=`<div class="toast">${esc(ui.toast)}</div>`;
+  if(h!==lastPhone){document.getElementById('phone').innerHTML=h;lastPhone=h}
+}
+function jrow(j){
+  const g=j.state==='running'?'<span class="sp c-blue"></span>':j.state==='done'?'<span class="c-green">✓</span>':'<span class="c-red">✗</span>';
+  const t=j.state==='running'?Math.floor((now()-j.start)/1000)+' s':fmt(j.dur);
+  return `<button class="jr" onclick="P.job(${j.id})">${g}<span class="tt"><b>${esc(j.title)}</b><span>${j.state==='failed'?'falló':j.state==='done'?'terminado':'corriendo'}</span></span><span class="sub">${t}</span></button>`;
+}
+function sheetHtml(){
+  let b='';
+  if(ui.sheet.t==='engine'){
+    const c=cur();if(!c)return '';
+    const why=whyNot(c);
+    b=`<h3>Motor de claude más viejo</h3><p>Esta conversación corre claude ${c.engine}; en la PC está instalado ${installed}. Una conversación nueva ya usa la nueva.</p>`;
+    if(opt('restart')==='here')b+=`<button onclick="P.restart()" ${why||!stale(c)?'disabled':''}>reiniciar con la versión nueva</button>`+(why?`<p class="c-yellow">${esc(why)}</p>`:'<p class="sub">retoma la conversación con --resume; no pierde nada</p>');
+    else b+='<p class="sub">Cierra la conversación y ábrela: retoma donde estaba. (El botón de reiniciar va aparte: N178b.)</p>';
+    b+='<button onclick="P.close()">cerrar</button>';
+  }else{
+    const j=jobs.find(x=>x.id===ui.sheet.id);if(!j)return '';
+    b=`<h3>${esc(j.title)}</h3><p class="${j.state==='failed'?'bad':''}">${esc(j.state==='running'?'corriendo · no se cancela':j.msg)}</p>`+(j.state!=='running'?'<button onclick="P.dismiss()">descartar</button>':'')+'<button onclick="P.close()">cerrar</button>';
+  }
+  return `<div class="back" onclick="P.close()"></div><div class="sheet">${b}</div>`;
+}
+const P={
+  bell(){ui.pv=ui.pv==='conv'?'avisos':'conv';if(ui.pv==='avisos'){ui.ptab=!alertSeen?'alertas':'trabajos';if(ui.ptab==='trabajos')jobs.forEach(j=>{if(j.state!=='running')j.seen=true})}draw()},
+  tab(t){ui.ptab=t;if(t==='trabajos')jobs.forEach(j=>{if(j.state!=='running')j.seen=true});draw()},
+  engine(){ui.sheet={t:'engine'};draw()},
+  job(id){ui.sheet={t:'job',id};draw()},
+  close(){ui.sheet=null;draw()},
+  dismiss(){jobs=jobs.filter(j=>j.id!==ui.sheet.id);ui.sheet=null;draw()},
+  restart(){ui.sheet=null;restart(ui.sel)}
+};
+
+// ---- terminal input
+const seeJobs=()=>jobs.forEach(j=>{if(j.state!=='running')j.seen=true});
+function openPanel(){ui.mode='panel';ui.panel=0;ui.tab=!alertSeen?'alertas':'trabajos';if(!alertSeen&&(running().length||unseen().length))ui.tab='trabajos';if(ui.tab==='trabajos')seeJobs()}
+document.getElementById('term').addEventListener('keydown',e=>{
+  const k=e.key;
+  if(e.ctrlKey&&(e.code==='Space'||k===' ')){ui.leader=true;draw();e.preventDefault();return}
+  if(ui.mode==='panel'){
+    const list=ui.tab==='alertas'?(alertSeen?[]:[1]):[...running(),...finished()];
+    if(k==='Tab'||k==='ArrowRight'||k==='ArrowLeft'){ui.tab=ui.tab==='alertas'?'trabajos':'alertas';ui.panel=0;if(ui.tab==='trabajos')seeJobs()}
+    else if(k==='Escape'){ui.mode='move';ui.flash=''}
+    else if(k==='ArrowDown'||k==='j')ui.panel=Math.min(list.length-1,ui.panel+1);
+    else if(k==='ArrowUp'||k==='k')ui.panel=Math.max(0,ui.panel-1);
+    else if(k==='Enter'){
+      if(ui.tab==='alertas'&&list.length){ui.sel=1;ui.mode='move'}
+      else if(ui.tab==='trabajos'&&list.length){ui.mode='move';say('este trabajo no es de un workspace: no hay a dónde ir','c-dim')}
+    }
+    else if(k==='x'){const j=list[ui.panel];if(ui.tab==='alertas')alertSeen=true;else if(j&&j.state!=='running')jobs=jobs.filter(y=>y!==j)}
+    else if(k==='X'&&ui.tab==='trabajos')jobs=jobs.filter(y=>y.state==='running');
+    draw();e.preventDefault();return;
+  }
+  if(ui.leader){ui.leader=false;if(k==='a')openPanel();else if(k==='u')restart(ui.sel);draw();e.preventDefault();return}
+  if(k==='j'||k==='ArrowDown')ui.sel=Math.min(ws.length-1,ui.sel+1);
+  else if(k==='k'||k==='ArrowUp')ui.sel=Math.max(0,ui.sel-1);
+  else if(k==='a')openPanel();
+  else if(k==='u')restart(ui.sel);
+  else if(k==='n')openConv(ui.sel);
+  draw();e.preventDefault();
+});
+
+document.querySelector('.ctl').parentElement.addEventListener('click',e=>{
+  const a=e.target.dataset&&e.target.dataset.act;if(!a)return;
+  const c=cur();
+  if(a==='reset'){reset();alertSeen=false;draw()}
+  else if(a==='start')check('start');
+  else if(a==='tick')check('tick');
+  else if(a==='daemon'){jobs=[];daemon.failedSticky=false;daemon.checking=false;say('daemon reiniciado: los trabajos se perdieron; revisa al arrancar','c-dim');check('start')}
+  else if(a==='other'){installed=NEW;say('claude '+NEW+' está instalado (otra terminal): los motores abiertos siguen viejos','c-dim');draw()}
+  else if(a==='new')openConv(2);
+  else if(c){
+    if(a==='c-idle'){c.st='idle';c.tasks=0}
+    if(a==='c-turn'){c.st='turn';c.tasks=0}
+    if(a==='c-task'){c.st='idle';c.tasks=1}
+    if(a==='c-ask'){c.st='ask';c.tasks=0}
+    draw();
+  }else say('esta conversación no existe: abre una con n','c-yellow'),draw();
+  document.getElementById('term').focus();
+});
+document.addEventListener('change',e=>{
+  if(e.target.name==='every'){const h=e.target.value;document.getElementById('tickBtn').textContent=h==='0'?'▶ pasa el tiempo (no hay revisión periódica)':`▶ pasan ${h} h (revisión periódica)`}
+  draw();
+});
+setInterval(draw,100);
+reset();document.getElementById('term').focus();
+</script></body></html>
