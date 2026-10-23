@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · la pregunta de Claude con una fila «Otra…» y un campo libre</title>
+<style>
+/* the tokens of tui.html and mobile.html: One Dark */
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 system-ui,sans-serif;padding:18px 16px 40px}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:16px}
+h1{font:600 18px/1.25 var(--mono);margin:0 0 4px}
+h2{font:600 12px var(--mono);margin:0 0 6px;color:var(--mut)}
+p{margin:0;max-width:90ch;color:var(--mut)}
+code,kbd{font:12px var(--mono);background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+select{max-width:100%}
+button,select,input,textarea{font:12px var(--mono);color:var(--ink);background:#222630;border:1px solid #2f3440;border-radius:5px;padding:6px 10px;min-height:34px}
+button{cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+fieldset{min-width:0;max-width:100%;border:1px solid #2f3440;border-radius:8px;padding:6px 10px 8px;margin:0;display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+legend{font-size:11px;color:var(--mut);padding:0 4px}
+label{font-size:12px;color:var(--mut);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ctl{display:flex;flex-wrap:wrap;gap:8px 12px}
+.stage{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
+.col{display:flex;flex-direction:column;gap:6px;min-width:0}
+.col.tui{flex:1 1 440px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;overflow-x:auto}
+.term pre{margin:0;font:13px/1.3 var(--mono);color:var(--fg);outline:none;white-space:pre;width:max-content}
+.term pre:focus{box-shadow:0 0 0 2px var(--blue)}
+.keys{display:flex;flex-wrap:wrap;gap:6px}
+.keys button{min-width:38px}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.b{font-weight:700}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}.cur{background:var(--fg);color:var(--bg)}
+/* the phone: 390 px */
+.phone{width:min(390px,100%);background:var(--bg);border:1px solid var(--line);border-radius:30px;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:560px}
+.ph-hd{font:12px var(--mono);color:var(--dim);padding:4px 8px}
+.ph-chat{flex:1;display:flex;flex-direction:column;gap:6px;padding:0 8px;font:13px/1.4 var(--mono);color:var(--fg)}
+.ph-chat .tu{color:var(--blue)}.ph-chat .cl{color:var(--green)}.ph-chat .tool{color:var(--dim)}
+.sheet{background:var(--panel);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.sh{display:flex;justify-content:space-between;gap:8px;font:600 14px/1.3 var(--mono);color:var(--fg)}
+.sh small{font:11px var(--mono);color:var(--yellow);font-weight:400;white-space:nowrap}
+.opt{display:block;width:100%;text-align:left;min-height:48px;border-radius:8px;border:0;padding:10px 12px;background:var(--sel);color:var(--fg);font:13px var(--mono)}
+.opt.pri{background:var(--green);color:var(--panel);font-weight:700}
+.opt.on{font-weight:700}
+.opt.other{color:var(--blue)}
+.opt.go{background:var(--green);color:var(--panel);font-weight:700;text-align:center}
+.opt.go[disabled]{background:var(--sel);color:var(--dim)}
+.card{background:var(--sel);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.card h3{margin:0;font:700 13px var(--mono);color:var(--blue)}
+.card textarea{width:100%;min-height:84px;background:var(--bg);border:1px solid var(--blue);border-radius:6px;padding:10px;color:var(--fg);font:13px var(--mono);caret-color:var(--blue);resize:vertical}
+.two{display:flex;gap:8px}.two button{flex:1;min-height:48px;border:0;border-radius:8px;font:13px var(--mono)}
+.two .back{background:var(--panel);color:var(--fg)}.two .go{background:var(--green);color:var(--panel);font-weight:700}.two .go[disabled]{background:var(--panel);color:var(--dim)}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px;color:var(--fg)}
+.box h2{margin:0 0 8px}
+.box ol,.box ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+.box li{max-width:96ch}
+.box li i{color:var(--mut);font-style:normal}
+pre.out{margin:0;font:12px/1.4 var(--mono);color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;overflow-x:auto;white-space:pre}
+.tag{display:inline-block;background:var(--green);color:var(--bg);font:700 11px var(--mono);border-radius:4px;padding:0 6px;margin-right:6px}
+</style></head><body>
+<div class="wrap">
+<div>
+<h1>La pregunta de Claude: opciones + una fila «Otra…» con un campo libre</h1>
+<p>Hoy una pregunta (<code>AskUserQuestion</code>) solo deja elegir entre las opciones que Claude propuso, y cualquier otra tecla se descarta (REQ-404). La propuesta añade, solo a las preguntas, una última fila fija <b>Otra…</b> con un campo donde se escribe lo que se quiera. Abajo: la caja del terminal (rejilla de caracteres, se maneja con el teclado o con los botones), la hoja del teléfono (se toca) y lo que reciben el daemon y el motor. Cambia entre <b>como hoy</b> y <b>propuesta</b> para comparar.</p>
+</div>
+
+<div class="ctl">
+  <fieldset><legend>versión</legend><button type="button" data-v="hoy" aria-pressed="false">como hoy</button><button type="button" data-v="prop" aria-pressed="true">propuesta</button></fieldset>
+  <fieldset id="cases"><legend>caso de prueba</legend></fieldset>
+  <fieldset><legend>de la propuesta</legend>
+    <label>campo <select id="o-field"><option value="row">en la fila</option><option value="replace">sustituye las opciones</option></select></label>
+    <label>línea de la herramienta <select id="o-fmt"><option value="guill">Respondida: «texto»</option><option value="otra">Respondida: Otra: texto</option><option value="plain">Respondida: texto</option></select></label>
+  </fieldset>
+  <fieldset><legend>&nbsp;</legend><button type="button" id="restart">volver a empezar el caso</button></fieldset>
+</div>
+
+<div class="stage">
+  <div class="col tui">
+    <h2 id="h-tui">TERMINAL (jw tui)</h2>
+    <div class="term" id="term"><pre id="scr" tabindex="0" aria-label="La caja de la pregunta del terminal. Teclas: números, flechas, espacio, intro, escape; con el campo enfocado, escribe."></pre></div>
+    <div class="keys" id="keys" role="group" aria-label="Teclas para el móvil"></div>
+    <label>teclado del móvil <input id="kb" type="text" autocomplete="off" autocapitalize="off" placeholder="escribe aquí cuando el campo esté enfocado" style="flex:1;min-width:0"></label>
+    <div class="out c-dim" id="info" style="font:12px var(--mono);color:var(--mut)"></div>
+  </div>
+  <div class="col">
+    <h2>TELÉFONO (la hoja de la pregunta)</h2>
+    <div class="phone"><div class="ph-hd">claude · conversación</div><div class="ph-chat" id="ph-chat"></div><div class="sheet" id="sheet"></div></div>
+  </div>
+</div>
+
+<div>
+  <h2>LO QUE PASA (cada respuesta, tal como la ven el daemon y el motor)</h2>
+  <pre class="out" id="log">(responde la pregunta)</pre>
+</div>
+
+<div>
+  <h2>FUERA DE LA REJILLA · <code>jw read</code>, <code>jw prompt --wait</code> y <code>jw claude</code> en un terminal plano (dibujo, no capturado)</h2>
+  <div class="stage">
+    <div class="col"><h2>como hoy</h2><pre class="out" id="read-hoy"></pre></div>
+    <div class="col"><h2>propuesta</h2><pre class="out" id="read-prop"></pre></div>
+  </div>
+</div>
+
+<div class="box"><h2>QUÉ CAMBIA</h2><ul>
+  <li><b>Solo para preguntas.</b> El permiso (<kbd>y</kbd> <kbd>a</kbd> <kbd>n</kbd>) y el plan (que ya tiene su «seguir planeando» con texto) quedan como están.</li>
+  <li><b>Terminal.</b> Una fila más, <code>N+1 Otra…</code>, con el estilo de las demás. <kbd>↓</kbd> llega hasta ella (hoy se queda en la última opción) y la tecla del número siguiente la enfoca (no contesta). <kbd>↵</kbd> sobre ella enfoca el campo. Con el campo enfocado <b>todas las teclas se escriben</b> (números, <kbd>y</kbd> <kbd>n</kbd>, espacio) con las del composer (<kbd>⌥⌫</kbd>, <kbd>←</kbd> <kbd>→</kbd>, <kbd>Inicio</kbd> <kbd>Fin</kbd>); <kbd>↵</kbd> envía, <kbd>esc</kbd> vuelve a las filas (el texto se guarda) y <kbd>^C</kbd> sigue interrumpiendo. Un texto vacío no se envía.</li>
+  <li><b>Multi-selección.</b> «Otra…» es una fila más con casilla: <kbd>↵</kbd> en el campo envía <i>lo marcado + el texto</i>; <kbd>↵</kbd> en una fila ordinaria envía lo marcado + el texto guardado, si hay.</li>
+  <li><b>Teléfono.</b> Una fila «✎ Otra…» al final de la hoja; al tocarla, una tarjeta con el estilo de «Seguir planeando» (campo con borde azul, «Volver» y «Enviar»). Aquí el texto es obligatorio.</li>
+  <li><b>Daemon.</b> <code>answer_question</code> hoy ignora <code>text</code> y rechaza un <code>key</code> que no sea un índice (<code>conversation.rs:1227-1230</code>, <code>1277-1296</code>). Pasa a aceptar <code>text</code> no vacío como respuesta propia: <code>key</code> puede ir vacío (solo texto) o con índices (multi). El motor recibe <code>answers[pregunta]</code> = las etiquetas y el texto unidos con «, ».</li>
+  <li><b>Contrato.</b> <code>conversation_answer {node, ask, key, text?, by?}</code> ya tiene <code>text</code> y <code>key</code> es una cadena sin patrón (<code>contract.schema.json:653</code>): <b>el esquema y los tipos no cambian</b>, no hay nada que versionar; haría falta un fixture nuevo (<code>key: ""</code> con <code>text</code>). El <code>Ask</code> tampoco cambia: la fila la dibuja el cliente.</li>
+</ul></div>
+
+<div class="box"><h2>PARA DECIDIR (con mi recomendación)</h2><ol>
+  <li><b>Quién dibuja la fila.</b> Recomendado: <b>el cliente</b>, siempre que <code>kind = question</code> (así el contrato no cambia, y <code>jw read</code> / <code>ask_lines</code> añaden su línea). Alternativa: que el daemon añada un <code>AskOption</code> de clave <code>other</code>; cambia el documento (<code>v</code>) y no ganamos nada.</li>
+  <li><b>Cómo se manda.</b> Recomendado: <code>text</code> no vacío = respuesta propia; <code>key</code> vacío o con los índices marcados. Sin campo nuevo.</li>
+  <li><b>Multi + texto.</b> El motor recibe <code>"Rust, Kotlin, mi texto"</code> entero. La documentación (<code>claude-engine.md:65</code>) solo probó texto suelto como «Other», no mezclado con etiquetas. Recomendado: probarlo en vivo y guardar la captura antes de fijar el REQ; si el motor lo rechazara, en multi el texto iría solo.</li>
+  <li><b>La línea de la herramienta (REQ-405).</b> Hoy <code>Respondida: A · B</code> (una etiqueta por pregunta, sin la pregunta). Recomendado: <b>«texto» entre comillas latinas</b>, para distinguir una respuesta propia de una etiqueta; <code>by</code> sigue como hoy.</li>
+  <li><b>El campo en la fila o sustituyendo las opciones.</b> Recomendado: <b>en la fila</b>: se ven las opciones y las casillas mientras se escribe. «Sustituye» es lo que hace hoy «seguir planeando» y es más simple de dibujar, pero en multi esconde lo marcado.</li>
+  <li><b>↵ sobre «Otra…» en multi.</b> Recomendado: enfoca el campo (no envía); <kbd>↵</kbd> dentro envía lo marcado + el texto. Una sola regla: «↵ en el campo envía».</li>
+  <li><b><kbd>esc</kbd> con el campo enfocado</b> vuelve a las filas en vez de interrumpir (cambia el sentido de REQ-603 solo con el campo abierto; <kbd>^C</kbd> interrumpe siempre). Va escrito en la pista.</li>
+  <li><b>Texto vacío.</b> No se envía; la fila avisa «escribe algo, o esc vuelve». En multi sin nada marcado y sin texto, <kbd>↵</kbd> sigue sin hacer nada.</li>
+  <li><b>Qué se guarda al volver con <kbd>esc</kbd>.</b> Recomendado: el texto se queda en la fila («Otra: …») hasta que se conteste la pregunta; en la siguiente, todo se reinicia (como la fila encendida, <code>conversation.rs:707-711</code>).</li>
+  <li><b>Por CLI.</b> <code>jw read</code> y <code>jw prompt --wait</code> (sale con 3, REQ-454) muestran la fila «Otra…». No existe ningún comando para <i>contestar</i> (<code>agent.rs:88-94</code> solo tiene ls, read, prompt, worktree, group; lo único que envía la respuesta fuera del TUI es el bucle de teclas de <code>jw claude</code>). Recomendado: <b>no añadir <code>jw answer</code> en esta parte</b>; es una parte aparte, y la pregunta es de la persona, no del agente de otro panel.</li>
+  <li><b>Terminal plano (<code>jw claude</code> fuera de jw).</b> Una línea más numerada «Otra… escribe tu respuesta»; al elegirla pide «tu respuesta:» en una línea (el número N+1; ya no vale <kbd>y</kbd>/<kbd>n</kbd> porque son de permiso).</li>
+  <li><b>Hasta cuántas opciones.</b> Claude manda de 2 a 4 opciones, así que «Otra…» es la 3.ª a 5.ª fila y siempre tiene número (1-9).</li>
+</ol></div>
+</div>
+
+<script>
+const COLS_DEFAULT = 64;
+const Q_DB = { q: '¿Qué base de datos uso para los tests?', opts: ['PostgreSQL', 'SQLite', 'MySQL'], multi: false };
+const Q_LANG = { q: '¿Para qué lenguajes genero el cliente?', opts: ['Rust', 'Kotlin', 'Swift', 'Go'], multi: true };
+const CASES = {
+  single: { name: 'elección única', cols: COLS_DEFAULT, qs: [Q_DB] },
+  multi: { name: 'multi-selección', cols: COLS_DEFAULT, qs: [Q_LANG] },
+  two: { name: '2 preguntas seguidas', cols: COLS_DEFAULT, qs: [Q_DB, Q_LANG] },
+  empty: { name: 'texto vacío', cols: COLS_DEFAULT, start: 'field', qs: [Q_DB] },
+  narrow: { name: 'terminal estrecho', cols: 40, qs: [{ q: '¿Qué base de datos uso para los tests de integración?', opts: ['PostgreSQL', 'SQLite', 'MySQL'], multi: false }] },
+  long: { name: '4 opciones largas', cols: COLS_DEFAULT, qs: [{ q: '¿Cómo quieres migrar el esquema de la base de datos de producción?', multi: false, opts: [
+    'Migración en línea con la tabla duplicada y un corte al final, sin parar el servicio',
+    'Parada corta de mantenimiento, de madrugada, con copia de seguridad previa',
+    'Por fases: primero las columnas nuevas opcionales y, en otra versión, retirar las viejas',
+    'Dejar el esquema como está y adaptar el código para que acepte los dos formatos'] }] },
+};
+
+// ---- the pure part: a key on the question's box -> the new state and what has to happen -------------------------------------------------
+
+const newSt = () => ({ lit: 0, marks: [], field: false, text: [], cur: 0, note: '' });
+const marked = (st) => st.marks.map((m, i) => (m ? i : -1)).filter((i) => i >= 0);
+const textOf = (st) => st.text.join('').trim();
+
+function wordStart(text, cur) {
+  let i = cur;
+  while (i > 0 && text[i - 1] === ' ') i--;
+  while (i > 0 && text[i - 1] !== ' ') i--;
+  return i;
+}
+
+// `k` = {key, alt, ctrl}; `prop` = the proposal (the row «Otra…» exists). Returns {st, act}; act is null (a change of state), {t:'send', keys, text}, {t:'interrupt'} or {t:'drop'} (the key is discarded, REQ-404).
+function reduce(st0, q, k, prop) {
+  const st = structuredClone(st0), n = q.opts.length, O = n;
+  st.note = '';
+  const send = (keys) => ({ st, act: { t: 'send', keys, text: textOf(st) } });
+  if (k.ctrl && k.key === 'c') return { st, act: { t: 'interrupt' } };
+  if (st.field) {
+    switch (k.key) {
+      case 'Escape': st.field = false; return { st, act: null };
+      case 'Enter':
+        if (!textOf(st)) { st.note = 'escribe algo, o esc vuelve'; return { st, act: null }; }
+        return send(q.multi ? marked(st) : []);
+      case 'ArrowUp': st.field = false; st.lit = Math.max(0, O - 1); return { st, act: null };
+      case 'ArrowLeft': st.cur = Math.max(0, st.cur - 1); return { st, act: null };
+      case 'ArrowRight': st.cur = Math.min(st.text.length, st.cur + 1); return { st, act: null };
+      case 'Home': st.cur = 0; return { st, act: null };
+      case 'End': st.cur = st.text.length; return { st, act: null };
+      case 'Delete': st.text.splice(st.cur, 1); return { st, act: null };
+      case 'Backspace': {
+        const from = k.alt ? wordStart(st.text, st.cur) : Math.max(0, st.cur - 1);
+        st.text.splice(from, st.cur - from); st.cur = from; return { st, act: null };
+      }
+      default:
+        if (k.key.length === 1 && !k.ctrl && !k.alt) { st.text.splice(st.cur, 0, k.key); st.cur++; return { st, act: null }; }
+        return { st, act: { t: 'drop' } };
+    }
+  }
+  const rows = n + (prop ? 1 : 0);
+  if (k.key === 'Escape') return { st, act: { t: 'interrupt' } };
+  if (/^[1-9]$/.test(k.key)) {
+    const i = +k.key - 1;
+    if (prop && i === O) { st.lit = O; st.field = true; st.cur = st.text.length; return { st, act: null }; }
+    if (i >= n) return { st, act: { t: 'drop' } };
+    if (q.multi) { st.marks[i] = !st.marks[i]; st.lit = i; return { st, act: null }; }
+    return { st, act: { t: 'send', keys: [i], text: '' } };
+  }
+  if (k.key === ' ' && q.multi) {
+    if (prop && st.lit === O) { st.field = true; st.cur = st.text.length; return { st, act: null }; }
+    st.marks[st.lit] = !st.marks[st.lit]; return { st, act: null };
+  }
+  if (k.key === 'ArrowUp') { st.lit = Math.max(0, st.lit - 1); return { st, act: null }; }
+  if (k.key === 'ArrowDown') { st.lit = Math.min(rows - 1, st.lit + 1); return { st, act: null }; }
+  if (k.key === 'Enter') {
+    if (prop && st.lit === O) { st.field = true; st.cur = st.text.length; return { st, act: null }; }
+    if (!q.multi) return { st, act: { t: 'send', keys: [st.lit], text: '' } };
+    if (marked(st).length || (prop && textOf(st))) return send(marked(st));
+    return { st, act: null };
+  }
+  return { st, act: { t: 'drop' } };
+}
+
+// The phone's sheet. `ph` = {marks, field, text}; events: opt i, other, back, text v, send.
+function tap(ph0, q, ev) {
+  const ph = structuredClone(ph0);
+  switch (ev.t) {
+    case 'opt':
+      if (!q.multi) return { ph, act: { t: 'send', keys: [ev.i], text: '' } };
+      ph.marks[ev.i] = !ph.marks[ev.i]; return { ph, act: null };
+    case 'other': ph.field = true; return { ph, act: null };
+    case 'back': ph.field = false; return { ph, act: null };
+    case 'text': ph.text = ev.v; return { ph, act: null };
+    case 'send': {
+      const text = ph.text.trim(), keys = q.multi ? ph.marks.map((m, i) => (m ? i : -1)).filter((i) => i >= 0) : [];
+      if (ph.field && !text) return { ph, act: null };
+      if (!ph.field && !keys.length && !text) return { ph, act: null };
+      return { ph, act: { t: 'send', keys, text } };
+    }
+  }
+  return { ph, act: null };
+}
+
+const fmtOther = (t, fmt) => (fmt === 'guill' ? `«${t}»` : fmt === 'otra' ? `Otra: ${t}` : t);
+
+// What an answer becomes: the string the engine gets, the piece of the tool's line, the command on the wire.
+function outcome(q, qi, act, fmt, by) {
+  const labels = act.keys.map((i) => q.opts[i]);
+  const engine = [...labels, ...(act.text ? [act.text] : [])].join(', ');
+  const piece = [...labels, ...(act.text ? [fmtOther(act.text, fmt)] : [])].join(', ');
+  const wire = { cmd: 'conversation_answer', ask: `req1:${qi}`, key: act.keys.join(','), ...(act.text ? { text: act.text } : {}), by };
+  return { engine, piece, wire };
+}
+const toolLine = (pieces) => { const s = 'Respondida: ' + pieces.join(' · '); return s.length > 300 ? s.slice(0, 299) + '…' : s; };
+
+// ---- drawing the terminal ---------------------------------------------------------------------------------------------------------------
+
+const clip = (s, w) => (s.length > w ? s.slice(0, Math.max(0, w - 1)) + '…' : s);
+function wrapText(s, w) {
+  const out = []; let line = '';
+  for (const word of s.split(' ')) {
+    if (line && (line + ' ' + word).length > w) { out.push(line); line = word; } else line = line ? line + ' ' + word : word;
+  }
+  if (line) out.push(line);
+  return out;
+}
+// The field's text cut in rows of `w` columns, and where the cursor falls.
+function fieldRows(text, cur, w) {
+  const rows = [''];
+  let at = null;
+  for (let i = 0; i <= text.length; i++) {
+    if (rows[rows.length - 1].length >= w) rows.push('');
+    if (i === cur) at = [rows.length - 1, rows[rows.length - 1].length];
+    if (i < text.length) rows[rows.length - 1] += text[i];
+  }
+  return { rows, at };
+}
+
+function hintFor(q, prop, st, w) {
+  const n = q.opts.length, nums = q.opts.map((_, i) => i + 1).join(' ');
+  let c;
+  if (prop && st.field) c = q.multi
+    ? ['↵ envía lo marcado y esto · esc vuelve · ^C interrumpe', '↵ envía lo marcado y esto · esc vuelve', '↵ envía · esc vuelve']
+    : ['↵ envía · esc vuelve · ^C interrumpe', '↵ envía · esc vuelve', '↵ envía'];
+  else if (q.multi) c = prop
+    ? [`${nums} marcan · ↵ envía lo marcado · ↑↓ · ${n + 1} otra · esc interrumpe`, `${nums} marcan · ↵ envía · ↑↓ · ${n + 1} otra`, `${nums} · ↵ envía · ${n + 1} otra`, `${nums} · ↵ envía`]
+    : [`${nums} marcan · ↵ envía lo marcado · ↑↓ · esc interrumpe`, `${nums} marcan · ↵ envía · ↑↓`, `${nums} · ↵ envía`];
+  else c = prop
+    ? [`${nums} · ↑↓ ↵ · ${n + 1} otra · esc interrumpe`, `${nums} · ↑↓ ↵ · ${n + 1} otra`, `${nums} · ↵ · ${n + 1} otra`, `${nums} · ↵`]
+    : [`${nums} · ↑↓ ↵ · esc interrumpe`, `${nums} · ↑↓ ↵`, `${nums} · ↵`];
+  return c.find((s) => s.length <= w) || clip(c[c.length - 1], w);
+}
+
+class Scr {
+  constructor(w, h) { this.w = w; this.h = h; this.cells = Array.from({ length: h }, () => Array.from({ length: w }, () => [' ', ''])); }
+  put(y, x, s, cls = '') { for (const ch of s) { if (y >= 0 && y < this.h && x >= 0 && x < this.w) this.cells[y][x] = [ch, cls]; x++; } return x; }
+  bg(y, x0, x1, cls) { for (let x = x0; x < x1 && x < this.w; x++) this.cells[y][x] = [this.cells[y][x][0], (cls + ' ' + this.cells[y][x][1]).trim()]; }
+  html() {
+    const esc = (s) => (s === '<' ? '&lt;' : s === '>' ? '&gt;' : s === '&' ? '&amp;' : s);
+    return this.cells.map((r) => {
+      let out = '', cur = null, buf = '';
+      const flush = () => { if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; };
+      for (const [ch, cls] of r) { if (cls !== cur) { flush(); cur = cls; } buf += esc(ch); }
+      flush(); return out;
+    }).join('\n');
+  }
+}
+
+// The box of the question as in `draw_ask` (tui/conversation.rs): the title, the options `❯ N label`, the hint a row above the border. `view` = {prop, fieldMode}
+function drawTui(M, view) {
+  const C = M.cols, q = M.q, st = M.st, prop = view.prop, n = q ? q.opts.length : 0;
+  const hist = [['dim', ''], ['blue', 'tú'], ['', 'elige la base de datos de los tests'], ['green', 'claude']];
+  const tool = M.done ? [['dim', '◆ AskUserQuestion  '], ['green', clip(M.line, C - 22)], ['dim', '  · ' + M.by]] : [['dim', '◆ AskUserQuestion  '], ['yellow', clip('esperando la respuesta…', C - 20)]];
+  const iw = C - 4;                       // the text of the box, from column 3
+  const rows = [];                        // rows of the box: [{segs, lit}]
+  let cursorAt = null;
+  if (q) {
+    for (const l of wrapText(q.q, iw).slice(0, 2)) rows.push({ segs: [[l, 'b']] });
+    rows.push({ segs: [] });
+    const replace = prop && st.field && view.fieldMode === 'replace';
+    if (replace) {
+      rows.push({ segs: [['Otra · escribe tu respuesta', 'c-yellow b']] });
+      const f = fieldRows(st.text, st.cur, iw - 2), from = Math.max(0, Math.min(f.rows.length - 3, f.at[0] - 2));
+      f.rows.slice(from, from + 3).forEach((r, j) => rows.push({ segs: [[j === 0 && from === 0 ? '▸ ' : '  ', 'c-yellow'], ...cursorSegs(r, f.at[0] - from === j ? f.at[1] : -1)] }));
+      if (st.note) rows.push({ segs: [[st.note, 'c-red']] });
+    } else {
+      q.opts.forEach((o, i) => {
+        const lit = !(prop && st.field) && st.lit === i;
+        const mark = q.multi ? (st.marks[i] ? '[x] ' : '[ ] ') : '';
+        const pre = (lit ? '❯ ' : '  ') + (i + 1) + ' ' + mark;
+        rows.push({ lit, segs: [[pre, 'c-yellow b'], [clip(o, iw - pre.length), '']] });
+      });
+      if (prop) {
+        const i = n, text = st.text.join(''), lit = st.lit === i || st.field;
+        const mark = q.multi ? (st.field || text.trim() ? '[x] ' : '[ ] ') : '';
+        const pre = (lit ? '❯ ' : '  ') + (i + 1) + ' ' + mark;
+        if (st.field) {
+          const f = fieldRows(st.text, st.cur, Math.max(8, iw - pre.length - 2)), from = Math.max(0, Math.min(f.rows.length - 3, f.at[0] - 2));
+          f.rows.slice(from, from + 3).forEach((r, j) => rows.push({ lit: true, segs: [[j === 0 ? pre : ' '.repeat(pre.length), 'c-yellow b'], [j === 0 && from === 0 ? '▸ ' : '  ', 'c-yellow'], ...cursorSegs(r, f.at[0] - from === j ? f.at[1] : -1)] }));
+          if (st.note) rows.push({ segs: [[' '.repeat(pre.length) + st.note, 'c-red']] });
+        } else rows.push({ lit, segs: [[pre, 'c-yellow b'], text.trim() ? [clip('Otra: ' + text.trim(), iw - pre.length), ''] : [clip('Otra…', iw - pre.length), 'c-dim']] });
+      }
+    }
+    rows.push({ segs: [] });
+    rows.push({ segs: [[hintFor(q, prop, st, iw), 'c-dim']] });
+  }
+  const H = 1 + hist.length + 1 + (q ? rows.length + 2 : 0) + 1;
+  const g = new Scr(C, H);
+  g.put(0, 1, 'claude  ·  conversación', 'c-dim bg-panel'); g.bg(0, 0, C, 'bg-panel');
+  let y = 1;
+  for (const [c, s] of hist) g.put(y++, 1, s, 'c-' + c);
+  let x = 1; for (const [c, s] of tool) x = g.put(y, x, s, 'c-' + c); y += 2;
+  if (q) {
+    const by0 = y, bh = rows.length + 2;
+    g.put(by0, 1, '╭' + '─'.repeat(C - 4) + '╮', 'c-dim'); g.put(by0, 3, ' pregunta ', 'c-yellow');
+    for (let j = 1; j <= rows.length; j++) { g.put(by0 + j, 1, '│', 'c-dim'); g.put(by0 + j, C - 2, '│', 'c-dim'); }
+    g.put(by0 + bh - 1, 1, '╰' + '─'.repeat(C - 4) + '╯', 'c-dim');
+    rows.forEach((r, j) => {
+      if (r.lit) g.bg(by0 + 1 + j, 2, C - 2, 'bg-sel');
+      let cx = 3;
+      for (const [s, c] of r.segs) { const cls = c.split(' ').map((t) => (t === 'b' || t === 'cur' || t.startsWith('bg-') || t.startsWith('c-') ? t : t)).join(' '); cx = g.put(by0 + 1 + j, cx, s, (cls + (r.lit ? ' bg-sel' : '')).trim()); }
+    });
+  }
+  return { html: g.html(), H };
+}
+function cursorSegs(r, col) {
+  if (col < 0) return [[r, '']];
+  return [[r.slice(0, col), ''], [r[col] || ' ', 'cur'], [r.slice(col + 1), '']];
+}
+
+// ---- the page --------------------------------------------------------------------------------------------------------------------------
+
+const M = { case: 'single', qi: 0, prop: true, fieldMode: 'row', fmt: 'guill', cols: COLS_DEFAULT, q: null, st: newSt(), ph: { marks: [], field: false, text: '' }, pieces: [], engineAns: {}, done: false, line: '', by: '', log: [], dropped: '' };
+
+function loadCase(id) {
+  const c = CASES[id];
+  Object.assign(M, { case: id, qi: 0, cols: c.cols, pieces: [], engineAns: {}, done: false, line: '', by: '', log: [], dropped: '' });
+  startQ();
+}
+function startQ() {
+  const c = CASES[M.case];
+  M.q = c.qs[M.qi]; M.st = newSt(); M.ph = { marks: [], field: false, text: '' };
+  if (c.start === 'field' && M.qi === 0) { M.st.field = true; M.ph.field = true; }
+}
+function answered(act, by) {
+  const q = M.q, o = outcome(q, M.qi, act, M.fmt, by);
+  M.pieces.push(o.piece); M.engineAns[q.q] = o.engine;
+  M.log.push(`${by}  →  ${JSON.stringify(o.wire)}`);
+  if (M.qi + 1 < CASES[M.case].qs.length) { M.qi++; startQ(); M.log.push('   (la pregunta siguiente: la fila encendida y el texto se reinician)'); }
+  else {
+    M.done = true; M.q = null; M.by = by; M.line = toolLine(M.pieces);
+    M.log.push(`el motor recibe  input.answers = ${JSON.stringify(M.engineAns)}`);
+    M.log.push(`la línea de la herramienta  ◆ AskUserQuestion  ${M.line}  · ${by}`);
+  }
+}
+function press(k) {
+  if (M.done || !M.q) return;
+  const r = reduce(M.st, M.q, k, M.prop);
+  M.st = r.st; M.dropped = '';
+  if (r.act && r.act.t === 'send') answered(r.act, 'el terminal');
+  else if (r.act && r.act.t === 'interrupt') { M.log.push('el terminal  →  conversation_interrupt (la pregunta se rechaza y Claude para)'); M.done = true; M.q = null; M.line = 'interrumpida'; M.by = 'el terminal'; }
+  else if (r.act && r.act.t === 'drop') M.dropped = `la tecla «${k.key === ' ' ? 'espacio' : k.key}» se descarta (REQ-404)`;
+  render();
+}
+function phone(ev) {
+  if (M.done || !M.q) return;
+  const r = tap(M.ph, M.q, ev);
+  M.ph = r.ph;
+  if (r.act && r.act.t === 'send') answered(r.act, 'el móvil');
+  render();
+}
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function render() {
+  const view = { prop: M.prop, fieldMode: M.fieldMode };
+  const t = drawTui(M, view);
+  const pre = $('scr'); pre.innerHTML = t.html;
+  pre.style.fontSize = '7px';               // measure with the grid small, so that it does not push its own column
+  const avail = $('term').clientWidth - 18;
+  pre.style.fontSize = Math.max(7, Math.min(13, Math.floor((avail / (M.cols * 0.602)) * 10) / 10)) + 'px';
+  $('info').textContent = M.dropped || (M.done ? 'caso terminado: elige otro, o «volver a empezar»' : '');
+  renderPhone();
+  $('log').textContent = M.log.length ? M.log.join('\n') : '(responde la pregunta, en el terminal o en el teléfono)';
+  document.querySelectorAll('[data-v]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.v === 'prop') === M.prop)));
+  document.querySelectorAll('[data-case]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.case === M.case)));
+  $('o-field').disabled = $('o-fmt').disabled = !M.prop;
+  const kb = $('kb'); if (document.activeElement !== kb) kb.value = M.st.field ? M.st.text.join('') : '';
+  $('keys').innerHTML = [...Array(M.q ? M.q.opts.length + (M.prop ? 1 : 0) : 4).keys()].map((i) => `<button type="button" data-k="${i + 1}">${i + 1}</button>`).join('')
+    + ['ArrowUp|↑', 'ArrowDown|↓', ' |espacio', 'Enter|↵', 'Escape|esc', 'Backspace|⌫'].map((s) => { const [k, l] = s.split('|'); return `<button type="button" data-k="${k}">${l}</button>`; }).join('');
+}
+
+function renderPhone() {
+  const q = M.q, ph = M.ph;
+  $('ph-chat').innerHTML = `<div class="tu">tú</div><div>elige la base de datos de los tests</div><div class="cl">claude</div><div class="tool">◆ AskUserQuestion  ${M.done ? `<span style="color:var(--green)">${esc(M.line)}</span> · ${esc(M.by)}` : '<span style="color:var(--yellow)">esperando la respuesta…</span>'}</div>`;
+  if (!q) { $('sheet').innerHTML = '<div class="sh"><span style="color:var(--dim);font-weight:400">sin pregunta pendiente</span></div>'; return; }
+  const head = `<div class="sh"><span>${esc(q.q)}</span><small>pregunta</small></div>`;
+  const n = marksCount(ph, q);
+  if (M.prop && ph.field) {
+    const can = ph.text.trim().length > 0;
+    $('sheet').innerHTML = head + `<div class="card"><h3>Otra respuesta</h3><textarea id="ph-text" placeholder="escribe tu respuesta" autocapitalize="sentences">${esc(ph.text)}</textarea>`
+      + (q.multi ? `<div style="font:12px var(--mono);color:var(--dim)">se envía con lo marcado (${ph.marks.filter(Boolean).length})</div>` : '')
+      + `<div class="two"><button type="button" class="back" data-p="back">Volver</button><button type="button" class="go" data-p="send" ${can ? '' : 'disabled'}>Enviar</button></div></div>`;
+    return;
+  }
+  const opts = q.opts.map((o, i) => `<button type="button" class="opt${!q.multi && i === 0 ? ' pri' : ''}${ph.marks[i] ? ' on' : ''}" data-o="${i}">${q.multi ? (ph.marks[i] ? '☑ ' : '☐ ') : ''}${esc(o)}</button>`).join('');
+  const other = M.prop ? `<button type="button" class="opt other${ph.text.trim() ? ' on' : ''}" data-p="other">${q.multi ? (ph.text.trim() ? '☑ ' : '☐ ') : ''}✎ ${ph.text.trim() ? 'Otra: ' + esc(clip(ph.text.trim(), 40)) : 'Otra…'}</button>` : '';
+  const go = q.multi ? `<button type="button" class="opt go" data-p="send" ${n ? '' : 'disabled'}>${n ? `Enviar (${n})` : 'marca una o más'}</button>` : '';
+  $('sheet').innerHTML = head + `<div style="display:flex;flex-direction:column;gap:6px">${opts}${other}${go}</div>`;
+}
+const marksCount = (ph, q) => ph.marks.filter(Boolean).length + (M.prop && ph.text.trim() ? 1 : 0);
+
+function readLines(q, prop) {
+  const n = q.opts.length;
+  return ['? pregunta: ' + q.q, ...q.opts.map((o, i) => `  ${i + 1}) ${o}`), ...(prop ? [`  ${n + 1}) Otra… (escribe tu respuesta)`] : [])].join('\n');
+}
+
+if (typeof document !== 'undefined') {
+  const hold = $('cases');
+  for (const id of Object.keys(CASES)) { const b = document.createElement('button'); b.type = 'button'; b.dataset.case = id; b.textContent = CASES[id].name; hold.appendChild(b); }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.v) { M.prop = b.dataset.v === 'prop'; loadCase(M.case); render(); }
+    else if (b.dataset.case) { loadCase(b.dataset.case); render(); }
+    else if (b.id === 'restart') { loadCase(M.case); render(); }
+    else if (b.dataset.k !== undefined) { press({ key: b.dataset.k }); }
+    else if (b.dataset.o !== undefined) phone({ t: 'opt', i: +b.dataset.o });
+    else if (b.dataset.p) phone({ t: b.dataset.p });
+  });
+  $('scr').addEventListener('keydown', (e) => {
+    if (e.metaKey || e.key === 'Tab') return;
+    if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
+    e.preventDefault(); press({ key: e.key, alt: e.altKey, ctrl: e.ctrlKey });
+  });
+  $('kb').addEventListener('input', (e) => {
+    if (!M.st.field || !M.q) { e.target.value = ''; return; }
+    M.st.text = [...e.target.value]; M.st.cur = M.st.text.length; render();
+  });
+  $('kb').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); press({ key: e.key }); } });
+  document.addEventListener('input', (e) => { if (e.target.id === 'ph-text') { M.ph.text = e.target.value; const go = document.querySelector('[data-p="send"]'); if (go) go.disabled = !M.ph.text.trim(); } });
+  $('o-field').onchange = (e) => { M.fieldMode = e.target.value; render(); };
+  $('o-fmt').onchange = (e) => { M.fmt = e.target.value; loadCase(M.case); render(); };
+  window.addEventListener('resize', render);
+  $('read-hoy').textContent = readLines(Q_DB, false) + '\n\n$ jw prompt --wait … ; echo $?\n' + readLines(Q_DB, false) + '\n3';
+  $('read-prop').textContent = readLines(Q_DB, true) + '\n\n$ jw prompt --wait … ; echo $?\n' + readLines(Q_DB, true) + '\n3\n\n$ jw claude        # fuera de jw: el terminal plano\n' + readLines(Q_DB, true) + '\n> 4\ntu respuesta: SQLite en memoria\n  → Respondida: «SQLite en memoria»';
+  loadCase('single'); render();
+} else {
+  globalThis.__T = { reduce, tap, outcome, toolLine, newSt, fieldRows, hintFor, drawTui, CASES, fmtOther, wordStart, M, loadCase, press: null };
+}
+</script>
+</body></html>
