@@ -2426,6 +2426,24 @@ impl State {
         }
     }
 
+    /// What the look for the session's transcript found as the engine is about to start (REQ-744):
+    /// the flag becomes what the disk says; a transcript that came to be is the pane's resume, and
+    /// one the flag said was there and is not is said in a note (RAT-101).
+    pub fn transcript_found(&mut self, found: bool) -> Vec<Effect> {
+        let had = std::mem::replace(&mut self.has_transcript, found);
+        match (had, found) {
+            (false, true) => vec![Effect::Resumable(self.session.clone())],
+            (true, false) => {
+                self.note(
+                    "no se encontró el transcript de esta conversación: empieza de nuevo con el mismo id, sin lo anterior",
+                    Some(Tone::Warn),
+                );
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The engine's process ended while the conversation was open.
     pub fn engine_gone(&mut self, reason: &str) -> Vec<Effect> {
         let had_ask = self.pending.take().is_some();

@@ -1311,7 +1311,10 @@ fn a_turn_that_ended_is_on_disk_at_once() {
 
 #[test]
 fn an_engine_that_dies_is_dead_in_the_node_and_the_next_message_resumes_it() {
-    let mut r = rig();
+    // Claude has written its transcript by then, and that is what makes the next start `--resume`.
+    let sb = Sandbox::new();
+    let env = transcript_env(&sb);
+    let mut r = rig_with(sb, env);
     let (node, session) = r.open();
     r.send(&node, "hola");
     r.idle_after(&node, 1);
@@ -1991,7 +1994,8 @@ fn closing_ends_the_engine_and_the_pane_stops_naming_the_conversation() {
 #[test]
 fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resumes_it() {
     let sb = Sandbox::new();
-    let mut r = rig_with(sb, Vec::new());
+    let env = transcript_env(&sb);
+    let mut r = rig_with(sb, env.clone());
     let (node, session) = r.open_with(None, vec!["--model", "opus"], None);
     r.send(&node, "hola mundo");
     r.idle_after(&node, 1);
@@ -2007,17 +2011,7 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
     r.daemon.take().unwrap().stop();
     std::mem::forget(r.sb);
     let daemon = Daemon::start(Config {
-        env: vec![
-            (
-                "PATH".into(),
-                format!(
-                    "{}:{}",
-                    dir.join("bin").display(),
-                    std::env::var("PATH").unwrap()
-                ),
-            ),
-            ("FAKE_LOG".into(), log.to_string_lossy().into_owned()),
-        ],
+        env: restart_env(&dir, &log, env),
         ..config.clone()
     })
     .unwrap();
@@ -2199,4 +2193,176 @@ fn a_daemon_that_starts_ends_the_engines_an_earlier_one_left_and_nothing_else() 
     let _ = other.kill();
     let _ = other.wait();
     d.stop();
+}
+
+/// What makes the fake engine keep a transcript like Claude's (it writes it at the first message
+/// and refuses a reused `--session-id`), and the folder the daemon looks for it in.
+fn transcript_env(sb: &Sandbox) -> Vec<(String, String)> {
+    let dir = sb.dir.join("claude-config").to_string_lossy().into_owned();
+    vec![
+        ("CLAUDE_CONFIG_DIR".into(), dir.clone()),
+        ("FAKE_CLAUDE_DIR".into(), dir),
+    ]
+}
+
+fn transcript_file(sb: &Sandbox, session: &str) -> Option<PathBuf> {
+    std::fs::read_dir(sb.dir.join("claude-config/projects"))
+        .ok()?
+        .flatten()
+        .map(|p| p.path().join(format!("{session}.jsonl")))
+        .find(|f| f.exists())
+}
+
+/// The environment of a daemon that starts again in the directory of one that stopped.
+fn restart_env(dir: &Path, log: &Path, extra: Vec<(String, String)>) -> Vec<(String, String)> {
+    let path = format!(
+        "{}:{}",
+        dir.join("bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let mut env = vec![
+        ("PATH".to_owned(), path),
+        ("FAKE_LOG".to_owned(), log.to_string_lossy().into_owned()),
+    ];
+    env.extend(extra);
+    env
+}
+
+fn engine_starts(log: &Path) -> Vec<String> {
+    log_lines(log)
+        .into_iter()
+        .filter(|l| l.starts_with("start"))
+        .collect()
+}
+
+/// REQ-743 (B-28): a `--session-id` typed for a session whose transcript is on disk starts the
+/// engine with `--resume`, which the flag of the conversation (off: it is new) does not say.
+#[test]
+fn a_conversation_started_with_a_session_id_whose_transcript_exists_resumes_it() {
+    const ID: &str = "5d1c9a52-7e0b-4f3a-9a64-0c2f1e8d7b31";
+    let sb = Sandbox::new();
+    let env = transcript_env(&sb);
+    let mut r = rig_with(sb, env);
+    let folder = r.sb.dir.join("claude-config/projects/-somewhere");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join(format!("{ID}.jsonl")), FIRST.to_owned() + "\n").unwrap();
+    let (node, session) = r.open_with(None, vec!["--session-id", ID], None);
+    assert_eq!(session, ID);
+    wait_for("the engine to start", || !engine_starts(&r.log).is_empty());
+    let starts = engine_starts(&r.log);
+    assert!(
+        starts[0].contains("\"--resume\"") && !starts[0].contains("--session-id"),
+        "{}",
+        starts[0]
+    );
+    r.send(&node, "hola");
+    let v = r.idle_after(&node, 1);
+    assert_eq!(v["status"], "idle", "{v:#}");
+    r.stop();
+}
+
+/// REQ-743, REQ-744: the daemon stops with the first turn running: the transcript is on disk (the
+/// engine writes it at the first message) and the conversation saved had none. The next message
+/// starts the engine with `--resume`.
+#[test]
+fn a_daemon_stopped_in_the_first_turn_resumes_the_conversation_at_the_next_message() {
+    let sb = Sandbox::new();
+    let env = transcript_env(&sb);
+    let mut r = rig_with(sb, env.clone());
+    let (node, session) = r.open();
+    r.send(&node, "slow");
+    r.until(&node, "the turn to run", |v| v["status"] != "idle");
+    wait_for("the transcript", || {
+        transcript_file(&r.sb, &session).is_some()
+    });
+    let dir = r.sb.dir.clone();
+    let log = r.log.clone();
+    let config = r.sb.config();
+    r.daemon.take().unwrap().stop();
+    std::mem::forget(r.sb);
+    let daemon = Daemon::start(Config {
+        env: restart_env(&dir, &log, env),
+        ..config.clone()
+    })
+    .unwrap();
+    let mut c = Client::connect(&config.socket, "test").unwrap();
+    let node2 = c
+        .cmd(Cmd::OpenConversation {
+            pane: r.pane.clone(),
+            resume: Some(session.clone()),
+            args: Vec::new(),
+            env: None,
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()["node"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    c.open(&node2).unwrap();
+    wait_for("the node", || {
+        c.poll(Duration::from_millis(20)).is_ok() && c.nodes.contains_key(&node2)
+    });
+    assert_eq!(c.nodes[&node2]["status"], "dead");
+    c.cmd(Cmd::ConversationSend {
+        node: node2.clone(),
+        text: "continua".into(),
+        images: Vec::new(),
+        folds: Vec::new(),
+        private: false,
+    })
+    .unwrap()
+    .unwrap();
+    wait_for("the second engine to start", || {
+        engine_starts(&log).len() == 2
+    });
+    let starts = engine_starts(&log);
+    assert!(
+        starts[1].contains("\"--resume\"") && !starts[1].contains("--session-id"),
+        "{}",
+        starts[1]
+    );
+    wait_for("the turn of the second engine", || {
+        let _ = c.poll(Duration::from_millis(20));
+        c.nodes[&node2]["status"] == "idle"
+            && c.nodes[&node2]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["t"] == "result")
+    });
+    daemon.stop();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// REQ-743, REQ-744 (RAT-101): the conversation says it has a transcript and the file is gone: the
+/// engine starts with `--session-id` under the same id, and a note says nothing of before is in it.
+#[test]
+fn a_conversation_whose_transcript_is_gone_starts_again_with_its_id_and_says_so() {
+    let sb = Sandbox::new();
+    let env = transcript_env(&sb);
+    let mut r = rig_with(sb, env);
+    let (node, session) = r.open();
+    r.send(&node, "hola");
+    r.idle_after(&node, 1);
+    r.send(&node, "die now");
+    r.until(&node, "the engine to be dead", |v| v["status"] == "dead");
+    std::fs::remove_file(transcript_file(&r.sb, &session).unwrap()).unwrap();
+    r.send(&node, "sigo");
+    let v = r.idle_after(&node, 2);
+    let starts = engine_starts(&r.log);
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert!(
+        starts[1].contains("--session-id") && !starts[1].contains("--resume"),
+        "{}",
+        starts[1]
+    );
+    assert!(
+        items(&v, "note").iter().any(|n| n["text"]
+            .as_str()
+            .unwrap()
+            .contains("no se encontró el transcript")),
+        "{v:#}"
+    );
+    r.stop();
 }
