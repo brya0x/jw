@@ -51,6 +51,22 @@ impl World {
         c.output().unwrap()
     }
 
+    /// `ok`, for a command that waits for an agent that will not come (it gives up after 200 ms).
+    fn ok_quick(&self, args: &[&str]) -> String {
+        let mut c = self.env.jw();
+        c.args(args)
+            .env(identity::env_var("AGENT_WAIT_MS"), "200")
+            .env_remove(identity::env_var("PANE_ID"))
+            .current_dir(&self.repo);
+        let out = c.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
     fn ok(&self, pane: Option<&str>, args: &[&str]) -> String {
         let out = self.run(pane, args);
         assert!(
@@ -623,11 +639,11 @@ fn worktree_says_on_its_error_output_what_it_copied_and_what_it_did_not_and_prin
 fn chat_makes_archives_resumes_and_removes_conversations_and_ls_says_which_are_chats() {
     let w = World::new("ag-chat");
     w.open_repo();
-    let made = w.ok(None, &["chat", "new"]);
+    let made = w.ok_quick(&["chat", "new"]);
     let (id, name) = made.trim().split_once('\t').expect("id and name");
     assert_eq!((id.len(), name), (36, "conversación nueva"));
     let id = id.to_owned();
-    let json = serde_json::from_str::<Value>(&w.ok(None, &["chat", "new", "--json"])).unwrap();
+    let json = serde_json::from_str::<Value>(&w.ok_quick(&["chat", "new", "--json"])).unwrap();
     assert_eq!(json["name"], "conversación nueva");
     let other = json["id"].as_str().unwrap().to_owned();
     // `ls` says `chat` where it says the branch, and the chats come last

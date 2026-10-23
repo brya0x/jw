@@ -668,6 +668,20 @@ fn chat_new(args: &[&str]) -> Out {
         }
         let _ = s.c.poll(Duration::from_millis(100));
     };
+    // `claude` starts a moment after the panel and opens its conversation a moment after that:
+    // they are waited for, as `worktree --task` does (REQ-456), so that `prompt --wait` works at
+    // once. An agent that does not come is not an error: the chat is made.
+    let deadline = Instant::now() + agent_wait();
+    loop {
+        if let Some(p) = s.panes(&id)?.into_iter().find(|p| p.agent.is_some()) {
+            with_conversation(&mut s, &id, p)?;
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        let _ = s.c.poll(Duration::from_millis(200));
+    }
     if a.has("json") {
         println!("{}", json!({"id": id, "name": name}));
     } else {

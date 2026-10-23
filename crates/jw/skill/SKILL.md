@@ -67,8 +67,8 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   workspaces of one product; it closes nothing.
 - `{bin} chat new [--json]` makes a conversation of its own, with no repository, folder or branch of
   the person's: an empty folder under {bin}'s state and one `claude` panel in it. It prints the
-  workspace's id and name (`conversación nueva` until its first message names it). Talk to it with
-  `prompt <id> --wait`. It is for a question or a thought that belongs to no project; use a
+  workspace's id and name (`conversación nueva` until its first message names it), after waiting a
+  little for `claude` to be ready in it. Talk to it with `prompt <id> --wait`. It is for a question or a thought that belongs to no project; use a
   worktree for work on code.
 - `{bin} chat archive <chat>` closes its panel and keeps it (a chat with nothing said is discarded);
   `{bin} chat resume <chat>` opens it again on the same conversation and prints the pane's id;
