@@ -1667,7 +1667,7 @@ REQ-740 to REQ-742 by N167e: `android/client-core` `ViewTabsTest` (a view's tab 
 | N155 | the viewer of text has Neovim's `e` and `b`, keeps the selection a mouse drag made (it is copied and stays for `↵` and `y`) and selects a word with a double click | 639, 640b, 616 (amended) | `crates/jw/src/{tui.rs,tui/fileview.rs}` |
 | N156 | `cd @` in the shell of a pane goes to the folder of its workspace (zsh, bash, fish): the daemon gives each shell `JWN_WORKSPACE_DIR`, the integration defines `cd` | 645 | `crates/daemon/src/panes.rs`, `crates/daemon/shell/{zsh/.zshrc,bash/rc.sh,fish/jwn.fish}`, `crates/daemon/tests/blocks.rs` |
 | N168 | a question offers «Otra…», a free answer beside its options; spec + prototype `ask-other.html` (version 0.0.36) | 743-753 | `docs/spec.md`, `docs/prototypes/ask-other.html` |
-| N168a | the daemon takes `text` as an own answer, the live test of multi + text and its capture, the engine doc | 749, 750, 751 | `crates/daemon/src/conversation.rs`, `contract/fixtures/client`, `docs/claude-engine.md` |
+| N168a ✓ `30f9641` | the daemon takes `text` as an own answer, the live test of multi + text and its capture, the engine doc | 749, 750, 751 | `crates/daemon/src/conversation.rs`, `contract/fixtures/client`, `docs/claude-engine.md` |
 | N168b | the terminal's row, field and keys | 743-748, amends 404, 603 | `crates/jw/src/tui/conversation.rs` |
 | N168c | the phone's row and card | 752, amends 441 | `android/app/…/ConversationSheets.kt` |
 | N168d | `read`, `prompt --wait`, plain `claude` | 753 | `crates/jw/src/claude.rs`, `crates/jw/src/agent.rs` |
