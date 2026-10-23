@@ -18,6 +18,7 @@ if os.environ.get("FAKE_PIDFILE"):
 logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", ""))
 lock = threading.Lock()
 mode = ["default"]
+reloaded = [None]
 outputs = {}
 total = [0.0]
 def out(o):
@@ -156,16 +157,29 @@ for line in sys.stdin:
     if m.get("type") == "control_request":
         if m["request"]["subtype"] == "initialize":
             logline("control initialize")
+            if reloaded[0] == "fail":
+                out({"type": "control_response", "response": {"subtype": "error", "request_id": m["request_id"], "error": "boom"}})
+                continue
+            if reloaded[0] == "nolist":
+                out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {}}})
+                continue
+            commands = [
+                {"name": "context", "description": "Show context usage", "argumentHint": "", "builtin": True},
+                {"name": "doctor", "description": "Diagnose the install", "argumentHint": "", "builtin": True},
+                {"name": "init", "description": "Create CLAUDE.md", "argumentHint": "", "builtin": True},
+                {"name": "model", "description": "Set the model", "argumentHint": "", "builtin": True},
+                {"name": "deploy", "description": "publicar la rama en staging", "argumentHint": ""},
+                {"name": "jw", "description": "work with jw (user)", "argumentHint": ""},
+                {"name": "vercel:deploy", "description": "(vercel) deploy", "argumentHint": ""},
+            ]
+            if reloaded[0] == "ok":
+                # what a plugin installed after the engine started brings: only a reload shows it
+                commands += [
+                    {"name": "ponytail:ponytail", "description": "lazy senior dev", "argumentHint": ""},
+                    {"name": "ponytail:ponytail-review", "description": "review a change", "argumentHint": ""},
+                ]
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {
-                "commands": [
-                    {"name": "context", "description": "Show context usage", "argumentHint": "", "builtin": True},
-                    {"name": "doctor", "description": "Diagnose the install", "argumentHint": "", "builtin": True},
-                    {"name": "init", "description": "Create CLAUDE.md", "argumentHint": "", "builtin": True},
-                    {"name": "model", "description": "Set the model", "argumentHint": "", "builtin": True},
-                    {"name": "deploy", "description": "publicar la rama en staging", "argumentHint": ""},
-                    {"name": "jw", "description": "work with jw (user)", "argumentHint": ""},
-                    {"name": "vercel:deploy", "description": "(vercel) deploy", "argumentHint": ""},
-                ],
+                "commands": commands,
                 "models": [
                     {"value": "default", "resolvedModel": "claude-sonnet-5-5"},
                     {"value": "opus", "resolvedModel": "claude-opus-5-5"},
@@ -195,6 +209,9 @@ for line in sys.stdin:
     if isinstance(text, list):
         text = " ".join(b.get("text", "[image]") for b in text)
     logline("user " + json.dumps(text, ensure_ascii=False))
+    if text.startswith(("/reload-plugins", "/reload-skills")):
+        # the word after the line says what the next `initialize` answers: nothing (ok), `fail` or `nolist`
+        reloaded[0] = text.split(" ", 1)[1] if " " in text else "ok"
     if text.startswith("/"):
         result(0.0, turns=0)
         continue

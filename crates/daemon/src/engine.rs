@@ -484,7 +484,8 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
         }
         drop(core);
         // A turn that ended is on disk at once: a daemon stopped by a signal has no last save.
-        if msg["type"] == "result" {
+        // The commands of a reload come after its `result`: they are kept as they arrive (REQ-758).
+        if msg["type"] == "result" || msg["type"] == "control_response" {
             save_due(shared, true);
         }
     }
@@ -1461,7 +1462,8 @@ pub fn save_due(shared: &Shared, force: bool) {
         let cached = core
             .convs
             .values()
-            .find(|c| c.engine.is_some() && c.st.has_engine_commands())
+            .filter(|c| c.engine.is_some() && c.st.has_engine_commands())
+            .max_by_key(|c| c.st.commands_at)
             .map(|c| (dir.clone(), c.st.commands.clone()));
         (due, chosen, cached)
     };
