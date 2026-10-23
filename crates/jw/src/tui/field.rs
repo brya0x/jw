@@ -6,6 +6,7 @@
 
 use contract::PaneInput;
 
+use super::paste::{self, Fold};
 use super::{Grid, Rgb, STOP, Style, clip, look};
 
 /// The composer's limit is never below this (REQ-703).
@@ -33,9 +34,17 @@ pub struct Look<'a> {
 /// the `!` of a shell line.
 pub type Mark = (usize, usize, Rgb);
 
+/// How many cells the character `c` takes in a row of `width`: the label of a fold (REQ-711),
+/// one for any other. Every place that breaks the text into rows asks it (RISK-88).
+pub fn cell_width(c: char, width: usize, folds: &[Fold]) -> usize {
+    paste::index_of(c)
+        .and_then(|k| folds.get(k))
+        .map_or(1, |f| f.label(width).chars().count())
+}
+
 /// Where each row of `chars` begins when it is wrapped to `width` as `wrap` does; with the cursor
 /// at the end of a last row that is full, one more row, empty, is where it is.
-pub fn row_starts(chars: &[char], width: usize, cursor: usize) -> Vec<usize> {
+pub fn row_starts(chars: &[char], width: usize, cursor: usize, folds: &[Fold]) -> Vec<usize> {
     let mut starts = vec![0];
     let mut len = 0;
     for (i, c) in chars.iter().enumerate() {
@@ -44,11 +53,12 @@ pub fn row_starts(chars: &[char], width: usize, cursor: usize) -> Vec<usize> {
             len = 0;
             continue;
         }
-        if len >= width {
+        let w = cell_width(*c, width, folds);
+        if len > 0 && len + w > width {
             starts.push(i);
             len = 0;
         }
-        len += 1;
+        len += w;
     }
     if cursor >= chars.len() && len >= width {
         starts.push(chars.len());
@@ -144,8 +154,13 @@ pub struct Field {
     selected: Vec<(usize, usize)>,
     /// The cells (row, column) of the marks, with their colour.
     lit: Vec<(usize, usize, Rgb)>,
-    /// The character of the text each row begins with, for a click to say which one it is on.
+    /// The character of the text each row begins with.
     starts: Vec<usize>,
+    /// The character of the text each cell of each row shows, for a click to say which one it is
+    /// on: the cells of a fold's label are all the fold's.
+    owners: Vec<Vec<usize>>,
+    /// The cells the cursor covers: the width of the label when it is on a fold.
+    span: usize,
 }
 
 /// Columns of text a pane `iw` wide holds in a row of the field.
@@ -168,7 +183,7 @@ impl Field {
     ) -> Field {
         let width = text_width(iw);
         match (input, screen) {
-            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[], window),
+            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[], window, &[]),
             (None, Some((line, col))) => Field {
                 rows: vec![line.to_owned()],
                 first: 0,
@@ -178,6 +193,8 @@ impl Field {
                 selected: Vec::new(),
                 lit: Vec::new(),
                 starts: Vec::new(),
+                owners: Vec::new(),
+                span: 1,
             },
             (None, None) => Field {
                 rows: vec![String::new()],
@@ -188,6 +205,8 @@ impl Field {
                 selected: Vec::new(),
                 lit: Vec::new(),
                 starts: Vec::new(),
+                owners: Vec::new(),
+                span: 1,
             },
         }
     }
@@ -200,6 +219,7 @@ impl Field {
         marks: &[Mark],
         iw: usize,
         window: Window,
+        folds: &[Fold],
     ) -> Field {
         wrap(
             &input.text,
@@ -208,6 +228,7 @@ impl Field {
             sel,
             marks,
             window,
+            folds,
         )
     }
 
@@ -231,10 +252,10 @@ impl Field {
         self.first
     }
 
-    /// The character of the text that is at `col` of the shown row `row`: none past the end of the row.
+    /// The character of the text that is at `col` of the shown row `row`: none past the end of the
+    /// row; a click on a fold's label is on the fold, before it and never inside (REQ-710).
     pub fn index_at(&self, row: usize, col: usize) -> Option<usize> {
-        let text = self.rows.get(row)?;
-        (col < text.chars().count()).then(|| self.starts.get(row).map(|s| s + col))?
+        self.owners.get(row)?.get(col).copied()
     }
 
     /// Nothing is typed (or nothing can be shown), so the row says what to type.
@@ -373,9 +394,11 @@ impl Field {
             }
         }
         let (row, col) = self.cursor;
-        let at = (tx + col, first + row);
-        if focused && self.seen && at.0 < send_at(ix, iw) && at.1 < g.rows && at.0 < g.cols {
-            g.cells[at.1 * g.cols + at.0].1.reverse = true;
+        for k in 0..self.span {
+            let at = (tx + col + k, first + row);
+            if focused && self.seen && at.0 < send_at(ix, iw) && at.1 < g.rows && at.0 < g.cols {
+                g.cells[at.1 * g.cols + at.0].1.reverse = true;
+            }
         }
     }
 }
@@ -390,8 +413,9 @@ pub fn stop_at(ix: usize, iw: usize) -> usize {
     send_at(ix, iw).saturating_sub(STOP.chars().count() + 2)
 }
 
-/// `text` broken into rows of `width` characters (and at its own line breaks), the cursor
-/// placed at its offset, and at most `window.limit` rows kept: those the window says.
+/// `text` broken into rows of `width` cells (and at its own line breaks), the cursor
+/// placed at its offset, and at most `window.limit` rows kept: those the window says. A fold of
+/// `folds` is drawn as its label, in one piece (REQ-711).
 fn wrap(
     text: &str,
     cursor: usize,
@@ -399,45 +423,61 @@ fn wrap(
     sel: Option<(usize, usize)>,
     marks: &[Mark],
     window: Window,
+    folds: &[Fold],
 ) -> Field {
     let mut rows = vec![String::new()];
     let mut starts = vec![0];
+    let mut owners: Vec<Vec<usize>> = vec![Vec::new()];
     let mut selected = Vec::new();
     let mut lit = Vec::new();
     let mut at = (0, 0);
+    let mut span = 1;
     let mut placed = false;
     for (i, c) in text.chars().enumerate() {
-        if c != '\n' && rows.last().is_some_and(|r| r.chars().count() >= width) {
+        let w = cell_width(c, width, folds);
+        let len = owners.last().map_or(0, Vec::len);
+        if c != '\n' && len > 0 && len + w > width {
             rows.push(String::new());
+            owners.push(Vec::new());
             starts.push(i);
         }
         if i == cursor {
-            at = (rows.len() - 1, rows.last().map_or(0, |r| r.chars().count()));
+            at = (rows.len() - 1, owners.last().map_or(0, Vec::len));
+            span = if c == '\n' { 1 } else { w };
             placed = true;
         }
         if c == '\n' {
             rows.push(String::new());
+            owners.push(Vec::new());
             starts.push(i + 1);
-        } else {
-            let at = rows.len() - 1;
-            let col = rows[at].chars().count();
+            continue;
+        }
+        let row = rows.len() - 1;
+        let col = owners[row].len();
+        let fold = paste::index_of(c).and_then(|k| folds.get(k));
+        let shown = fold.map_or_else(|| c.to_string(), |f| f.label(width));
+        for k in 0..w {
             if sel.is_some_and(|(from, to)| (from..to).contains(&i)) {
-                selected.push((at, col));
+                selected.push((row, col + k));
             }
-            if let Some(&(_, _, colour)) =
+            if fold.is_some() {
+                lit.push((row, col + k, look::yellow()));
+            } else if let Some(&(_, _, colour)) =
                 marks.iter().find(|(from, to, _)| (*from..*to).contains(&i))
             {
-                lit.push((at, col, colour));
+                lit.push((row, col + k, colour));
             }
-            rows[at].push(c);
+            owners[row].push(i);
         }
+        rows[row].push_str(&shown);
     }
     if !placed {
-        if rows.last().is_some_and(|r| r.chars().count() >= width) {
+        if owners.last().is_some_and(|r| r.len() >= width) {
             rows.push(String::new());
+            owners.push(Vec::new());
             starts.push(text.chars().count());
         }
-        at = (rows.len() - 1, rows.last().map_or(0, |r| r.chars().count()));
+        at = (rows.len() - 1, owners.last().map_or(0, Vec::len));
     }
     let total = rows.len();
     let limit = window.limit;
@@ -463,6 +503,8 @@ fn wrap(
             .filter(|(r, ..)| *r < limit)
             .collect(),
         starts: starts.into_iter().skip(start).take(limit).collect(),
+        owners: owners.into_iter().skip(start).take(limit).collect(),
+        span,
     }
 }
 
@@ -637,6 +679,7 @@ mod tests {
                     offset,
                     pin: None,
                 },
+                &[],
             )
         };
         let top = at(0, 0);
@@ -719,6 +762,7 @@ mod tests {
                 offset,
                 pin: None,
             },
+            &[],
         )
     }
 
@@ -832,7 +876,14 @@ mod tests {
         let w = text_width(30);
         let text = format!("{}ab\ncd", "x".repeat(w));
         let from = w;
-        let f = Field::selecting(&input(&text, 0), Some((from, from + 4)), &[], 30, five());
+        let f = Field::selecting(
+            &input(&text, 0),
+            Some((from, from + 4)),
+            &[],
+            30,
+            five(),
+            &[],
+        );
         assert_eq!(f.selected, [(1, 0), (1, 1), (2, 0)]);
     }
 
@@ -872,13 +923,111 @@ mod tests {
                         offset: 0,
                         pin: None,
                     },
+                    &[],
                 );
                 assert_eq!(
-                    row_starts(&chars, width, cursor),
+                    row_starts(&chars, width, cursor, &[]),
                     drawn.starts,
                     "{text:?} at {width}, cursor {cursor}"
                 );
             }
         }
+    }
+
+    fn folded(body: &str) -> (PaneInput, Vec<Fold>) {
+        let fold = Fold::new(1, body.to_owned());
+        let line = format!("ab{}cd", paste::char_of(0).unwrap());
+        (input(&line, 2), vec![fold])
+    }
+
+    /// REQ-711: a label is drawn with its width and never split between two rows.
+    #[test]
+    fn a_label_is_one_piece_and_goes_to_the_next_row_when_it_does_not_fit() {
+        let (i, folds) = folded(&paste::sample_rows(9));
+        let f = Field::selecting(&i, None, &[], 100, five(), &folds);
+        assert_eq!(f.rows, vec!["ab[Texto pegado #1 +9 líneas «línea 1»]cd"]);
+        // in a row of 28 cells the label loses its beginning and goes to a row of its own
+        let f = Field::selecting(&i, None, &[], 36, five(), &folds);
+        assert_eq!(
+            f.rows,
+            vec!["ab", "[Texto pegado #1 +9 líneas]c", "d"],
+            "{:?}",
+            f.rows
+        );
+        for iw in [10, 20, 30, 60, 100] {
+            let f = Field::selecting(&i, None, &[], iw, five(), &folds);
+            let width = text_width(iw);
+            assert!(
+                f.rows.iter().all(|r| r.chars().count() <= width),
+                "{iw}: {:?}",
+                f.rows
+            );
+            let joined: String = f.rows.concat();
+            assert_eq!(joined.matches("[Texto").count(), 1, "{iw}: {:?}", f.rows);
+            assert!(joined.starts_with("ab") && joined.ends_with("cd"));
+        }
+    }
+
+    /// REQ-711, RISK-88: the rows `row_starts` counts are those that are drawn, folds among them.
+    #[test]
+    fn the_rows_with_folds_are_the_rows_that_are_drawn() {
+        let (i, folds) = folded(&paste::sample_rows(9));
+        let chars: Vec<char> = i.text.chars().collect();
+        for iw in [10, 20, 30, 38, 60, 100] {
+            let width = text_width(iw);
+            for cursor in 0..=chars.len() {
+                let drawn = wrap(
+                    &i.text,
+                    cursor,
+                    width,
+                    None,
+                    &[],
+                    Window {
+                        limit: usize::MAX,
+                        offset: 0,
+                        pin: None,
+                    },
+                    &folds,
+                );
+                assert_eq!(
+                    row_starts(&chars, width, cursor, &folds),
+                    drawn.starts,
+                    "width {width}, cursor {cursor}"
+                );
+            }
+        }
+    }
+
+    /// REQ-710: a click on any cell of a label is on the fold, before it and never inside.
+    #[test]
+    fn a_click_on_a_label_is_on_the_fold_and_the_cursor_covers_it() {
+        let (i, folds) = folded(&paste::sample_rows(9));
+        let f = Field::selecting(&i, None, &[], 100, five(), &folds);
+        assert_eq!(f.index_at(0, 0), Some(0));
+        let label = "[Texto pegado #1 +9 líneas «línea 1»]".chars().count();
+        for col in 2..2 + label {
+            assert_eq!(f.index_at(0, col), Some(2), "col {col}");
+        }
+        assert_eq!(f.index_at(0, 2 + label), Some(3));
+        assert_eq!(f.index_at(0, 2 + label + 2), None);
+        assert_eq!(f.cursor, (0, 2));
+        assert_eq!(f.span, label, "the cursor on the fold covers its label");
+        let after = Field::selecting(
+            &PaneInput { cursor: 3, ..i },
+            None,
+            &[],
+            100,
+            five(),
+            &folds,
+        );
+        assert_eq!((after.cursor, after.span), ((0, 2 + label), 1));
+    }
+
+    /// REQ-708: the shell's field counts a character as one cell, whatever it holds.
+    #[test]
+    fn the_shells_field_does_not_know_folds() {
+        let line = format!("ab{}cd", paste::char_of(0).unwrap());
+        let f = Field::new(Some(&input(&line, 0)), None, 100, five());
+        assert_eq!(f.rows[0].chars().count(), 5);
     }
 }

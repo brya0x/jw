@@ -644,9 +644,12 @@
             "cmd": { "const": "conversation_send" },
             "node": { "$ref": "#/$defs/Id" },
             "text": { "type": "string" },
-            "images": { "type": "array", "items": { "$ref": "#/$defs/Image" }, "maxItems": 4 }
+            "images": { "type": "array", "items": { "$ref": "#/$defs/Image" }, "maxItems": 4 },
+            "folds": { "type": "array", "items": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 2, "maxItems": 2 } },
+            "private": { "type": "boolean" }
           }
         },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_history" }, "node": { "$ref": "#/$defs/Id" } } },
         {
           "type": "object",
           "required": ["cmd", "node", "ask", "key"],

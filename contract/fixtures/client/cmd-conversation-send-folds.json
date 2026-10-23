@@ -1,0 +1,11 @@
+{
+  "t": "cmd",
+  "id": "c44",
+  "cmd": {
+    "cmd": "conversation_send",
+    "node": "00000000-0000-4000-8000-0000000000e1",
+    "text": "mira\nlínea 1\nlínea 2\nlínea 3\nlínea 4\nlínea 5 y arréglalo",
+    "folds": [[5, 40]],
+    "private": true
+  }
+}

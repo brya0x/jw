@@ -427,6 +427,19 @@ pub enum Cmd {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<conversation::Image>,
+        /// The characters of `text`, `[from, to]`, that were each one folded paste in the composer
+        /// (REQ-709): the engine does not read them, the history keeps them (REQ-716).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        folds: Vec<[usize; 2]>,
+        /// Not kept in the history: the line began with a space or a tab, or the person did not
+        /// type it, as what `prompt` sends (REQ-716).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private: bool,
+    },
+    /// The messages sent from the repository of the conversation's folder, oldest first, at most
+    /// 100 (REQ-716). The result is a `conversation::SentList`.
+    ConversationHistory {
+        node: Id,
     },
     /// Answer the `ask` that waits: `key` is one of its options' keys; `text` goes with a
     /// refusal, as what to do instead; `by` says where the answer comes from (`el móvil`) and

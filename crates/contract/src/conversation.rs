@@ -433,6 +433,21 @@ pub struct ConversationList {
     pub conversations: Vec<SavedConversation>,
 }
 
+/// A message that was sent, as the history keeps it (REQ-716): its text and the characters of it
+/// that were each one folded paste, `[from, to]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentMessage {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folds: Vec<[usize; 2]>,
+}
+
+/// What `conversation_history` answers, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentList {
+    pub messages: Vec<SentMessage>,
+}
+
 /// What `read_older` answers: the items, oldest first, and the `before` that asks for the ones
 /// before them (REQ-567); `older` is left out when there are no more.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

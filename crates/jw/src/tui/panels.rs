@@ -24,6 +24,8 @@ pub enum RowAct {
     Open(PathBuf),
     /// Stop this task of the engine's (REQ-433).
     Stop(String),
+    /// Put the message of this place of the history in the line, as ↑ would (REQ-717).
+    Recall(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +91,7 @@ pub fn is_panel(name: &str) -> bool {
 /// The group of the keys that are the program's own: its tag is the product name.
 const OWN: &str = "\0";
 
-const KEYS: [(&str, &str, &str); 19] = [
+const KEYS: [(&str, &str, &str); 21] = [
     ("↵", "enviar; en cola mientras Claude trabaja", "escribir"),
     ("⇧↵ · ^J", "un salto de línea", "escribir"),
     ("⇥", "completar lo que se propone o la lista", "escribir"),
@@ -114,7 +116,17 @@ const KEYS: [(&str, &str, &str); 19] = [
         "abrir o cerrar la salida de las herramientas",
         "Claude",
     ),
-    ("↑ ↓", "con el campo vacío: elegir un mensaje", "ver"),
+    (
+        "↑ ↓",
+        "en la primera o la última fila del campo: los mensajes enviados",
+        "escribir",
+    ),
+    (
+        "^R",
+        "la lista de los mensajes enviados, con filtro",
+        "escribir",
+    ),
+    ("↑ ↓", "con un mensaje elegido: pasar al siguiente", "ver"),
     ("c · t", "copiar el mensaje elegido o solo su texto", "ver"),
     ("PgUp · PgDn", "recorrer la conversación", "ver"),
     ("v", "abrir el plan completo", "ver"),
@@ -286,6 +298,31 @@ pub fn saved(list: &[SavedConversation]) -> Panel {
         title: "retomar una conversación".into(),
         rows,
         empty: "No hay conversaciones guardadas de esta carpeta.".into(),
+    }
+}
+
+/// The messages sent, newest first, for `^R` (REQ-717): each is one line, with its rows said at
+/// the right when it has several, and choosing one recalls it.
+pub fn sent(messages: &[super::paste::Sent]) -> Panel {
+    let rows = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(i, m)| {
+            let rows = m.text.lines().count();
+            Row {
+                label: m.text.replace('\n', " ⏎ "),
+                detail: String::new(),
+                tag: (rows > 1).then(|| (format!("{rows} líneas"), look::dim())),
+                at: None,
+                act: RowAct::Recall(i),
+            }
+        })
+        .collect();
+    Panel {
+        title: "mensajes enviados".into(),
+        rows,
+        empty: "No se ha enviado nada todavía.".into(),
     }
 }
 

@@ -345,7 +345,19 @@ sealed interface Cmd {
 
     /** Say something to Claude, or run a command of the `/` list. */
     @Serializable @SerialName("conversation_send")
-    data class ConversationSend(val node: Id, val text: String, val images: List<Image> = emptyList()) : Cmd
+    data class ConversationSend(
+        val node: Id,
+        val text: String,
+        val images: List<Image> = emptyList(),
+        /** The characters of [text], `[from, to]`, that were each one folded paste in the composer. */
+        val folds: List<List<Int>> = emptyList(),
+        /** The line began with a space or a tab: it is not kept in the history. */
+        val private: Boolean = false,
+    ) : Cmd
+
+    /** The messages sent from the repository of the conversation's folder, oldest first. The result is a [SentList]. */
+    @Serializable @SerialName("conversation_history")
+    data class ConversationHistory(val node: Id) : Cmd
 
     /** Answer the `ask` that waits: [key] is one of its options' keys; [text] goes with a refusal; [by] says where the answer comes from. */
     @Serializable @SerialName("conversation_answer")
