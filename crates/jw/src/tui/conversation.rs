@@ -2013,7 +2013,7 @@ impl Ui {
         let lit = self.ask_at == i || self.other_open;
         let bg = if lit { look::sel() } else { ground };
         let said = self.other_said();
-        let mark = match (ask.multi, self.other_open || said.is_some()) {
+        let mark = match (ask.multi, said.is_some()) {
             (true, true) => "[x] ",
             (true, false) => "[ ] ",
             _ => "",
@@ -2078,7 +2078,7 @@ impl Ui {
     /// What keys answer the box that asks, in what fits `w` columns.
     fn ask_hint(&self, ask: &Ask, w: usize) -> String {
         if !has_other(ask) {
-            return ask_hint(ask).to_owned();
+            return permission_hint(ask).to_owned();
         }
         let n = ask.options.len();
         let nums = (1..=n).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
@@ -2812,7 +2812,7 @@ impl Ui {
                     self.open_other(ask);
                     return None;
                 }
-                KeyCode::Char(' ') if on_it && ask.multi => {
+                KeyCode::Char(' ') if on_it => {
                     self.open_other(ask);
                     return None;
                 }
@@ -3855,7 +3855,7 @@ fn keys_of(ask: &Ask) -> Vec<Option<char>> {
 }
 
 /// What keys answer the box that asks.
-fn ask_hint(ask: &Ask) -> &'static str {
+fn permission_hint(ask: &Ask) -> &'static str {
     match (ask.kind, ask.multi) {
         (AskKind::Plan, _) => "1 2 3 · v ver el plan · ↑↓ ↵ · esc interrumpe",
         (_, true) => "1 2 3 marcan · ↵ envía lo marcado · ↑↓ · esc interrumpe",
@@ -7257,6 +7257,13 @@ mod tests {
         // enter on it, and its number, focus the field and answer nothing
         assert_eq!(press(&mut ui, &one, KeyCode::Enter), None);
         assert!(ui.other_open);
+        // space on it does the same, in a choice of one too (REQ-744)
+        let mut ui = Ui::default();
+        for _ in 0..3 {
+            press(&mut ui, &one, KeyCode::Down);
+        }
+        assert_eq!(press(&mut ui, &one, KeyCode::Char(' ')), None);
+        assert!(ui.other_open);
         let mut ui = Ui::default();
         assert_eq!(press(&mut ui, &one, KeyCode::Char('4')), None);
         assert!(ui.other_open && ui.ask_at == 3);
@@ -7338,6 +7345,7 @@ mod tests {
         press(&mut ui, &many, KeyCode::Char('1'));
         press(&mut ui, &many, KeyCode::Char('3'));
         press(&mut ui, &many, KeyCode::Char('4'));
+        row_of(&frame(&ui, &many).1, "4 [ ] ▸ ");
         type_in(&mut ui, &many, "Zig");
         row_of(&frame(&ui, &many).1, "4 [x] ▸ Zig");
         assert_eq!(
