@@ -167,7 +167,8 @@ class MainActivity : ComponentActivity() {
             )
             else -> {}
         }
-        var showSaved by remember(source) { mutableStateOf(false) }
+        // Back at the offline screen the next time there is no link, not at the list it was left on.
+        var showSaved by remember(source, link?.offline?.value) { mutableStateOf(false) }
         val copies = remember(source) { ArtifactCopyBox(artifactStore, link?.device ?: "fixture") }
         if (link?.offline?.value == true) {
             // With no link the artifacts it opened before are still there, read only (REQ-783).

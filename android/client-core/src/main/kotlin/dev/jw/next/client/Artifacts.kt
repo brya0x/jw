@@ -37,12 +37,15 @@ enum class ArtifactStatus { Pending, Approved, Changes }
 
 fun ArtifactItem.latest(): ArtifactVersion = versions.last()
 
-/** An artifact's status is its latest version's verdict (none: it waits). */
-fun ArtifactItem.status(): ArtifactStatus = when (latest().verdict?.verdict) {
+/** A version's status is its verdict (none: it waits). */
+fun ArtifactVersion.status(): ArtifactStatus = when (verdict?.verdict) {
     null -> ArtifactStatus.Pending
     Verdict.Approved -> ArtifactStatus.Approved
     Verdict.Changes -> ArtifactStatus.Changes
 }
+
+/** An artifact's status is its latest version's. */
+fun ArtifactItem.status(): ArtifactStatus = latest().status()
 
 /** What a workspace's list shows: the ones that wait first, the decided ones apart and folded (REQ-781). */
 data class ArtifactList(val pending: List<ArtifactItem>, val decided: List<ArtifactItem>)

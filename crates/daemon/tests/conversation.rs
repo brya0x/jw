@@ -2590,7 +2590,11 @@ fn a_verdict_reaches_the_conversation_that_published_and_is_not_kept_for_up_arro
     );
     let told = decide_with(&mut r, &id, &hash, Verdict::Changes, Some("más grande"));
     assert_eq!(told["delivered"], "agent");
-    let head = format!("[jw] artefacto «Prototipo de ajustes» v1 ({})", &hash[..6]);
+    let head = format!(
+        "[{}] artefacto «Prototipo de ajustes» v1 ({})",
+        identity::get().label,
+        &hash[..6]
+    );
     wait_for("the engine to get the verdict", || {
         log_lines(&r.log).iter().any(|l| {
             l.starts_with("user")
@@ -2628,7 +2632,7 @@ fn a_verdict_reaches_the_conversation_that_published_and_is_not_kept_for_up_arro
         assert!(
             !std::fs::read_to_string(f)
                 .unwrap()
-                .contains("[jw] artefacto")
+                .contains(&format!("[{}] artefacto", identity::get().label))
         );
     }
 }
@@ -2653,7 +2657,10 @@ fn a_verdict_for_a_pane_without_a_conversation_or_a_pane_that_is_gone_is_kept_an
     // The shell of the plain pane was typed nothing, and the engine was told nothing.
     r.client.poll(Duration::from_millis(100)).unwrap();
     let screen = r.client.nodes[&plain]["screen"]["lines"].to_string();
-    assert!(!screen.contains("[jw]"), "{screen}");
+    assert!(
+        !screen.contains(&format!("[{}]", identity::get().label)),
+        "{screen}"
+    );
     assert!(!log_lines(&r.log).iter().any(|l| l.starts_with("user")));
     let kept = files_under(&r.sb.dir.join("state").join("artifacts"))
         .into_iter()

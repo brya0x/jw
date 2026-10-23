@@ -45,6 +45,7 @@ class ArtifactsTest {
     fun theListHasWhatWaitsFirstAndTheDecidedApartAndStatusIsTheLatestVerdict() {
         assertEquals(ArtifactStatus.Pending, ajustes.status(), "its latest version has no verdict, its first one has")
         assertEquals(ArtifactStatus.Approved, spec.status())
+        assertEquals(listOf(ArtifactStatus.Changes, ArtifactStatus.Pending), ajustes.versions.map { it.status() }, "each version has its own")
         val list = artifactList(node.items)
         assertEquals(listOf("ajustes"), list.pending.map { it.name })
         assertEquals(listOf("n171"), list.decided.map { it.name })

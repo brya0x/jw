@@ -122,10 +122,6 @@ fn store(sb: &Sandbox) -> PathBuf {
     sb.dir.join("state").join("artifacts")
 }
 
-fn sha256(text: &str) -> String {
-    web::auth::sha256_hex(text)
-}
-
 #[test]
 fn a_publish_makes_the_next_version_the_same_bytes_make_none_and_the_oldest_go_past_twenty() {
     let (w, d, mut c) = world();
@@ -134,7 +130,10 @@ fn a_publish_makes_the_next_version_the_same_bytes_make_none_and_the_oldest_go_p
         (first["n"].as_u64(), first["new"].as_bool()),
         (Some(1), Some(true))
     );
-    assert_eq!(first["hash"].as_str().unwrap(), sha256("<h1>1</h1>"));
+    assert_eq!(
+        first["hash"].as_str().unwrap(),
+        web::auth::sha256_hex("<h1>1</h1>")
+    );
     let id = first["id"].as_str().unwrap().to_owned();
     let again = publish(&mut c, &w.ws, "ajustes", "<h1>1</h1>").unwrap();
     assert_eq!(
@@ -518,5 +517,25 @@ fn the_text_of_an_artifact_is_in_no_node_but_its_own() {
         assert!(!doc.to_string().contains(marker), "node {id}");
     }
     assert!(items(&c, &node).len() == 1);
+    d.stop();
+}
+
+#[test]
+fn a_title_is_kept_on_one_line() {
+    let (w, d, mut c) = world();
+    let node = open_node(&mut c, &w.ws);
+    c.cmd(Cmd::ArtifactPublish {
+        workspace: w.ws.clone(),
+        name: "a".into(),
+        title: Some("  Ajustes\n\tde  prueba ".into()),
+        kind: None,
+        format: ArtifactFormat::Html,
+        text: "<p>a".into(),
+        pane: None,
+    })
+    .unwrap()
+    .unwrap();
+    assert!(c.wait_until(WAIT, |c| items(c, &node).len() == 1).unwrap());
+    assert_eq!(items(&c, &node)[0]["title"], "Ajustes de prueba");
     d.stop();
 }

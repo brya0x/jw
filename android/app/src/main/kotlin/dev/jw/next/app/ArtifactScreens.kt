@@ -89,7 +89,7 @@ internal fun rememberArtifacts(source: AppSource, workspace: Id): Node.Artifacts
 
 private fun nowSecs() = System.currentTimeMillis() / 1000
 
-private fun workspaceName(source: AppSource, workspace: Id): String =
+internal fun workspaceName(source: AppSource, workspace: Id): String =
     source.session().workspaces.firstOrNull { it.id == workspace }?.name ?: "workspace"
 
 /** The tag that says an artifact's status, in the colour the list uses for it. */
@@ -286,7 +286,7 @@ private fun ArtifactDock(item: ArtifactItem, viewing: Int, setViewing: (Int) -> 
                 DropdownMenu(expanded = versions, onDismissRequest = { versions = false }, containerColor = Palette.panel) {
                     item.versions.reversed().forEach { x ->
                         DropdownMenuItem(
-                            text = { Mono("v${x.n} · ${shortHash(x.hash)} · " + (x.verdict?.let { if (it.verdict == Verdict.Approved) "aprobado" else "cambios" } ?: "por revisar"), Palette.fg, 12) },
+                            text = { Mono("v${x.n} · ${shortHash(x.hash)} · ${x.status().label()}", Palette.fg, 12) },
                             onClick = { versions = false; setViewing(x.n) },
                         )
                     }

@@ -119,14 +119,24 @@ fn load(root: &Path, workspace: &str) -> Vec<ArtifactItem> {
             }
         })
         .collect();
-    items.sort_by(|a, b| a.name.cmp(&b.name));
+    sort_by_name(&mut items);
     items
+}
+
+/// The order a workspace's artifacts are listed in, on disk and in memory alike.
+fn sort_by_name(items: &mut [ArtifactItem]) {
+    items.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// A title is one line: it is a column of `jw artifact ls`, a row of the phone's list and the head of a message.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn pending(item: &ArtifactItem) -> bool {
@@ -164,6 +174,7 @@ impl Core {
             .artifact_items
             .get(workspace)
             .is_some_and(|items| items.iter().any(pending));
+        let mut changed = false;
         if let Some(ws) = self.model.workspaces.iter_mut().find(|w| w.id == workspace) {
             let has = ws
                 .attention
@@ -175,16 +186,24 @@ impl Core {
                     exit_code: None,
                     rev: None,
                 });
+                changed = true;
             } else if !waits && has {
                 ws.attention.retain(|o| o.kind != AttentionKind::Artifact);
+                changed = true;
             }
         }
-        for e in self.artifact_nodes.values_mut() {
-            if e.workspace == workspace {
-                e.dirty = true;
-            }
+        for e in self
+            .artifact_nodes
+            .values_mut()
+            .filter(|e| e.workspace == workspace)
+        {
+            e.dirty = true;
+            changed = true;
         }
-        self.refresh();
+        // Starting with many workspaces and no artifact in most would otherwise rebuild every document for each.
+        if changed {
+            self.refresh();
+        }
     }
 
     /// A workspace was removed on purpose: its artifacts go with it (REQ-763).
@@ -259,12 +278,7 @@ pub fn publish(shared: &Shared, p: Publish) -> Done {
     let hash = web::auth::sha256_hex(&p.text);
     let mut core = shared.lock();
     let root = root_of(&core)?;
-    if !core.model.workspaces.iter().any(|w| w.id == p.workspace) {
-        return Err(err(
-            ErrorCode::NotFound,
-            format!("no workspace {}", p.workspace),
-        ));
-    }
+    core.workspace(&p.workspace)?;
     let existing = core
         .artifact_items
         .get(&p.workspace)
@@ -298,8 +312,8 @@ pub fn publish(shared: &Shared, p: Publish) -> Done {
             json!({"id": item.id, "n": last.n, "hash": hash, "new": false}),
         ));
     }
-    if let Some(title) = p.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        title.clone_into(&mut item.title);
+    if let Some(title) = p.title.as_deref().map(one_line).filter(|t| !t.is_empty()) {
+        item.title = title;
     }
     if let Some(kind) = p.kind {
         item.kind = kind;
@@ -313,6 +327,8 @@ pub fn publish(shared: &Shared, p: Publish) -> Done {
         publisher: p.pane,
         verdict: None,
     });
+    let extra = item.versions.len().saturating_sub(MAX_VERSIONS);
+    let dropped: Vec<u32> = item.versions.drain(..extra).map(|v| v.n).collect();
     // shortcut: the files are written under the core's lock; at most 512 KiB, move it off the lock if it is felt.
     write_private(
         &version_file(&root, &p.workspace, &item, n),
@@ -320,17 +336,8 @@ pub fn publish(shared: &Shared, p: Publish) -> Done {
     )
     .and_then(|()| save_meta(&root, &p.workspace, &item))
     .map_err(|e| io_failed("cannot keep the artifact", &e))?;
-    let dropped: Vec<u32> = if item.versions.len() > MAX_VERSIONS {
-        let extra = item.versions.len() - MAX_VERSIONS;
-        item.versions.drain(..extra).map(|v| v.n).collect()
-    } else {
-        Vec::new()
-    };
-    if !dropped.is_empty() {
-        let _ = save_meta(&root, &p.workspace, &item);
-        for old in dropped {
-            let _ = fs::remove_file(version_file(&root, &p.workspace, &item, old));
-        }
+    for old in dropped {
+        let _ = fs::remove_file(version_file(&root, &p.workspace, &item, old));
     }
     let reply = json!({"id": item.id, "n": n, "hash": hash, "new": true});
     let items = core.artifact_items.entry(p.workspace.clone()).or_default();
@@ -338,7 +345,7 @@ pub fn publish(shared: &Shared, p: Publish) -> Done {
         Some(slot) => *slot = item,
         None => {
             items.push(item);
-            items.sort_by(|a, b| a.name.cmp(&b.name));
+            sort_by_name(items);
         }
     }
     core.sync_artifact_attention(&p.workspace);
@@ -348,12 +355,7 @@ pub fn publish(shared: &Shared, p: Publish) -> Done {
 /// `open_artifacts` (REQ-765).
 pub fn open(shared: &Shared, workspace: &Id) -> Done {
     let mut core = shared.lock();
-    if !core.model.workspaces.iter().any(|w| w.id == *workspace) {
-        return Err(err(
-            ErrorCode::NotFound,
-            format!("no workspace {workspace}"),
-        ));
-    }
+    core.workspace(workspace)?;
     let node = core.artifacts_node(workspace);
     Ok(Some(json!({ "node": node })))
 }
@@ -418,10 +420,11 @@ fn verdict_message(
     verdict: Verdict,
     note: Option<&str>,
 ) -> String {
-    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title = one_line(title);
     let head = format!(
-        "[jw] artefacto «{title}» v{n} ({})",
-        &hash[..hash.len().min(6)]
+        "[{}] artefacto «{title}» v{n} ({})",
+        identity::get().label,
+        hash.get(..6).unwrap_or(hash)
     );
     match (verdict, note) {
         (Verdict::Changes, Some(note)) => {

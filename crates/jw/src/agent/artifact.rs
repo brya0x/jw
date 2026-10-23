@@ -10,7 +10,7 @@ use contract::artifacts::{
 };
 use serde_json::{Value, json};
 
-use super::{Args, Fail, Link, Out, TURN_WAIT, fail, own_pane, timeout_flag};
+use super::{Args, Fail, Link, Out, TURN_WAIT, fail, name_of, own_pane, timeout_flag};
 
 pub(super) fn run(args: &[&str]) -> Out {
     match args {
@@ -58,13 +58,6 @@ fn title_of(text: &str, format: ArtifactFormat) -> Option<String> {
     };
     let title = found.split_whitespace().collect::<Vec<_>>().join(" ");
     (!title.is_empty()).then_some(title)
-}
-
-fn name_of<T: serde::Serialize>(v: T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
 }
 
 fn status_of(item: &ArtifactItem) -> &'static str {
@@ -128,7 +121,7 @@ fn publish(args: &[&str]) -> Out {
         reply["n"].as_u64().unwrap_or(0) as u32,
         reply["hash"].as_str().unwrap_or_default().to_owned(),
     );
-    println!("{id} v{n} {}", &hash[..hash.len().min(6)]);
+    println!("{id} v{n} {}", hash.get(..6).unwrap_or(&hash));
     match timeout {
         Some(t) => wait_verdict(&mut s, &ws.id, &id, n, t),
         None => Ok(()),
@@ -166,7 +159,7 @@ fn wait_verdict(s: &mut Link, workspace: &str, id: &str, n: u32, timeout: Durati
     if !got {
         return fail(format!("no verdict in {} s", timeout.as_secs()));
     }
-    match verdict_of(&s.c.nodes[&node], id, n) {
+    match s.c.nodes.get(&node).and_then(|d| verdict_of(d, id, n)) {
         Some((Verdict::Approved, _)) => {
             println!("approved");
             Ok(())
@@ -179,8 +172,8 @@ fn wait_verdict(s: &mut Link, workspace: &str, id: &str, n: u32, timeout: Durati
 /// The workspace that has the artifact `id` and its item: that of the pane that asks first.
 fn find(s: &mut Link, id: &str) -> Out<(String, ArtifactItem)> {
     let mut order: Vec<String> = Vec::new();
-    if let Some(own) = own_pane().and_then(|p| s.workspace_of(&p).transpose()) {
-        order.push(own?.id);
+    if let Some(pane) = own_pane() {
+        order.extend(s.workspace_of(&pane)?.map(|w| w.id));
     }
     for w in s.workspaces()? {
         if !order.contains(&w.id) {

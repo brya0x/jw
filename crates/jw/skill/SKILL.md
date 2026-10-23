@@ -62,7 +62,7 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   it) so they can see it on their phone and approve it or ask for changes. It prints
   `<id> v<n> <hash>`. Publishing the same `--name` again (the file's name by default) is a new
   version. The person's verdict arrives as a message in your own pane, as if they had typed it:
-  `[jw] artefacto «…» v<n> (<hash>): APROBADO` or `CAMBIOS pedidos` and what to change. A pane that
+  `[{bin}] artefacto «…» v<n> (<hash>): APROBADO` or `CAMBIOS pedidos` and what to change. A pane that
   is not a `claude` conversation gets no message. `--wait` waits for the verdict (up to 10 minutes
   or `--timeout`) and prints `approved` and exits 0, or prints `changes` and what to change and
   exits 4.
