@@ -211,7 +211,13 @@ enum class CommandKind {
 
 /** A command of the `/` list. */
 @Serializable
-data class ConvCommand(val name: String, val source: CommandSource, val kind: CommandKind, val description: String? = null)
+data class ConvCommand(
+    val name: String,
+    val source: CommandSource,
+    val kind: CommandKind,
+    val description: String? = null,
+    val group: String? = null,
+)
 
 /** How much of the subscription's windows is used, in whole percent. */
 @Serializable

@@ -33,6 +33,7 @@ Never reach a real daemon from a test: use a private socket dir (`JW_SOCKET`, `J
 | `android/contract` | the Kotlin types of the JSON documents and `ConformanceTest`, which reads the same `contract/` files as the Rust suite |
 | `android/client-core` | what the phone knows: the seen record, the node cache, Home rows, the navigator, and the changes screen's model and file tree (pure Kotlin, tested on the JVM) |
 | `android/app` | the Compose app (`dev.jw.next`, from `identity.toml`); draws the shared fixtures for now |
+| `crates/jw/src/tui/sections.rs` | the `/` list and the `/skills` list in sections (REQ-795 to REQ-803): the section of a command, the window of eight lines with its titles, and the jump of `RePág`/`AvPág`; pure, drawn by `tui/conversation.rs` |
 | `crates/jw/src/tui/shell.rs` | the shell as blocks in the terminal client: colours, block lines, OSC 52 |
 | `crates/jw/src/tui/{changes,diff_lines}.rs` | the diff viewer of the terminal client: its state, keys and drawing, and the pure part (a `diff` node as lines, the tree of files, words that changed, syntax tones) |
 | `crates/jw/src/tui.rs` | the terminal client (`jw tui`): a pure `View` tested on the fixtures, and the loop that moves bytes |

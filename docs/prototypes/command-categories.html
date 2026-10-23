@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>jw · la caja de comandos «/» en categorías</title>
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+p{margin:0;max-width:92ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;background:var(--panel);color:var(--fg)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+table{border-collapse:collapse;font:12px var(--mono);display:block;overflow-x:auto;max-width:100%}
+td,th{padding:3px 12px 3px 0;text-align:left;vertical-align:top}
+th{color:var(--dim);font-weight:600}
+.decide{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+fieldset{border:1px solid var(--line);border-radius:6px;margin:0;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-width:0}
+legend{font:600 12px var(--mono);color:var(--yellow);padding:0 6px}
+fieldset label{display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer;min-height:28px;padding:2px 0}
+fieldset input{margin-top:5px;accent-color:var(--blue)}
+.rec{color:var(--green);font:11px var(--mono)}
+.q{color:var(--mut);font-size:12px;max-width:60ch}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font:12px var(--mono);color:var(--mut)}
+.bar label{display:flex;gap:6px;align-items:center;min-height:32px}
+.stage>div{max-width:100%;min-width:0}
+.stage{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:auto;max-width:100%}
+.term pre{margin:0;font:13px/1.3 var(--mono);color:var(--fg)}
+.inp{display:flex;align-items:center;background:var(--panel);font:13px/1.3 var(--mono);color:var(--fg);padding:0 1px}
+.inp input{flex:1;min-width:0;background:transparent;border:0;color:var(--fg);font:inherit;padding:2px 4px;outline:none}
+.inp:focus-within{box-shadow:0 0 0 2px var(--blue)}
+.cap{font:12px var(--mono);color:var(--mut);max-width:96ch;margin-top:6px}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.mag{color:var(--magenta)}.b{font-weight:700}
+.pk{background:var(--sel)}
+.phone{width:min(100%,360px);border:1px solid var(--line);border-radius:22px;background:var(--bg);padding:14px 10px 12px;display:flex;flex-direction:column;gap:8px}
+.phone .top{font:11px var(--mono);color:var(--dim);text-align:center}
+.plist{max-height:280px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;position:relative}
+.plist .sh{position:sticky;top:0;background:var(--panel);font:600 11px var(--mono);padding:6px 10px 4px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;z-index:1;text-transform:uppercase;letter-spacing:.04em}
+.plist .row{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid #2f343d;color:var(--fg);padding:7px 10px;min-height:44px;cursor:pointer;font:inherit}
+.plist .row.on{background:var(--sel)}
+.plist .nm{font:700 13px var(--mono)}
+.plist .ds{font-size:12px;color:var(--dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pin{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:9px 12px;font:13px var(--mono);color:var(--fg);min-height:40px}
+.badge{font:12px var(--mono);color:var(--green)}
+.badge.bad{color:var(--red)}
+.risk{border-left:3px solid var(--red);padding-left:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>La caja «/» con categorías</h1>
+    <p>Hoy la caja <code>comandos</code> es una lista plana: el origen (<code>jw</code>, <code>claude</code>, <code>skill</code>, <code>plugin</code>, <code>proyecto</code>) solo ordena y sale como una palabra a la derecha de cada fila. Aquí la lista sale en <b>secciones con título</b>. Escribe en la línea de abajo (empieza con <code>/</code>): filtra en todas las secciones y las que se quedan sin coincidencias desaparecen. <kbd>↑</kbd> <kbd>↓</kbd> recorren todo, cruzando secciones; <kbd>tab</kbd> completa; <kbd>↵</kbd> ejecuta; <kbd>esc</kbd> borra. En el teléfono se toca una fila. Los datos son la lista <b>real</b> que dio Claude Code 2.1.309 (137 comandos con los 17 de jw), no filas inventadas. <span id="tests" class="badge"></span></p>
+  </div>
+
+  <div class="box">
+    <h2>Lo que se midió (no se supuso)</h2>
+    <p style="margin-bottom:8px">Se arrancó el motor real (<code>claude -p --input-format stream-json …</code>, el mismo comando de <code>docs/claude-engine.md</code>) en una carpeta aparte con un skill y un comando de proyecto de prueba, y se le pidió <code>initialize</code>. El motor <b>no manda un campo de origen</b>: cada comando trae <code>name</code>, <code>description</code>, <code>argumentHint</code>, <code>aliases</code> y <code>builtin</code>. Pero el origen sí va escrito en el texto de la descripción:</p>
+    <table>
+      <tr><th>origen</th><th>cómo se reconoce</th><th>en la prueba</th></tr>
+      <tr><td class="mag">Claude</td><td><code>builtin: true</code> (también los skills empaquetados: <code>dataviz</code>, <code>run</code>, <code>deep-research</code>…)</td><td>54</td></tr>
+      <tr><td class="cyan">plugin</td><td><code>:</code> en el nombre, y la descripción empieza por el nombre del plugin entre paréntesis (<code>(vercel) </code>)</td><td>47 (vercel 40, ponytail 6, supabase 1)</td></tr>
+      <tr><td class="yellow">Personales</td><td>la descripción acaba en <code>(user)</code>: salen los skills de <code>~/.claude/skills</code> y también <code>~/.claude/commands/commit.md</code></td><td>12</td></tr>
+      <tr><td class="green">Proyecto</td><td>la descripción acaba en <code>(project)</code> (skills y comandos de <code>&lt;carpeta&gt;/.claude</code>)</td><td>2</td></tr>
+      <tr><td class="red">claude.ai</td><td>sin <code>:</code> en el nombre, pero con alias <code>anthropic-skills:…</code> y descripción acabada en <code>(claude.ai sync)</code></td><td>9 (<code>docs</code>, <code>pdf</code>, <code>xlsx</code>…)</td></tr>
+    </table>
+    <p style="margin-top:8px">Consecuencia: <b>el daemon no tiene que mirar carpetas</b> para separar Personales de Proyecto; basta leer ese sufijo. Y hoy <code>classify_commands</code> los mezcla (un comando sin <code>:</code> que no esté en la lista de skills sale como «proyecto»; <code>commit</code>, que es un comando personal, probablemente sale mal; está sin verificar). En las filas de abajo el sufijo y el prefijo ya están quitados, porque el título de la sección ya lo dice.</p>
+    <p class="risk" style="margin-top:8px"><b>RISK (irá a la spec):</b> ese texto es una convención no documentada de Claude Code, en inglés, medida solo en la 2.1.309. Si cambia en otra versión, un comando sin sufijo conocido caería en Personales (lo que hace hoy el «skill» por defecto) y la sección Proyecto quedaría vacía sin avisar. Se mitiga con una prueba que arranca el motor real y falla si no ve los sufijos.</p>
+  </div>
+
+  <div class="box">
+    <h2>Para decidir</h2>
+    <p style="margin-bottom:10px">Cada grupo cambia la prueba de abajo al instante. Lo marcado «recomendado» es lo que propongo; nada está cerrado.</p>
+    <div class="decide" id="decide"></div>
+  </div>
+
+  <div class="bar" role="group" aria-label="Prueba">
+    <label>carpeta de trabajo
+      <select id="folder"><option value="with">con .claude/ (2 de proyecto)</option><option value="without">sin .claude/ (Proyecto vacío)</option></select></label>
+    <label>ancho de la terminal
+      <select id="cols"><option value="100">100 columnas</option><option value="60">60 columnas (menos de 64)</option></select></label>
+    <label><input type="checkbox" id="custom"> categoría propia de ejemplo «Revisión» (skills con <code>review</code> en el nombre)</label>
+  </div>
+
+  <div class="stage">
+    <div>
+      <h2>Terminal (jw tui)</h2>
+      <div class="term">
+        <pre id="box"></pre>
+        <div class="inp"><span class="dim">❯&nbsp;</span><input id="line" value="/" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="composer"></div>
+      </div>
+      <div class="cap" id="status"></div>
+    </div>
+    <div>
+      <h2>Teléfono (ConversationScreen)</h2>
+      <div class="phone"><div class="top">conversación · jw</div><div class="plist" id="plist"></div><div class="pin" id="pin"></div></div>
+      <div class="cap">Una lista que se desliza (alto máximo 280 dp como hoy), encabezados pegajosos, un toque ejecuta (REQ-446). Escribe en la línea de la terminal; el teléfono muestra lo mismo.</div>
+    </div>
+  </div>
+
+  <div>
+    <h2>Panel /skills</h2>
+    <div class="term"><pre id="skills"></pre></div>
+    <div class="cap">Hoy el panel lista Skill, Proyecto y Plugin con una palabra de origen por fila. Sigue la última opción de «¿El panel /skills?».</div>
+  </div>
+</div>
+
+<script id="data" type="application/json">[{"n":"exit","d":"salir de la conversación","s":"jw","k":"local"},{"n":"plan","d":"entrar en modo plan, y enviar lo que sigue si hay algo","s":"jw","k":"local"},{"n":"rename","d":"cambiar el nombre de la conversación","s":"jw","k":"local"},{"n":"color","d":"cambiar el color de la conversación","s":"jw","k":"local"},{"n":"model","d":"cambiar el modelo","s":"jw","k":"local"},{"n":"effort","d":"cambiar el esfuerzo","s":"jw","k":"local"},{"n":"mode","d":"cambiar el modo de permisos","s":"jw","k":"local"},{"n":"cost","d":"lo que ha costado esta conversación","s":"jw","k":"local"},{"n":"help","d":"las teclas y los comandos propios","s":"jw","k":"panel"},{"n":"status","d":"modelo, esfuerzo, modo, sesión y límites","s":"jw","k":"panel"},{"n":"resume","d":"retomar una conversación de esta carpeta","s":"jw","k":"panel"},{"n":"continue","d":"retomar una conversación de esta carpeta","s":"jw","k":"panel"},{"n":"tasks","d":"trabajo en segundo plano","s":"jw","k":"panel"},{"n":"artifacts","d":"las páginas publicadas en esta conversación","s":"jw","k":"panel"},{"n":"skills","d":"las skills, comandos y plugins disponibles","s":"jw","k":"panel"},{"n":"permissions","d":"las reglas de permisos (solo lectura)","s":"jw","k":"panel"},{"n":"memory","d":"CLAUDE.md y AGENTS.md: abrir en un editor","s":"jw","k":"panel"},{"n":"android-review","d":"Reviews Kotlin and Android code for duplicated functions, overly complex logi…","s":"user"},{"n":"caveman","d":"Ultra-compressed communication mode. Cuts token usage ~75% by speaking like c…","s":"user"},{"n":"create-spec","d":"Write or restructure a spec so a human can read it and an agent can act on it…","s":"user"},{"n":"find-skills","d":"Helps users discover and install agent skills when they ask questions like \"h…","s":"user"},{"n":"frontend-design","d":"Guidance for distinctive, intentional visual design when building new UI or r…","s":"user"},{"n":"jw","d":"Drive the other workspaces and agents of this jw session from your own pane:…","s":"user"},{"n":"perf-review","d":"Reviews a program's performance, CPU usage and memory the way a profiler woul…","s":"user"},{"n":"rust-review","d":"Reviews Rust code for duplicated functions, overly complex logic, unnecessary…","s":"user"},{"n":"spec-reviewer","d":"Review a spec against the create-spec contract — section order, the fold and…","s":"user"},{"n":"sync-main","d":"Switch back to the repo's default branch (resolved from origin/HEAD, not assu…","s":"user"},{"n":"update-branch","d":"Bring the current branch up to date with the repo's default branch by merging…","s":"user"},{"n":"proj-skill","d":"a project skill","s":"project"},{"n":"commit","d":"Run `git status`, `git diff --stat`, `git log --oneline -5` and `git branch -…","s":"user"},{"n":"proj-cmd","d":"a project command","s":"project"},{"n":"deep-research","d":"Deep research harness — fan-out web searches, fetch sources, adversarially ve…","s":"claude"},{"n":"vercel:bootstrap","p":"vercel","d":"Bootstrap a repository with Vercel-linked resources by running preflight chec…","s":"plugin"},{"n":"vercel:deploy","p":"vercel","d":"Deploy the current project to Vercel. Pass \"prod\" or \"production\" as argument…","s":"plugin"},{"n":"vercel:env","p":"vercel","d":"Manage Vercel environment variables. Commands include list, pull, add, remove…","s":"plugin"},{"n":"vercel:status","p":"vercel","d":"Show the status of the current Vercel project — recent deployments, linked pr…","s":"plugin"},{"n":"vercel:access-protected-vercel-deployment","p":"vercel","d":"Access and test Vercel deployments protected by Vercel Authentication, SSO, o…","s":"plugin"},{"n":"vercel:ai-gateway","p":"vercel","d":"Vercel AI Gateway guidance for setup, model discovery, authentication, routin…","s":"plugin"},{"n":"vercel:ai-sdk","p":"vercel","d":"Vercel AI SDK expert guidance. Use when building AI-powered features — chat i…","s":"plugin"},{"n":"vercel:auth","p":"vercel","d":"Authentication integration guidance — Clerk (native Vercel Marketplace), Desc…","s":"plugin"},{"n":"vercel:build-agents","p":"vercel","d":"Default guidance for building AI agents. Use for generic requests to build, c…","s":"plugin"},{"n":"vercel:cdn-caching","p":"vercel","d":"Debug Vercel CDN caching — cache hit rate, stale content, revalidation behavi…","s":"plugin"},{"n":"vercel:chat-sdk","p":"vercel","d":"Vercel Chat SDK expert guidance. Use when building multi-platform chat bots —…","s":"plugin"},{"n":"vercel:create-a-backend","p":"vercel","d":"Backend architecture guidance. Use when planning, building, or migrating an A…","s":"plugin"},{"n":"vercel:custom-metrics","p":"vercel","d":"Emit and query Vercel Custom Metrics. Use when instrumenting application or b…","s":"plugin"},{"n":"vercel:deployments-cicd","p":"vercel","d":"Vercel deployment and CI/CD expert guidance. Use when deploying, promoting, r…","s":"plugin"},{"n":"vercel:env-vars","p":"vercel","d":"Vercel environment variable expert guidance. Use when working with .env files…","s":"plugin"},{"n":"vercel:eve","p":"vercel","d":"eve framework guidance for durable AI agents and agent-powered applications.…","s":"plugin"},{"n":"vercel:flags-sdk","p":"vercel","d":"Set up and use feature flags and A/B tests with the Flags SDK (`flags` npm pa…","s":"plugin"},{"n":"vercel:knowledge-update","p":"vercel","d":"Corrects outdated LLM knowledge about the Vercel platform and introduces new…","s":"plugin"},{"n":"vercel:marketplace","p":"vercel","d":"Vercel Marketplace expert guidance — discovering, installing, and managing th…","s":"plugin"},{"n":"vercel:microfrontends","p":"vercel","d":"Guide for building, configuring, and deploying microfrontends on Vercel. Use…","s":"plugin"},{"n":"vercel:next-cache-components","p":"vercel","d":"Next.js 16 Cache Components guidance — PPR, use cache directive, cacheLife, c…","s":"plugin"},{"n":"vercel:next-forge","p":"vercel","d":"next-forge expert guidance — production-grade Turborepo monorepo SaaS starter…","s":"plugin"},{"n":"vercel:next-upgrade","p":"vercel","d":"Upgrade Next.js to the latest version following official migration guides and…","s":"plugin"},{"n":"vercel:nextjs","p":"vercel","d":"Next.js App Router expert guidance. Use when building, debugging, or architec…","s":"plugin"},{"n":"vercel:queues","p":"vercel","d":"Vercel Queues guidance — durable topics with at-least-once delivery, independ…","s":"plugin"},{"n":"vercel:react-best-practices","p":"vercel","d":"React best-practices reviewer for TSX files. Triggers after editing multiple…","s":"plugin"},{"n":"vercel:routing-middleware","p":"vercel","d":"Vercel Routing Middleware guidance — request interception before cache, rewri…","s":"plugin"},{"n":"vercel:runtime-cache","p":"vercel","d":"Vercel Runtime Cache API guidance — ephemeral per-region key-value cache with…","s":"plugin"},{"n":"vercel:shadcn","p":"vercel","d":"shadcn/ui expert guidance — CLI, component installation, composition patterns…","s":"plugin"},{"n":"vercel:turbopack","p":"vercel","d":"Turbopack expert guidance. Use when configuring the Next.js bundler, optimizi…","s":"plugin"},{"n":"vercel:vercel-agent","p":"vercel","d":"Vercel Agent guidance — dashboard and Slack chat, code review, production inv…","s":"plugin"},{"n":"vercel:vercel-cli","p":"vercel","d":"Vercel CLI expert guidance. Use when deploying, managing environment variable…","s":"plugin"},{"n":"vercel:vercel-connect","p":"vercel","d":"Vercel Connect expert guidance — securely obtain scoped OAuth tokens for thir…","s":"plugin"},{"n":"vercel:vercel-firewall","p":"vercel","d":"Vercel Firewall expert guidance — automatic DDoS mitigation, the Vercel WAF (…","s":"plugin"},{"n":"vercel:vercel-functions","p":"vercel","d":"Vercel Functions expert guidance — Node.js/Bun/Python runtimes, Fluid Compute…","s":"plugin"},{"n":"vercel:vercel-sandbox","p":"vercel","d":"Vercel Sandbox guidance — ephemeral Firecracker microVMs for running untruste…","s":"plugin"},{"n":"vercel:vercel-services","p":"vercel","d":"Configure and troubleshoot Vercel Services for multiple frontends and backend…","s":"plugin"},{"n":"vercel:vercel-storage","p":"vercel","d":"Vercel storage expert guidance — Blob, Global Config (formerly Edge Config),…","s":"plugin"},{"n":"vercel:verification","p":"vercel","d":"Full-story verification — infers what the user is building, then verifies the…","s":"plugin"},{"n":"vercel:workflow","p":"vercel","d":"Vercel Workflow SDK expert guidance. Use when building durable workflows, lon…","s":"plugin"},{"n":"supabase:supabase","p":"supabase","d":"Use when doing ANY task involving Supabase. Triggers: Supabase products (Data…","s":"plugin"},{"n":"ponytail:ponytail","p":"ponytail","d":"Lazy senior dev mode: the smallest change that fully solves the task, and a r…","s":"plugin","a":"[lite|full|ultra|off]"},{"n":"ponytail:ponytail-audit","p":"ponytail","d":"Quality audit of a whole repo: bugs, security holes, what breaks under real l…","s":"plugin"},{"n":"ponytail:ponytail-debt","p":"ponytail","d":"List every `shortcut:` comment (and older `ponytail:` ones) as a debt ledger.…","s":"plugin"},{"n":"ponytail:ponytail-gain","p":"ponytail","d":"Show ponytail's measured savings (code, cost, speed) from the benchmark. One-…","s":"plugin"},{"n":"ponytail:ponytail-help","p":"ponytail","d":"Quick reference for ponytail levels, skills and commands. One-shot display. U…","s":"plugin"},{"n":"ponytail:ponytail-review","p":"ponytail","d":"Quality review of a change: is the logic right, is it safe, does it hold unde…","s":"plugin"},{"n":"design","d":"Grant or revoke Claude agent access to your Design projects","s":"claude","a":"consent | revoke"},{"n":"design-sync","d":"Push a React design system to claude.ai/design. This runs a converter that bu…","s":"claude","a":"[<project hint, e.g. \"Acme DS\""},{"n":"dataviz","d":"Use this skill whenever you are about to create ANY chart, graph, plot, dashb…","s":"claude"},{"n":"update-config","d":"Use this skill to configure the Claude Code harness via settings.json. Automa…","s":"claude"},{"n":"verify","d":"Verify that a code change actually does what it's supposed to by exercising i…","s":"claude"},{"n":"debug","d":"Enable debug logging for this session and help diagnose issues","s":"claude","a":"[issue description]"},{"n":"code-review","d":"Review the current diff, or a PR number/branch/path target, for correctness b…","s":"claude","a":"[low|medium|high|xhigh|max] [-"},{"n":"simplify","d":"Review the changed code for reuse, simplification, efficiency, and altitude c…","s":"claude","a":"[<target>]"},{"n":"batch","d":"Research and plan a large-scale change, then execute it in parallel across 5–…","s":"claude","a":"<instruction>"},{"n":"fewer-permission-prompts","d":"Scan your transcripts for common read-only Bash and MCP tool calls, then add…","s":"claude"},{"n":"doctor","d":"Health-check the user's Claude Code setup and fix issues: diagnose installati…","s":"claude","a":"[prompt-audit [<path>]]"},{"n":"loop","d":"Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). O…","s":"claude","a":"[interval] [prompt]"},{"n":"schedule","d":"Create, update, list, or run scheduled cloud agents (routines) that execute o…","s":"claude"},{"n":"claude-api","d":"Reference for the Claude API / Anthropic SDK — model ids, pricing, params, st…","s":"claude"},{"n":"workflow-authoring","d":"Reference for writing a Workflow tool script (script API and gotchas, resume,…","s":"claude"},{"n":"run","d":"Launch and drive this project's app to see a change working. Use when asked t…","s":"claude"},{"n":"run-skill-generator","d":"Author or improve the run-<unit> skill - a per-project skill that tells agent…","s":"claude"},{"n":"plugin-authoring","d":"Make a mod: a change to Claude's own interface or behaviour, such as a panel…","s":"claude"},{"n":"advisor","d":"Let Claude consult a stronger model at key moments","s":"claude","a":"[fable|opus|sonnet|off]"},{"n":"agents","d":"(removed) Ask Claude to create/manage subagents, or edit .claude/agents/","s":"claude"},{"n":"auto-mode-setup","d":"Teach auto mode about your environment, plus optional rule tweaks","s":"claude","a":"[--request-id <uuid>] (--wizar"},{"n":"autocompact","d":"Configure the auto-compact window size","s":"claude","a":"[auto|<tokens>]"},{"n":"clear","d":"Start a new session with empty context; previous session stays on disk (resum…","s":"claude","a":"[name]"},{"n":"compact","d":"Free up context by summarizing the conversation so far","s":"claude","a":"<optional custom summarization"},{"n":"config","d":"Set a setting by key","s":"claude","a":"key=value"},{"n":"output-style","d":"List output styles or switch to one","s":"claude","a":"[style]"},{"n":"context","d":"Show current context usage","s":"claude"},{"n":"fast","d":"Toggle fast mode (Opus 5.5)","s":"claude","a":"[on|off]"},{"n":"focus","d":"Toggle focus view: just your prompt, summary, and response","s":"claude","a":"[on|off]"},{"n":"heapdump","d":"Dump the JS heap to the Desktop; on Linux with no Desktop folder, the home di…","s":"claude"},{"n":"init","d":"Initialize a new CLAUDE.md file with codebase documentation","s":"claude"},{"n":"mcp","d":"Manage MCP servers","s":"claude","a":"[reconnect|enable|disable [<se"},{"n":"import","d":"Import config from another AI coding agent","s":"claude"},{"n":"__remote-workflow","d":"Run the workflow script delivered in this session environment (server-launche…","s":"claude"},{"n":"workflow-launch-exec","d":"Execute a server-launched workflow handoff (workflow_launch event sessions on…","s":"claude"},{"n":"reload-plugins","d":"Activate pending plugin changes in the current session","s":"claude","a":"[--force]"},{"n":"reload-skills","d":"Pick up skills added or changed on disk during this session","s":"claude"},{"n":"security-review","d":"Complete a security review of the pending changes on the current branch","s":"claude"},{"n":"usage-credits","d":"Configure usage credits or request them from your admin when you hit a limit","s":"claude"},{"n":"extra-usage","d":"Renamed to /usage-credits","s":"claude"},{"n":"usage","d":"Show session cost, plan usage, and what's contributing to your limits","s":"claude"},{"n":"insights","d":"Generate a report analyzing your Claude Code sessions","s":"claude"},{"n":"recap","d":"Generate a one-line session recap now","s":"claude"},{"n":"skill-doctor","d":"Show which loaded skills are unused and costing context","s":"claude"},{"n":"goal","d":"Set a goal — keep working until the condition is met","s":"claude"},{"n":"design-consent","d":"Grant Claude agent access to your Design projects","s":"claude"},{"n":"design-revoke","d":"Revoke Claude agent access to your Design projects","s":"claude"},{"n":"list-agents","d":"List subagents, teammates, and other Claude sessions you can message","s":"claude"},{"n":"team-onboarding","d":"Help teammates ramp on Claude Code with a guide from your usage","s":"claude"},{"n":"docs","d":"docs (editable docs people share and comment on; the default for any document…","s":"sync"},{"n":"docx","d":"Use this skill whenever the user wants to create, read, edit, or manipulate W…","s":"sync"},{"n":"google-workspace","d":"Read this before the first Google Drive, Docs, Sheets or Slides connector cal…","s":"sync"},{"n":"import-memory","d":"Import a memory export from another AI assistant into Claude's memory — conve…","s":"sync"},{"n":"morning","d":"Render the user's morning brief as a styled HTML artifact, or set it up as a…","s":"sync"},{"n":"pdf","d":"Use this skill whenever the user wants to do anything with PDF files. This in…","s":"sync"},{"n":"pptx","d":"Use this skill any time a .pptx or .potx file is involved in any way — as inp…","s":"sync"},{"n":"skill-creator","d":"Create new skills, modify and improve existing skills, and measure skill perf…","s":"sync"},{"n":"xlsx","d":"Use this skill any time a spreadsheet file is the primary input or output. Th…","s":"sync"}]</script>
+<script id="logic">
+// Pure part: no DOM. Tested with node (see tests()).
+const ORDERS = {
+  a: ['jw', 'user', 'project', 'plugins', 'sync', 'claude'],
+  b: ['jw', 'claude', 'user', 'project', 'plugins', 'sync'],
+  c: ['project', 'user', 'plugins', 'sync', 'jw', 'claude'],
+};
+const TITLE = { jw: 'jw', claude: 'Claude', user: 'Personales', project: 'Proyecto', sync: 'claude.ai' };
+
+// A command's section key: 'jw' | 'claude' | 'user' | 'project' | 'sync' | 'plugin:<name>' | 'own:<title>'.
+function keyOf(c, groups, sync) {
+  if (c.s === 'plugin') return 'plugin:' + c.p;
+  if (c.s === 'sync' && sync === 'plugin') return 'plugin:anthropic-skills';
+  if (c.s === 'sync' && sync === 'user') return 'user';
+  if (keyOf0(c, sync) === 'user') for (const g of groups) if (g.re.test(c.n)) return 'own:' + g.title;
+  return c.s;
+}
+function keyOf0(c, sync) { return c.s === 'sync' && sync === 'user' ? 'user' : c.s; }
+function titleOf(key) {
+  return TITLE[key] || key.replace(/^(plugin|own):/, '');
+}
+
+// opts: {query, order, groups: [{title, re}], hideEmpty, sync: 'own' | 'plugin' | 'user' (where the claude.ai ones go)}. Returns [{key, title, items}] in display order.
+function group(cmds, opts) {
+  const q = opts.query.trim().replace(/^\//, '').toLowerCase();
+  const by = new Map();
+  for (const c of cmds) {
+    if (!c.n.toLowerCase().includes(q)) continue;
+    const k = keyOf(c, opts.groups, opts.sync);
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(c);
+  }
+  // Starts-with first, then name: the order inside a section is today's, minus the source rank.
+  for (const items of by.values())
+    items.sort((a, b) => (b.n.toLowerCase().startsWith(q) - a.n.toLowerCase().startsWith(q)) || a.n.localeCompare(b.n));
+  const sorted = (pre) => [...by.keys()].filter((k) => k.startsWith(pre)).sort();
+  const keys = [];
+  for (const slot of ORDERS[opts.order]) {
+    if (slot === 'plugins') keys.push(...sorted('plugin:'));
+    else {
+      keys.push(slot);
+      if (slot === 'user') keys.push(...sorted('own:'));
+    }
+  }
+  return keys
+    .map((key) => ({ key, title: titleOf(key), items: by.get(key) || [] }))
+    .filter((s) => s.items.length || (!opts.hideEmpty && !key_isDynamic(s.key)));
+}
+function key_isDynamic(k) { return k.includes(':'); }
+
+// The commands in the order the arrows walk them.
+function flat(sections) { return sections.flatMap((s) => s.items.map((c) => ({ c, key: s.key, title: s.title }))); }
+
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+
+// PgDn / PgUp: the first command of the next section; of this one, or the previous one when already there.
+function jump(sections, sel, dir) {
+  const f = flat(sections);
+  if (!f.length) return 0;
+  const starts = [];
+  f.forEach((e, i) => { if (i === 0 || e.key !== f[i - 1].key) starts.push(i); });
+  if (dir > 0) return starts.find((i) => i > sel) ?? f.length - 1;
+  const here = [...starts].reverse().find((i) => i <= sel);
+  return here < sel ? here : [...starts].reverse().find((i) => i < sel) ?? 0;
+}
+
+// The lines drawn. mode 'inside': N lines in all, headers take lines, the top line always says
+// the section (a sticky one when the real header scrolled away). mode 'outside': N commands, headers on top.
+// Returns {rows: [{h: title} | {c, at}], first}; `first` is kept between calls so the window scrolls only when it must.
+function view(sections, sel, first, N, mode) {
+  const f = flat(sections);
+  if (mode === 'outside') {
+    const top = clamp(first, Math.max(0, sel - N + 1), sel);
+    const rows = [];
+    for (let i = top; i < Math.min(f.length, top + N); i++) {
+      if (i === top || f[i].key !== f[i - 1].key) rows.push({ h: f[i].title, n: sections.find((s) => s.key === f[i].key).items.length });
+      rows.push({ c: f[i].c, at: i });
+    }
+    return { rows, first: top };
+  }
+  const lines = [];
+  sections.forEach((s) => { if (!s.items.length) { lines.push({ h: s.title, n: 0, empty: true }); return; } lines.push({ h: s.title, n: s.items.length }); s.items.forEach((c) => lines.push({ c, at: lines.filter((l) => l.c).length })); });
+  const sl = lines.findIndex((l) => l.c && l.at === sel);
+  let top = sl < 0 ? 0 : clamp(first, Math.max(0, sl - N + 1), Math.max(0, sl - 1));
+  if (sl >= 0 && lines[sl - 1] && lines[sl - 1].h && top > sl - 1) top = sl - 1;
+  const rows = lines.slice(top, top + N);
+  if (rows.length && rows[0].c) {
+    const key = f[rows[0].at].key, s = sections.find((x) => x.key === key);
+    rows[0] = { h: s.title, n: s.items.length, sticky: true };
+  }
+  return { rows, first: top };
+}
+
+function tests(DATA) {
+  const assert = (ok, msg) => { if (!ok) throw new Error('FAIL: ' + msg); };
+  const base = { query: '', order: 'a', groups: [], hideEmpty: true };
+  const all = group(DATA, base), nAll = flat(all).length;
+  assert(nAll === DATA.length, 'every command lands in a section: ' + nAll + ' of ' + DATA.length);
+  assert(all.map((s) => s.key).join() === ['jw', 'user', 'project', 'plugin:ponytail', 'plugin:supabase', 'plugin:vercel', 'sync', 'claude'].join(), 'order a');
+  // filter
+  const one = group(DATA, { ...base, query: '/DEEP' });
+  assert(one.length === 1 && one[0].key === 'claude' && one[0].items.length === 1, 'one match keeps one section');
+  const none = group(DATA, { ...base, query: 'zzzz' });
+  assert(none.length === 0 && flat(none).length === 0, 'no match: no section at all');
+  assert(group(DATA, { ...base, query: 'zzzz', hideEmpty: false }).every((s) => !s.items.length), 'empty sections shown only when asked');
+  assert(group(DATA, { ...base, query: 'ponytail' }).every((s) => s.items.every((c) => c.n.includes('ponytail'))), 'filter on the name');
+  const mo = group(DATA, { ...base, query: 'mo' });
+  assert(mo[0].key === 'jw' && mo[0].items[0].n.startsWith('mo'), 'starts-with first inside a section');
+  // empty category by data
+  const noProj = group(DATA.filter((c) => c.s !== 'project'), base);
+  assert(!noProj.some((s) => s.key === 'project'), 'project hidden when empty');
+  assert(group(DATA.filter((c) => c.s !== 'project'), { ...base, hideEmpty: false }).some((s) => s.key === 'project' && !s.items.length), 'project shown empty when asked');
+  // own groups take from Personales only
+  const g = group(DATA, { ...base, groups: [{ title: 'Revisión', re: /review/ }] });
+  assert(g.find((s) => s.key === 'own:Revisión').items.every((c) => c.s === 'user'), 'own group takes personal skills only');
+  assert(flat(g).length === nAll, 'own groups lose nothing');
+  // arrows cross sections: selection is an index over commands, so +1 at the end of a section is the next one's first
+  const f = flat(all);
+  const lastJw = f.findLastIndex((e) => e.key === 'jw');
+  assert(f[lastJw + 1].key === 'user', 'the arrow after the last jw command lands in Personales');
+  // jump
+  assert(f[jump(all, 0, 1)].key === 'user' && f[jump(all, 0, 1) - 1].key === 'jw', 'PgDn: first of next section');
+  assert(jump(all, nAll - 1, 1) === nAll - 1, 'PgDn at the end stays');
+  const u0 = jump(all, 0, 1);
+  assert(jump(all, u0 + 1, -1) === u0 && jump(all, u0, -1) === 0, 'PgUp: start of this section, then the previous');
+  // view, both modes: n lines, the selection is in, the top line is a header, no header is lost on a section start
+  for (const mode of ['inside', 'outside'])
+    for (let sel = 0, first = 0; sel < nAll; sel++) {
+      const v = view(all, sel, first, 8, mode); first = v.first;
+      assert(v.rows.some((r) => r.c && r.at === sel), mode + ' keeps the selection in view at ' + sel);
+      assert(v.rows[0].h !== undefined, mode + ' top line is a header at ' + sel);
+      assert(mode === 'outside' ? v.rows.filter((r) => r.c).length <= 8 : v.rows.length <= 8, mode + ' height at ' + sel);
+      assert(v.rows.filter((r) => r.c).every((r, i, a) => !i || r.at === a[i - 1].at + 1), mode + ' commands are consecutive at ' + sel);
+    }
+  const small = view(none, 0, 0, 8, 'inside');
+  assert(small.rows.length === 0, 'empty list draws nothing');
+  return 'ok';
+}
+if (typeof module !== 'undefined') module.exports = { group, flat, jump, view, tests };
+
+</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const $ = (id) => document.getElementById(id);
+const esc = (t) => t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+try { $('tests').textContent = '✓ lógica probada (' + tests(DATA) + ')'; } catch (e) { $('tests').textContent = '✗ ' + e.message; $('tests').className = 'badge bad'; }
+
+const DECISIONS = [
+  { id: 'order', q: '¿En qué orden van las secciones?', def: 'a', opts: [
+    ['a', 'jw, Personales, Proyecto, plugins, claude.ai, Claude', 'recomendado: lo que escribes tú o lo que es de este proyecto va antes; Claude, que es lo más largo (50), va al final y no empuja lo demás'],
+    ['b', 'jw, Claude, Personales, Proyecto, plugins, claude.ai', 'la dirección inicial: lo conocido primero, pero con Claude de segundo hay que pasar 50 filas para llegar a lo tuyo'],
+    ['c', 'Proyecto, Personales, plugins, claude.ai, jw, Claude', 'lo más específico primero; los comandos de jw (/model, /help) quedan lejos si no se filtra'] ] },
+  { id: 'hide', q: '¿Una categoría vacía se oculta?', def: 'hide', opts: [
+    ['hide', 'Se oculta', 'recomendado: la lista solo enseña lo que se puede elegir; sin .claude/ no hay un «Proyecto» vacío estorbando'],
+    ['show', 'Se muestra con «(vacía)»', 'se ve que la categoría existe, pero cada filtro deja encabezados sin nada debajo'] ] },
+  { id: 'custom', q: '¿Puede el usuario crear categorías propias?', def: 'fixed', opts: [
+    ['fixed', 'Bastan las fijas (esta versión)', 'recomendado: ya separan lo que importa y no hay nada que configurar'],
+    ['own', 'Categorías propias más adelante', 'por una lista en la config personal: <code>[[commands.group]] title="Revisión" match="review"</code>, en el <code>config.toml</code> del directorio de config que da <code>identity</code> (nunca una ruta escrita a mano). Casilla de arriba para verlo. Solo se agruparían Personales; lo de plugins y Claude no se mueve'] ] },
+  { id: 'rows', q: '¿Cómo cuentan las 8 filas con encabezados?', def: 'inside', opts: [
+    ['inside', 'Los encabezados gastan filas: 8 líneas en total', 'recomendado: el alto de la caja no cambia (cuadra con el tope del composer, REQ-703). La primera línea siempre dice la sección: un encabezado pegajoso si el real ya salió por arriba'],
+    ['outside', '8 comandos más sus encabezados', 'ves siempre 8 comandos, pero la caja crece y se encoge mientras te mueves, y puede llegar a 12 líneas'] ] },
+  { id: 'jump', q: '¿Cómo se salta de una sección a otra?', def: 'pg', opts: [
+    ['pg', '<kbd>RePág</kbd> / <kbd>AvPág</kbd>', 'recomendado: <kbd>tab</kbd> ya completa el nombre (REQ-416) y no se toca'],
+    ['tab', '<kbd>tab</kbd> salta de sección', 'rompe REQ-416: dejaría de completar'],
+    ['none', 'Sin salto', 'solo flechas; con 50 filas de Claude se hace largo'] ] },
+  { id: 'sync', q: '¿Dónde van los 9 skills «claude.ai sync»?', def: 'own', opts: [
+    ['own', 'Sección propia «claude.ai»', 'recomendado: son 9 y no son ni tuyos ni de un plugin; el motor los marca aparte'],
+    ['plugin', 'Como el plugin «anthropic-skills»', 'su alias dice <code>anthropic-skills:</code>, pero el nombre que se escribe no lleva prefijo'],
+    ['user', 'Dentro de Personales', 'Personales pasa de 12 a 21 y mezcla lo tuyo con lo sincronizado'] ] },
+  { id: 'panel', q: '¿Se ve la categoría también en el panel /skills?', def: 'sections', opts: [
+    ['sections', 'Sí: las mismas secciones', 'recomendado: un solo vocabulario en la caja y en el panel'],
+    ['tag', 'No: se queda con la palabra por fila', 'cambia solo la caja'] ] },
+];
+const S = { query: '', sel: 0, first: 0 };
+for (const d of DECISIONS) S[d.id] = d.def;
+S.folder = 'with'; S.cols = '100';
+const sw = $('decide');
+sw.innerHTML = DECISIONS.map((d) => `<fieldset><legend>${d.q}</legend>` + d.opts.map(([v, t, why]) =>
+  `<label><input type="radio" name="${d.id}" value="${v}"${v === d.def ? ' checked' : ''}><span>${t}${v === d.def ? ' <span class="rec">(recomendado)</span>' : ''}<br><span class="q">${why}</span></span></label>`).join('') + '</fieldset>').join('');
+sw.addEventListener('change', (e) => { S[e.target.name] = e.target.value; if (e.target.name === 'custom') $('custom').checked = e.target.value === 'own'; S.first = 0; draw(); });
+$('custom').addEventListener('change', (e) => { S.custom = e.target.checked ? 'own' : 'fixed'; document.querySelector(`input[name=custom][value=${S.custom}]`).checked = true; S.first = 0; draw(); });
+$('folder').addEventListener('change', (e) => { S.folder = e.target.value; S.sel = 0; S.first = 0; draw(); });
+$('cols').addEventListener('change', (e) => { S.cols = e.target.value; draw(); });
+
+const COLOR = { jw: 'blue', claude: 'mag', user: 'yellow', project: 'green', sync: 'red' };
+const colorOf = (key) => COLOR[key] || (key.startsWith('own:') ? 'green' : 'cyan');
+const ROWS = 8;
+function sections() {
+  const cmds = S.folder === 'without' ? DATA.filter((c) => c.s !== 'project') : DATA;
+  return group(cmds, { query: S.query, order: S.order, groups: S.custom === 'own' ? [{ title: 'Revisión', re: /review/ }] : [], hideEmpty: S.hide === 'hide', sync: S.sync });
+}
+const pad = (t, n) => (t.length > n ? t.slice(0, n - 1) + '…' : t + ' '.repeat(n - t.length));
+const span = (cls, t) => `<span class="${cls}">${esc(t)}</span>`;
+
+function drawBox(secs, total) {
+  const W = +S.cols, iw = W - 2;
+  const v = view(secs, S.sel, S.first, ROWS, S.rows);
+  S.first = v.first;
+  const nameW = Math.min(iw / 2 | 0, Math.max(...v.rows.filter((r) => r.c).map((r) => r.c.n.length + 1), 8));
+  const right = ` ${S.sel + 1} de ${total} `, left = ' comandos ';
+  const out = [span('dim', '┌') + span('blue', left) + span('dim', '─'.repeat(Math.max(0, iw - left.length - right.length)) + right + '┐')];
+  for (const r of v.rows) {
+    let body;
+    if (r.h !== undefined) {
+      const key = secs.find((s) => s.title === r.h).key, c = colorOf(key);
+      const t = '── ' + r.h + (r.sticky ? ' ↑' : '') + ' ' + (r.empty ? '(vacía) ' : '· ' + r.n + ' ');
+      body = span('b ' + c, t) + span('dim', '─'.repeat(Math.max(0, iw - t.length)));
+    } else {
+      const lit = r.at === S.sel, name = '/' + r.c.n, c = colorOf(secs.find((s) => s.items.includes(r.c)).key);
+      const dim = r.c.k === 'panel' ? ' dim' : '';
+      const row = ' ' + span('b ' + c + dim, pad(name, nameW)) + ' ' + span('dim', (r.c.d + ' ').slice(0, Math.max(0, iw - nameW - 3)).padEnd(Math.max(0, iw - nameW - 2)));
+      body = lit ? `<span class="pk">${row}</span>` : row;
+    }
+    out.push(span('dim', '│') + body + span('dim', '│'));
+  }
+  out.push(span('dim', '└' + '─'.repeat(iw) + '┘'));
+  $('box').innerHTML = out.join('\n');
+  return v.rows.length + 2;
+}
+
+function draw() {
+  const val = $('line').value, open = val.startsWith('/') && !/\s/.test(val);
+  S.query = open ? val.slice(1) : '';
+  const secs = sections(), f = flat(secs), total = f.length;
+  S.sel = Math.min(S.sel, Math.max(0, total - 1));
+  let h = 0;
+  if (!open || !total) { $('box').innerHTML = ''; $('status').textContent = !open ? 'La caja se abre al escribir «/» y letras.' : 'Sin coincidencias: la caja se cierra, como hoy.'; }
+  else {
+    h = drawBox(secs, total);
+    const e = f[S.sel];
+    $('status').textContent = `${total} comandos en ${secs.filter((s) => s.items.length).length} secciones · caja de ${h} líneas · ↵ ejecutaría /${e.c.n}` + (e.c.a ? '  ' + e.c.a : '') + `  [${e.title}]`;
+  }
+  // phone
+  const pl = $('plist'); let at = 0;
+  pl.innerHTML = !open ? '' : secs.map((s) => `<div class="sh ${colorOf(s.key)}"><span>${esc(s.title)}</span><span class="dim">${s.items.length || 'vacía'}</span></div>` +
+    s.items.map((c) => { const i = at++; return `<button class="row${i === S.sel ? ' on' : ''}" data-at="${i}"><div class="nm ${colorOf(s.key)}">/${esc(c.n)}</div><div class="ds">${esc(c.d)}</div></button>`; }).join('')).join('');
+  const on = pl.querySelector('.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  $('pin').textContent = val + ' ';
+  // /skills panel
+  $('skills').innerHTML = drawSkills();
+}
+function drawSkills() {
+  const cmds = (S.folder === 'without' ? DATA.filter((c) => c.s !== 'project') : DATA).filter((c) => c.s !== 'jw' && c.s !== 'claude');
+  const secs = group(cmds, { query: '', order: S.order, groups: S.custom === 'own' ? [{ title: 'Revisión', re: /review/ }] : [], hideEmpty: true, sync: S.sync });
+  const lines = [span('dim', '┌') + span('blue', ' skills y comandos ') + span('dim', '─'.repeat(23) + '┐')];
+  const tagOf = (c) => ({ project: ['proyecto', 'green'], plugin: ['plugin', 'cyan'] }[c.s] || ['skill', 'yellow']);
+  const shown = (items, n) => items.slice(0, n);
+  if (S.panel === 'tag') {
+    const all = flat(secs).map((e) => e.c).slice(0, 12);
+    all.forEach((c) => { const [t, col] = tagOf(c); lines.push(span('dim', '│ ') + span('b ' + col, pad('/' + c.n, 29)) + span(col, pad(t, 9)) + span('dim', ' │')); });
+    lines.push(span('dim', ('│ … ' + (cmds.length - all.length) + ' más').padEnd(41) + '│'));
+  } else secs.forEach((s) => { lines.push(span('dim', '│ ') + span('b ' + colorOf(s.key), pad('── ' + s.title + ' · ' + s.items.length + ' ', 39)) + span('dim', '│'));
+    shown(s.items, 2).forEach((c) => lines.push(span('dim', '│  ') + span(colorOf(s.key), pad('/' + c.n, 37)) + span('dim', '│')));
+    if (s.items.length > 2) lines.push(span('dim', ('│  … ' + (s.items.length - 2) + ' más').padEnd(41) + '│')); });
+  lines.push(span('dim', '└' + '─'.repeat(41) + '┘'));
+  return lines.join('\n');
+}
+
+$('line').addEventListener('input', () => { S.sel = 0; S.first = 0; draw(); });
+$('line').addEventListener('keydown', (e) => {
+  const secs = sections(), total = flat(secs).length;
+  const go = (n) => { e.preventDefault(); S.sel = Math.max(0, Math.min(total - 1, n)); draw(); };
+  if (e.key === 'ArrowDown') go(S.sel + 1);
+  else if (e.key === 'ArrowUp') go(S.sel - 1);
+  else if (e.key === 'PageDown' && S.jump === 'pg') go(jump(secs, S.sel, 1));
+  else if (e.key === 'PageUp' && S.jump === 'pg') go(jump(secs, S.sel, -1));
+  else if (e.key === 'Tab' && total) { e.preventDefault(); if (S.jump === 'tab') go(jump(secs, S.sel, e.shiftKey ? -1 : 1)); else { $('line').value = '/' + flat(secs)[S.sel].c.n + ' '; S.sel = 0; draw(); } }
+  else if (e.key === 'Enter') { e.preventDefault(); const f = flat(secs); if (f[S.sel]) $('status').textContent = '▶ ejecutaría /' + f[S.sel].c.n; }
+  else if (e.key === 'Escape') { $('line').value = ''; S.sel = 0; draw(); }
+});
+$('plist').addEventListener('click', (e) => { const b = e.target.closest('.row'); if (b) { S.sel = +b.dataset.at; draw(); $('status').textContent = '▶ ejecutaría (toque) /' + flat(sections())[S.sel].c.n; } });
+S.custom = 'fixed';
+draw();
+</script>
+</body>
+</html>

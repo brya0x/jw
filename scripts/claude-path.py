@@ -393,6 +393,21 @@ SKIP = {"__remote-workflow", "workflow-launch-exec", "heapdump", "design-consent
         "autocompact", "clear", "compact", "context", "fast", "focus", "output-style", "recap", "usage", "skill-doctor", "auto-mode-setup"}
 
 
+@stage("commands", "a project's skill is listed as the project's, with its description unmarked (REQ-792)")
+def s_commands():
+    # Without the engine's `(project)` mark the fallback of REQ-793 says `skill`, whether or not `init` was heard.
+    d = os.path.join(REPO, ".claude", "skills", "pathmark")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "SKILL.md"), "w").write("---\nname: pathmark\ndescription: a skill of the throwaway repo\n---\nsay ok\n")
+    c = Conv()
+    n = wait(c.node, "the project's skill in the list", lambda n: any(k["name"] == "/pathmark" for k in n["commands"]), 30)
+    k = next(k for k in n["commands"] if k["name"] == "/pathmark")
+    check("commands", "it is the project's, not a skill of the person", k["source"] == "project", k["source"])
+    check("commands", "its description has no mark", k.get("description") == "a skill of the throwaway repo", str(k.get("description")))
+    check("commands", "a plugin's command has its group and none of the plugin's mark", all(k.get("group") and not k.get("description", "").startswith("(") for k in n["commands"] if k["source"] == "plugin"))
+    c.close()
+
+
 @stage("survey", "what each command that jw sends as typed answers from the real engine (not a pass or fail)")
 def s_survey():
     c = Conv()

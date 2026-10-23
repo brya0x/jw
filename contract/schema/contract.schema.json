@@ -170,7 +170,8 @@
         "name": { "type": "string" },
         "source": { "$ref": "#/$defs/CommandSource" },
         "kind": { "$ref": "#/$defs/CommandKind" },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "group": { "type": "string" }
       }
     },
     "Limits": {

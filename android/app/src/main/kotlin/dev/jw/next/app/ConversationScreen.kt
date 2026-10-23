@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -105,12 +106,12 @@ import dev.jw.next.client.suggestionShown
 import dev.jw.next.client.tag
 import dev.jw.next.client.tasksPanel
 import dev.jw.next.client.turnText
-import dev.jw.next.client.word
+import dev.jw.next.client.Tint
+import dev.jw.next.client.commandSections
 import dev.jw.next.client.workLine
 import dev.jw.next.client.working
 import dev.jw.next.contract.AskKind
 import dev.jw.next.contract.CommandKind
-import dev.jw.next.contract.CommandSource
 import dev.jw.next.contract.ConvCommand
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConvStatus
@@ -424,7 +425,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // ---- the `/` list above the field (REQ-446) ----
     // The word being written, wherever it is in the line; a command alone in the line runs, anywhere else it is written in place (REQ-596).
     val menu = if (heldText == null) slashMenu(node.commands, text.text, text.selection.end) else emptyList()
-    if (menu.isNotEmpty()) CommandList(menu, accent) { c ->
+    if (menu.isNotEmpty()) CommandList(menu) { c ->
         if (slashIsWholeLine(text.text, text.selection.end)) send(c.name)
         else takeCommand(text.text, text.selection.end, c).let { (line, at) -> text = TextFieldValue(line, TextRange(at)) }
     }
@@ -567,13 +568,14 @@ private fun ConvMode.color() = when (this) {
     ConvMode.Auto -> Palette.yellow
 }
 
-/** The colour a command is written in where the line is edited: where it is defined, as in the terminal (REQ-596). */
-private fun CommandSource.colour() = when (this) {
-    CommandSource.Jwn -> Palette.blue
-    CommandSource.Claude -> Palette.magenta
-    CommandSource.Project -> Palette.green
-    CommandSource.Skill -> Palette.yellow
-    CommandSource.Plugin -> Palette.cyan
+/** The colour a section, and a command in it, is written in: where it is defined, as in the terminal (REQ-596, REQ-800). */
+internal fun Tint.colour() = when (this) {
+    Tint.Jwn -> Palette.blue
+    Tint.Personal -> Palette.yellow
+    Tint.Project -> Palette.green
+    Tint.Plugin -> Palette.cyan
+    Tint.ClaudeAi -> Palette.red
+    Tint.Claude -> Palette.magenta
 }
 
 /** The line as it is written, with each word that is a command in its colour, wherever it is; no character moves. */
@@ -581,25 +583,40 @@ private class CommandColours(private val commands: List<ConvCommand>) : VisualTr
     override fun filter(text: AnnotatedString): TransformedText {
         val styled = buildAnnotatedString {
             append(text.text)
-            commandWords(commands, text.text).forEach { (from, to, source) -> addStyle(SpanStyle(color = source.colour(), fontWeight = FontWeight.Bold), from, to) }
+            commandWords(commands, text.text).forEach { (from, to, tint) -> addStyle(SpanStyle(color = tint.colour(), fontWeight = FontWeight.Bold), from, to) }
         }
         return TransformedText(styled, OffsetMapping.Identity)
     }
 }
 
-/** The commands whose names hold what is typed, above the keyboard; a tap runs one (REQ-446). A command that needs Claude's screen is marked `↗`. */
+/**
+ * The commands whose names hold what is typed, above the keyboard, in sections whose title stays at the top while they scroll (REQ-795, REQ-802);
+ * a tap on a command runs it, one on a title does nothing. A command that needs Claude's screen is marked `↗`.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CommandList(menu: List<ConvCommand>, accent: androidx.compose.ui.graphics.Color, run: (ConvCommand) -> Unit) {
+private fun CommandList(menu: List<ConvCommand>, run: (ConvCommand) -> Unit) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Hairline()
         LazyColumn(Modifier.heightIn(max = 280.dp)) {
-            items(menu, key = { it.name }) { c ->
-                Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).clickable { run(c) }.padding(horizontal = Pad, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Column(Modifier.weight(1f)) {
-                        Mono((if (c.kind == CommandKind.Screen) "↗ " else "") + c.name, if (c.kind == CommandKind.Screen) Palette.dim else accent, 13, bold = true)
-                        c.description?.let { Mono(it, Palette.dim, 12, lines = 2) }
+            commandSections(menu, BuildConfig.PRODUCT).forEach { section ->
+                val colour = section.head.tint.colour()
+                stickyHeader(key = "head:${section.head.tint}:${section.head.title}") {
+                    Column(Modifier.fillMaxWidth().background(Palette.panel)) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Mono(section.head.title, colour, 11, bold = true)
+                            Mono("${section.commands.size}", Palette.dim, 11)
+                        }
+                        Hairline()
                     }
-                    Mono(c.source.word(), Palette.dim, 11)
+                }
+                items(section.commands, key = { it.name }) { c ->
+                    Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).clickable { run(c) }.padding(horizontal = Pad, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Mono((if (c.kind == CommandKind.Screen) "↗ " else "") + c.name, if (c.kind == CommandKind.Screen) Palette.dim else colour, 13, bold = true)
+                            c.description?.let { Mono(it, Palette.dim, 12, lines = 2) }
+                        }
+                    }
                 }
             }
         }

@@ -101,6 +101,7 @@ It stops only the daemon it started, by its recorded pid.
 | `edit` | an `Edit` asks with a diff and the tool item keeps it | 379, 384, 556 |
 | `agent` | a `Task` subagent is a card | 429, 430 |
 | `queue` | a message sent during a turn waits in the queue and is answered after it | 382 |
+| `commands` | a skill of the folder's `.claude/skills` is listed as the project's and its description has no mark (the engine's marks of origin, N172a) | 792, 793 |
 | `survey` | what the 17 commands that jwn sends as typed answer (not a pass or fail) | 420 |
 
 ### 2.2 Result of the first run (2026-10-19, claude 2.1.303, haiku)
