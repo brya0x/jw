@@ -223,8 +223,24 @@ pub fn close_pane(shared: &Shared, pane: &Id) -> Done {
         .iter_mut()
         .find(|w| w.panes.iter().any(|p| p.id == *pane))
         .ok_or_else(|| no_pane(pane))?;
+    // A chat keeps the id of the conversation of the panel that goes, so that it can be resumed
+    // (REQ-798); with its last panel gone it is archived, or discarded when nothing was said.
+    let session = ws
+        .panes
+        .iter()
+        .find(|p| p.id == *pane)
+        .and_then(|p| p.resume.as_ref()?.get(2).cloned());
+    if let (Some(chat), Some(id)) = (ws.chat.as_mut(), session) {
+        chat.session = Some(id);
+    }
     ws.panes.retain(|p| p.id != *pane);
+    let last_of_a_chat = ws.chat.is_some() && ws.panes.is_empty();
+    let workspace = ws.id.clone();
     core.refresh();
+    drop(core);
+    if last_of_a_chat {
+        crate::chats::archive(shared, &workspace)?;
+    }
     Ok(None)
 }
 

@@ -376,6 +376,12 @@ enum Cursor {
     Workspace(usize),
 }
 
+/// How long the client waits for a conversation of its own to open its panel's conversation: the
+/// agent starts a moment after the panel and the conversation a moment after that, as the
+/// binary's `chat new` waits for them (REQ-806). A summary exists only in the reply to `P`, so
+/// it is not given up on early.
+const CHAT_WAIT_MS: u64 = 50_000;
+
 /// What the client waits for after it made, resumed or took a summary to a conversation of its
 /// own: the panel (`pane`, else the workspace's first) to have its conversation, and then the
 /// cursor in the field (REQ-806). Typing starts only then: before, the panel is a terminal that
@@ -2689,7 +2695,7 @@ impl View {
             workspace: workspace.to_owned(),
             pane,
             draft: draft.filter(|d| !d.is_empty()),
-            until: self.now_ms + 8_000,
+            until: self.now_ms + CHAT_WAIT_MS,
         });
     }
 
@@ -4779,12 +4785,17 @@ impl View {
                 all.into_iter().nth(y - 2 + top)
             });
         match row {
-            Some(side::Side::Workspace(i)) => {
+            Some(side::Side::Workspace(i) | side::Side::Chat(i)) => {
                 let same = self.selected == i && self.on_group.is_none();
                 self.set_cursor(Cursor::Workspace(i));
                 if let Some(id) = self.selected_id() {
                     self.open(&id, if same { self.focus } else { 0 });
                 }
+                return After::Continue;
+            }
+            // The line of the archived chats opens their list, as `A` does (REQ-808).
+            Some(side::Side::Archived(_)) => {
+                self.ask_archived();
                 return After::Continue;
             }
             // A click on a group's row folds or unfolds it, with the cursor on it (REQ-694).
@@ -15481,7 +15492,12 @@ mod tests {
         for cols in [120, 60] {
             let mut v = chats_view();
             v.set_size(cols, 30);
-            let rows = sidebar_rows(&v, 30);
+            // the sidebar's columns of each row of the screen, as wide as the screen is
+            let rows: Vec<String> = v
+                .plain(cols, 30)
+                .lines()
+                .map(|l| l.chars().take(SIDEBAR - 1).collect::<String>())
+                .collect();
             let at = |what: &str| {
                 rows.iter()
                     .position(|r| r.contains(what))
@@ -15697,6 +15713,28 @@ mod tests {
         assert!(v.flash.starts_with("nada que llevar"), "{}", v.flash);
     }
 
+    /// A click on a chat's row selects it as a click on a workspace does, and one on the line of
+    /// the archived opens their list.
+    #[test]
+    fn a_click_on_a_chat_row_selects_it_and_one_on_the_archived_line_opens_the_list() {
+        let mut v = chats_view();
+        let rows: Vec<String> = v
+            .plain(120, 30)
+            .lines()
+            .map(|l| l.chars().take(SIDEBAR - 1).collect::<String>())
+            .collect();
+        let at = |what: &str| rows.iter().position(|r| r.contains(what)).unwrap();
+        v.click(5, at("✦"), 120, 30);
+        assert_eq!(v.selected_id().as_deref(), Some(CHAT));
+        assert_eq!(v.opened.as_deref(), Some(CHAT));
+        v.click(5, at("archivadas"), 120, 30);
+        assert!(
+            matches!(v.manage, Some(Manage::Archived { .. })),
+            "{:?}",
+            v.manage
+        );
+    }
+
     /// The cursor goes into the field only once the panel has its conversation (before, the panel
     /// is a terminal that runs `claude` and would take the first keys), and a summary is put in
     /// the field and not sent; one that does not arrive is said, not copied.
@@ -15713,7 +15751,7 @@ mod tests {
         assert!(v.chat_wait.is_some());
         assert_eq!(v.typing_pane(), None);
         // it never arrives: said, and nothing is copied
-        v.now_ms += 9_000;
+        v.now_ms += CHAT_WAIT_MS + 1_000;
         v.follow_chat();
         assert!(v.chat_wait.is_none());
         assert!(v.flash.contains("el resumen no llegó"), "{}", v.flash);

@@ -691,3 +691,44 @@ fn a_turn_with_no_text_does_not_bring_back_an_older_reply_as_the_last_line() {
     std::thread::sleep(Duration::from_millis(400));
     assert_eq!(r.summary(&id).unwrap()["chat"]["last"], "push");
 }
+
+#[test]
+fn closing_the_last_panel_of_a_chat_archives_it_with_its_session_and_an_empty_one_goes() {
+    let mut r = rig();
+    let id = r.new_chat();
+    let node = r.conversation(&id);
+    r.say(&node, "hola");
+    r.until_summary("the reply", &id, |w| w["chat"]["last"] == "Voy a mirar.");
+    let dir = r.chats_dir().join(&id);
+    let pane = r.pane_of(&id);
+    r.ok(Cmd::ClosePane { pane });
+    // not a chat without a panel: it is archived, with the id of the conversation it had
+    let w = r.until_summary("archived", &id, |w| w["chat"]["archived"] == true);
+    assert_eq!(w["pane_count"], 0);
+    assert!(dir.is_dir());
+    let saved = r.saved();
+    let session = saved["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == id.as_str())
+        .and_then(|w| w["chat"]["session"].as_str().map(str::to_owned))
+        .expect("the session id was kept");
+    r.ok(Cmd::ResumeChat {
+        workspace: id.clone(),
+    });
+    r.log_has("an engine on the session", |l| {
+        l.contains("--resume") && l.contains(&session)
+    });
+    // a chat that said nothing goes with its last panel
+    let empty = r.new_chat();
+    let dir = r.chats_dir().join(&empty);
+    let pane = r.pane_of(&empty);
+    r.ok(Cmd::ClosePane { pane });
+    let end = Instant::now() + WAIT;
+    while r.summary(&empty).is_some() {
+        assert!(Instant::now() < end, "the empty chat is still listed");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert!(!exists(&dir));
+}
