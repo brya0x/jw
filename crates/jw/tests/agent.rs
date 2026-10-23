@@ -616,3 +616,186 @@ fn worktree_says_on_its_error_output_what_it_copied_and_what_it_did_not_and_prin
     );
     w.stop();
 }
+
+// ---- N171b: `jw artifact` (REQ-771 to REQ-773)
+
+impl World {
+    fn spawn(&self, pane: &str, args: &[&str]) -> std::process::Child {
+        let mut c = self.env.jw();
+        c.args(args)
+            .env(identity::env_var("PANE_ID"), pane)
+            .current_dir(&self.repo)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        c.spawn().unwrap()
+    }
+
+    fn hash_of(&self, id: &str) -> String {
+        self.env
+            .cmd(&format!(r#"{{"cmd":"artifact_read","id":"{id}"}}"#))["result"]["hash"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn decide(&self, id: &str, n: u32, verdict: &str, text: Option<&str>) {
+        let hash = self.hash_of(id);
+        let text = text.map_or(String::new(), |t| format!(r#","text":"{t}""#));
+        let reply = self.env.cmd(&format!(
+            r#"{{"cmd":"artifact_decide","id":"{id}","n":{n},"hash":"{hash}","type":"{verdict}"{text}}}"#
+        ));
+        assert_eq!(reply["ok"], true, "{reply}");
+    }
+
+    fn write(&self, name: &str, text: &str) -> String {
+        let p = self.repo.join(name);
+        std::fs::write(&p, text).unwrap();
+        name.to_owned()
+    }
+}
+
+fn published(out: &str) -> (String, String) {
+    let words: Vec<&str> = out.split_whitespace().collect();
+    assert_eq!(words.len(), 3, "{out}");
+    (words[0].to_owned(), words[1].to_owned())
+}
+
+#[test]
+fn artifact_publishes_lists_and_removes_and_bad_uses_exit_2() {
+    let w = World::new("ag-art");
+    let (_, pane) = w.open_repo();
+    let p = Some(pane.as_str());
+    let page = w.write(
+        "Ajustes.html",
+        "<title>\n Ajustes de  prueba </title><p>hola",
+    );
+    let out = w.ok(p, &["artifact", "publish", &page]);
+    let (id, v) = published(&out);
+    assert_eq!(v, "v1");
+    // The same bytes are the same version; other bytes the next.
+    assert_eq!(w.ok(p, &["artifact", "publish", &page]), out);
+    let spec = w.write("n171.md", "# La spec\n\ntexto");
+    w.ok(
+        p,
+        &[
+            "artifact", "publish", &spec, "--name", "plan", "--kind", "spec",
+        ],
+    );
+    assert_eq!(
+        w.ok(p, &["artifact", "ls"]),
+        format!("app\t{id}\tajustes\tdocument\tv1\tpending\tAjustes de prueba\n")
+            + &format!(
+                "app\t{}\tplan\tspec\tv1\tpending\tLa spec\n",
+                w.json(&["artifact", "ls", "--json"])[1]["id"]
+                    .as_str()
+                    .unwrap()
+            )
+    );
+    let rows = w.json(&["artifact", "ls", "app", "--json"]);
+    assert_eq!(rows[0]["title"], "Ajustes de prueba");
+    assert_eq!(
+        (rows[0]["status"].as_str(), rows[0]["format"].as_str()),
+        (Some("pending"), Some("html"))
+    );
+    assert!(
+        w.fails(None, &["artifact", "ls", "nowhere"], 1)
+            .contains("nowhere")
+    );
+    // What it is not given right.
+    let text = w.write("a.txt", "x");
+    assert!(
+        w.fails(p, &["artifact", "publish", &text], 2)
+            .contains(".html")
+    );
+    assert!(
+        w.fails(p, &["artifact", "publish", &page, "--kind", "weird"], 2)
+            .contains("--kind")
+    );
+    assert!(
+        w.fails(p, &["artifact", "publish", &page, "--timeout", "5"], 2)
+            .contains("--wait")
+    );
+    w.fails(p, &["artifact"], 2);
+    w.fails(p, &["artifact", "nonsense"], 2);
+    assert!(
+        w.fails(None, &["artifact", "publish", &page], 1)
+            .contains("pane")
+    );
+    let big = w.write("big.html", &"x".repeat(512 * 1024 + 1));
+    assert!(
+        w.fails(p, &["artifact", "publish", &big], 1)
+            .contains("524288")
+    );
+    // Removed, then gone.
+    w.ok(p, &["artifact", "rm", &id]);
+    assert!(!w.ok(p, &["artifact", "ls"]).contains(&id));
+    w.fails(p, &["artifact", "rm", &id], 1);
+    w.stop();
+}
+
+#[test]
+fn artifact_wait_returns_the_verdict_exit_0_for_approved_and_4_with_the_text_for_changes() {
+    let w = World::new("ag-artw");
+    let (_, pane) = w.open_repo();
+    let p = Some(pane.as_str());
+    let page = w.write("a.html", "<p>uno");
+    let (id, _) = published(&w.ok(p, &["artifact", "publish", &page]));
+    // An approval.
+    let waiting = w.spawn(&pane, &["artifact", "wait", &id]);
+    w.decide(&id, 1, "approved", None);
+    let out = waiting.wait_with_output().unwrap();
+    assert_eq!(
+        (
+            out.status.code(),
+            String::from_utf8(out.stdout).unwrap().as_str()
+        ),
+        (Some(0), "approved\n")
+    );
+    // A new version asks for changes: exit 4, and what to change.
+    std::fs::write(w.repo.join("a.html"), "<p>dos").unwrap();
+    w.ok(p, &["artifact", "publish", &page]);
+    let waiting = w.spawn(&pane, &["artifact", "wait", &id]);
+    w.decide(&id, 2, "changes", Some("más grande"));
+    let out = waiting.wait_with_output().unwrap();
+    assert_eq!(
+        (
+            out.status.code(),
+            String::from_utf8(out.stdout).unwrap().as_str()
+        ),
+        (Some(4), "changes\nmás grande\n")
+    );
+    // A verdict that is already there is answered at once; a version with none times out.
+    let again = w.run(p, &["artifact", "wait", &id]);
+    assert_eq!(again.status.code(), Some(4));
+    std::fs::write(w.repo.join("a.html"), "<p>tres").unwrap();
+    w.ok(p, &["artifact", "publish", &page]);
+    let late = w.run(p, &["artifact", "wait", &id, "--timeout", "1"]);
+    assert_eq!(late.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&late.stderr).contains("no verdict in 1 s"));
+    w.fails(p, &["artifact", "wait", "nope", "--timeout", "1"], 1);
+    w.stop();
+}
+
+#[test]
+fn artifact_publish_wait_prints_what_it_made_and_then_the_verdict() {
+    let w = World::new("ag-artpw");
+    let (_, pane) = w.open_repo();
+    let page = w.write("a.html", "<p>uno");
+    let waiting = w.spawn(&pane, &["artifact", "publish", &page, "--wait"]);
+    let mut id = String::new();
+    wait_for("the artifact to be published", || {
+        let rows = w.json(&["artifact", "ls", "--json"]);
+        if let Some(r) = rows.as_array().and_then(|r| r.first()) {
+            id = r["id"].as_str().unwrap().to_owned();
+        }
+        !id.is_empty()
+    });
+    w.decide(&id, 1, "approved", None);
+    let out = waiting.wait_with_output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    let (line, verdict) = stdout.split_once('\n').unwrap();
+    assert_eq!(published(line).0, id);
+    assert_eq!(verdict, "approved\n");
+    w.stop();
+}

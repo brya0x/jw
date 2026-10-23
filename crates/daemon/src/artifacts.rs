@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use contract::artifacts::{
     ArtifactDoc, ArtifactFormat, ArtifactItem, ArtifactKind, ArtifactVerdict, ArtifactVersion,
-    Verdict,
+    Delivered, MAX_ARTIFACT_BYTES, Verdict,
 };
 use contract::{AttentionKind, ErrorCode, Id};
 use serde_json::json;
@@ -20,8 +20,6 @@ use crate::core::Core;
 use crate::model::{Own, new_id};
 use crate::server::Shared;
 
-/// The most an artifact may weigh (REQ-759).
-const MAX_TEXT: usize = 512 * 1024;
 /// The versions of an artifact that are kept; the oldest go (REQ-762).
 const MAX_VERSIONS: usize = 20;
 /// The longest name, in characters, and the longest note of a «changes» verdict, in bytes.
@@ -242,10 +240,13 @@ fn root_of(core: &Core) -> Result<PathBuf, crate::commands::ErrorBody> {
 
 /// `artifact_publish` (REQ-759 to REQ-762).
 pub fn publish(shared: &Shared, p: Publish) -> Done {
-    if p.text.len() > MAX_TEXT {
+    if p.text.len() > MAX_ARTIFACT_BYTES {
         return Err(err(
             ErrorCode::BadRequest,
-            format!("too big: {} bytes, the most is {MAX_TEXT}", p.text.len()),
+            format!(
+                "too big: {} bytes, the most is {MAX_ARTIFACT_BYTES}",
+                p.text.len()
+            ),
         ));
     }
     let name = p.name.trim();
@@ -408,7 +409,46 @@ pub fn read(shared: &Shared, id: &str, n: Option<u32>) -> Done {
     Ok(Some(value))
 }
 
-/// `artifact_decide` (REQ-767, REQ-768). The verdict is kept; telling the agent is N171b's.
+/// What the agent is told of a verdict: one line that names the version, and the person's words
+/// after it (REQ-769). The title is one line whatever it was.
+fn verdict_message(
+    title: &str,
+    n: u32,
+    hash: &str,
+    verdict: Verdict,
+    note: Option<&str>,
+) -> String {
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let head = format!(
+        "[jw] artefacto «{title}» v{n} ({})",
+        &hash[..hash.len().min(6)]
+    );
+    match (verdict, note) {
+        (Verdict::Changes, Some(note)) => {
+            format!("{head}: CAMBIOS pedidos desde el teléfono:\n{note}")
+        }
+        (Verdict::Changes, None) => format!("{head}: CAMBIOS pedidos desde el teléfono."),
+        (Verdict::Approved, _) => format!("{head}: APROBADO desde el teléfono."),
+    }
+}
+
+/// Tell the conversation of the pane that published, as `jw prompt` does and privately (not kept
+/// in the history of ↑, which `sent::record` is for): only a pane that runs a conversation is
+/// told, since text pasted into a plain pane is typed into whatever runs there (RISK-112). The
+/// lock is not held: `engine::send` takes it.
+fn deliver(shared: &Shared, publisher: Option<&str>, text: &str) -> Delivered {
+    let Some(node) = publisher.and_then(|pane| shared.lock().convs.get(pane).map(|c| c.id.clone()))
+    else {
+        return Delivered::Nobody;
+    };
+    match crate::engine::send(shared, &node, text, Vec::new()) {
+        Ok(_) => Delivered::Agent,
+        Err(_) => Delivered::Nobody,
+    }
+}
+
+/// `artifact_decide` (REQ-767 to REQ-770): the verdict is kept, then the agent is told, then it
+/// is kept whether it was.
 pub fn decide(
     shared: &Shared,
     id: &str,
@@ -417,63 +457,91 @@ pub fn decide(
     verdict: Verdict,
     text: Option<String>,
 ) -> Done {
-    let mut core = shared.lock();
-    let root = root_of(&core)?;
-    let (ws, item) = core
-        .find_artifact(id)
-        .map(|(ws, i)| (ws.clone(), i.clone()))
-        .ok_or_else(|| err(ErrorCode::NotFound, format!("no artifact {id}")))?;
-    let last = item
-        .versions
-        .last()
-        .ok_or_else(|| err(ErrorCode::NotFound, "no versions"))?;
-    if last.n != n || last.hash != hash {
-        return Err(err(
-            ErrorCode::Conflict,
-            format!("stale: {} is at version {} now", item.name, last.n),
-        ));
-    }
-    if last.verdict.is_some() {
-        return Err(err(
-            ErrorCode::Conflict,
-            "decided: that version already has a verdict",
-        ));
-    }
-    let note = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
-    match (verdict, &note) {
-        (Verdict::Changes, None) => {
-            return Err(err(ErrorCode::BadRequest, "empty: say what to change"));
-        }
-        (Verdict::Changes, Some(t)) if t.len() > MAX_NOTE => {
+    let (ws, item, note) = {
+        let mut core = shared.lock();
+        let root = root_of(&core)?;
+        let (ws, item) = core
+            .find_artifact(id)
+            .map(|(ws, i)| (ws.clone(), i.clone()))
+            .ok_or_else(|| err(ErrorCode::NotFound, format!("no artifact {id}")))?;
+        let last = item
+            .versions
+            .last()
+            .ok_or_else(|| err(ErrorCode::NotFound, "no versions"))?;
+        if last.n != n || last.hash != hash {
             return Err(err(
-                ErrorCode::BadRequest,
-                format!("too long: the most is {MAX_NOTE} bytes"),
+                ErrorCode::Conflict,
+                format!("stale: {} is at version {} now", item.name, last.n),
             ));
         }
-        (Verdict::Approved, Some(_)) => {
-            return Err(err(ErrorCode::BadRequest, "an approval takes no text"));
+        if last.verdict.is_some() {
+            return Err(err(
+                ErrorCode::Conflict,
+                "decided: that version already has a verdict",
+            ));
         }
-        _ => {}
+        let note = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+        match (verdict, &note) {
+            (Verdict::Changes, None) => {
+                return Err(err(ErrorCode::BadRequest, "empty: say what to change"));
+            }
+            (Verdict::Changes, Some(t)) if t.len() > MAX_NOTE => {
+                return Err(err(
+                    ErrorCode::BadRequest,
+                    format!("too long: the most is {MAX_NOTE} bytes"),
+                ));
+            }
+            (Verdict::Approved, Some(_)) => {
+                return Err(err(ErrorCode::BadRequest, "an approval takes no text"));
+            }
+            _ => {}
+        }
+        let mut item = item;
+        if let Some(v) = item.versions.last_mut() {
+            v.verdict = Some(ArtifactVerdict {
+                verdict,
+                text: note.clone(),
+                at: now(),
+                delivered: None,
+            });
+        }
+        save_meta(&root, &ws, &item).map_err(|e| io_failed("cannot keep the verdict", &e))?;
+        if let Some(slot) = core
+            .artifact_items
+            .get_mut(&ws)
+            .and_then(|items| items.iter_mut().find(|i| i.id == item.id))
+        {
+            slot.clone_from(&item);
+        }
+        core.sync_artifact_attention(&ws);
+        (ws, item, note)
+    };
+    let publisher = item.versions.last().and_then(|v| v.publisher.clone());
+    let message = verdict_message(&item.title, n, hash, verdict, note.as_deref());
+    let delivered = deliver(shared, publisher.as_deref(), &message);
+    // The artifact may have been removed meanwhile: then there is nothing to mark.
+    let mut core = shared.lock();
+    if let Some(root) = core.artifacts_dir.clone() {
+        let marked = core
+            .artifact_items
+            .get_mut(&ws)
+            .and_then(|items| items.iter_mut().find(|i| i.id == item.id))
+            .and_then(|i| i.versions.iter_mut().find(|v| v.n == n))
+            .and_then(|v| v.verdict.as_mut())
+            .map(|v| v.delivered = Some(delivered))
+            .is_some();
+        if marked {
+            if let Some(item) = core
+                .artifact_items
+                .get(&ws)
+                .and_then(|items| items.iter().find(|i| i.id == item.id))
+            {
+                let _ = save_meta(&root, &ws, item);
+            }
+            core.sync_artifact_attention(&ws);
+        }
     }
-    let mut item = item;
-    if let Some(v) = item.versions.last_mut() {
-        v.verdict = Some(ArtifactVerdict {
-            verdict,
-            text: note,
-            at: now(),
-            delivered: None,
-        });
-    }
-    save_meta(&root, &ws, &item).map_err(|e| io_failed("cannot keep the verdict", &e))?;
-    if let Some(slot) = core
-        .artifact_items
-        .get_mut(&ws)
-        .and_then(|items| items.iter_mut().find(|i| i.id == item.id))
-    {
-        *slot = item;
-    }
-    core.sync_artifact_attention(&ws);
-    Ok(Some(json!({})))
+    Ok(Some(json!({ "delivered": delivered })))
 }
 
 /// `artifact_rm` (REQ-763).

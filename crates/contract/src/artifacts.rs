@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::markdown::MarkdownDoc;
 use crate::{Head, Id};
 
+/// The most an artifact may weigh, in bytes: it must fit one message of the phone's link (REQ-759).
+pub const MAX_ARTIFACT_BYTES: usize = 512 * 1024;
+
 /// What the file is for. Only drawn on the list; it changes nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
