@@ -54,6 +54,23 @@ fn place<'a>(layout: &'a Layout, (x, y, w, h): Rect, out: &mut HashMap<&'a str, 
     }
 }
 
+/// Is `pane` the first side (`a`: left or upper) of the nearest split of `dir` around it, the one
+/// `grow_pane` moves (REQ-295)? `None` when there is no split of that direction around it.
+pub fn first_side(layout: &Layout, pane: &str, dir: SplitDir) -> Option<bool> {
+    fn holds(l: &Layout, pane: &str) -> bool {
+        match l {
+            Layout::Pane { pane: p } => p == pane,
+            Layout::Split { a, b, .. } => holds(a, pane) || holds(b, pane),
+        }
+    }
+    let Layout::Split { dir: d, a, b, .. } = layout else {
+        return None;
+    };
+    let in_a = holds(a, pane);
+    first_side(if in_a { a } else { b }, pane, dir)
+        .or((*d == dir && (in_a || holds(b, pane))).then_some(in_a))
+}
+
 /// The panel next to `pane` on `side`: of those that touch its side and overlap it across, the
 /// nearest, and among equals the one whose middle is closest.
 pub fn neighbour<'a>(rects: &HashMap<&'a str, Rect>, pane: &str, side: Side) -> Option<&'a str> {
@@ -116,6 +133,39 @@ mod tests {
             pane("a"),
             split(SplitDir::Col, 500, pane("b"), pane("c")),
         )
+    }
+
+    #[test]
+    fn first_side_is_the_side_in_the_nearest_split_of_that_direction() {
+        // `a` | (`b` over `c`), and `c` in a row split of its own inside `b`'s column.
+        let tree = split(
+            SplitDir::Row,
+            500,
+            pane("a"),
+            split(
+                SplitDir::Col,
+                500,
+                pane("b"),
+                split(SplitDir::Row, 500, pane("c"), pane("d")),
+            ),
+        );
+        let at = |p, d| first_side(&tree, p, d);
+        assert_eq!(at("a", SplitDir::Row), Some(true));
+        assert_eq!(at("a", SplitDir::Col), None);
+        assert_eq!(
+            at("b", SplitDir::Row),
+            Some(false),
+            "the outer one, b has none inside"
+        );
+        assert_eq!(at("b", SplitDir::Col), Some(true));
+        assert_eq!(
+            at("c", SplitDir::Row),
+            Some(true),
+            "the inner one, not the outer"
+        );
+        assert_eq!(at("d", SplitDir::Row), Some(false));
+        assert_eq!(at("d", SplitDir::Col), Some(false));
+        assert_eq!(at("zz", SplitDir::Row), None);
     }
 
     #[test]
