@@ -914,17 +914,10 @@ mod tests {
         (input(&line, 2), vec![fold])
     }
 
-    fn lines(n: usize) -> String {
-        (1..=n)
-            .map(|i| format!("línea {i}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     /// REQ-711: a label is drawn with its width and never split between two rows.
     #[test]
     fn a_label_is_one_piece_and_goes_to_the_next_row_when_it_does_not_fit() {
-        let (i, folds) = folded(&lines(9));
+        let (i, folds) = folded(&paste::sample_rows(9));
         let f = Field::selecting(&i, None, &[], 100, Window::FOLLOW, &folds);
         assert_eq!(f.rows, vec!["ab[Texto pegado #1 +9 líneas «línea 1»]cd"]);
         // in a row of 28 cells the label loses its beginning and goes to a row of its own
@@ -952,7 +945,7 @@ mod tests {
     /// REQ-711, RISK-88: the rows `row_starts` counts are those that are drawn, folds among them.
     #[test]
     fn the_rows_with_folds_are_the_rows_that_are_drawn() {
-        let (i, folds) = folded(&lines(9));
+        let (i, folds) = folded(&paste::sample_rows(9));
         let chars: Vec<char> = i.text.chars().collect();
         for iw in [10, 20, 30, 38, 60, 100] {
             let width = text_width(iw);
@@ -983,7 +976,7 @@ mod tests {
     /// REQ-710: a click on any cell of a label is on the fold, before it and never inside.
     #[test]
     fn a_click_on_a_label_is_on_the_fold_and_the_cursor_covers_it() {
-        let (i, folds) = folded(&lines(9));
+        let (i, folds) = folded(&paste::sample_rows(9));
         let f = Field::selecting(&i, None, &[], 100, Window::FOLLOW, &folds);
         assert_eq!(f.index_at(0, 0), Some(0));
         let label = "[Texto pegado #1 +9 líneas «línea 1»]".chars().count();

@@ -138,6 +138,15 @@ impl Fold {
     }
 }
 
+/// `n` rows of text, for the tests of this module, the field and the composer.
+#[cfg(test)]
+pub fn sample_rows(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("línea {i}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,17 +155,10 @@ mod tests {
         Fold::new(n, body.to_owned())
     }
 
-    fn lines(n: usize) -> String {
-        (1..=n)
-            .map(|i| format!("línea {i}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     #[test]
     fn a_paste_folds_from_five_rows_or_three_hundred_characters() {
-        assert!(!folds(&lines(4)));
-        assert!(folds(&lines(5)));
+        assert!(!folds(&sample_rows(4)));
+        assert!(folds(&sample_rows(5)));
         assert!(!folds(&"x".repeat(299)));
         assert!(folds(&"x".repeat(300)));
         assert!(
@@ -167,14 +169,14 @@ mod tests {
 
     #[test]
     fn a_final_line_break_does_not_begin_a_row() {
-        assert!(!folds(&format!("{}\n", lines(4))));
-        assert!(folds(&format!("{}\n", lines(5))));
+        assert!(!folds(&format!("{}\n", sample_rows(4))));
+        assert!(folds(&format!("{}\n", sample_rows(5))));
     }
 
     #[test]
     fn the_label_says_the_rows_or_the_characters_and_the_beginning() {
         assert_eq!(
-            fold(1, &lines(12)).label(80),
+            fold(1, &sample_rows(12)).label(80),
             "[Texto pegado #1 +12 líneas «línea 1»]"
         );
         assert_eq!(
@@ -190,7 +192,7 @@ mod tests {
 
     #[test]
     fn a_label_that_does_not_fit_loses_its_beginning_then_its_size_then_its_end() {
-        let f = fold(3, &lines(12));
+        let f = fold(3, &sample_rows(12));
         assert_eq!(f.label(30), "[Texto pegado #3 +12 líneas]");
         assert_eq!(f.label(20), "[Texto pegado #3]");
         assert_eq!(f.label(10), "[Texto p…]");

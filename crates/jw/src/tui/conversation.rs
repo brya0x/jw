@@ -316,15 +316,7 @@ pub struct Composer {
 impl Composer {
     /// What the line says: a fold is the text that was pasted (REQ-712).
     pub fn text(&self) -> String {
-        self.chars
-            .iter()
-            .map(
-                |&c| match paste::index_of(c).and_then(|k| self.folds.get(k)) {
-                    Some(f) => f.body.clone(),
-                    None => c.to_string(),
-                },
-            )
-            .collect()
+        self.sendable().0
     }
 
     /// The text of the line and the characters of it that each fold covers, in order (REQ-712).
@@ -352,25 +344,24 @@ impl Composer {
     pub fn set_folded(&mut self, sent: &paste::Sent, start: bool) {
         self.set("");
         let text: Vec<char> = sent.text.chars().collect();
+        let piece = |from: usize, to: usize| text[from..to].iter().collect::<String>();
         let mut at = 0;
         for &(from, to) in &sent.folds {
-            let Some(body) = text.get(from..to).filter(|_| from >= at) else {
+            if text.get(from..to).is_none() || from < at {
                 continue;
-            };
+            }
             let Some(c) = paste::char_of(self.folds.len()) else {
                 break;
             };
-            self.insert(&text[at..from].iter().collect::<String>());
+            self.insert(&piece(at, from));
             self.made += 1;
-            self.folds.push(Fold::new(
-                self.made,
-                paste::clean(&body.iter().collect::<String>()),
-            ));
+            self.folds
+                .push(Fold::new(self.made, paste::clean(&piece(from, to))));
             self.chars.push(c);
             self.cursor = self.chars.len();
             at = to;
         }
-        self.insert(&text[at..].iter().collect::<String>());
+        self.insert(&piece(at, text.len()));
         if start {
             self.cursor = 0;
         }
@@ -742,17 +733,18 @@ pub struct Ui {
     images: Vec<(u32, Image)>,
     /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
     pasted: u32,
-    /// The messages sent, oldest first, for ↑ (REQ-714); the message recalled and the draft that was
-    /// being written when the first one was.
+    /// The messages sent, oldest first, for ↑ and ^R (REQ-714, REQ-717).
     sent: Vec<paste::Sent>,
-    /// The daemon was asked for the messages of the repository and has not answered: what is
-    /// sent meanwhile, to go after them; and the answer that came while one was recalled.
+    /// The daemon was asked for the messages of the repository (`sent_asked`) and has not answered
+    /// (`asking`): what is sent meanwhile (`since`) goes after them, and an answer that comes while
+    /// a message is recalled or the list is open waits (`pending`).
     asking: bool,
     sent_asked: bool,
     since: Vec<paste::Sent>,
     pending: Option<Vec<paste::Sent>>,
+    /// The message of `sent` that is in the line, and the draft that was being written when the
+    /// first one was put there, with the pictures it had: they are not the message that is shown.
     recalling: Option<usize>,
-    /// With the draft, the pictures it had: they are not the message that is shown.
     draft: Option<(Composer, Vec<(u32, Image)>)>,
     /// The files that hold what follows the `@` the line ends with, for which fragment, the
     /// one lit, the fragment last asked for and the one the person closed the list on.
@@ -1339,9 +1331,8 @@ impl Ui {
             Item::User { text, images } => {
                 let mut rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
                 // A long message shows its first rows and says how many it leaves out (REQ-713).
-                let left = rows.len().saturating_sub(USER_SHOWN);
                 let left = if rows.len() > USER_FOLDS_PAST {
-                    left
+                    rows.len() - USER_SHOWN
                 } else {
                     0
                 };
@@ -5577,21 +5568,14 @@ mod tests {
         assert_eq!(ui.scroll, 0);
     }
 
-    fn pasted_lines(n: usize) -> String {
-        (1..=n)
-            .map(|i| format!("línea {i}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     /// REQ-709: a paste of five rows is one fold in the line and the text is what is sent.
     #[test]
     fn a_long_paste_is_one_label_in_the_line_and_the_whole_text_in_the_message() {
         let conv = idle();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "mira ");
-        ui.paste(&pasted_lines(12));
-        assert_eq!(ui.editor.text(), format!("mira {}", pasted_lines(12)));
+        ui.paste(&paste::sample_rows(12));
+        assert_eq!(ui.editor.text(), format!("mira {}", paste::sample_rows(12)));
         assert_eq!(
             ui.editor.raw().chars().count(),
             6,
@@ -5600,7 +5584,9 @@ mod tests {
         let (_, rows) = frame(&ui, &conv);
         row_of(&rows, "mira [Texto pegado #1 +12 líneas «línea 1»]");
         match press(&mut ui, &conv, KeyCode::Enter) {
-            Some(Act::Send { text, .. }) => assert_eq!(text, format!("mira {}", pasted_lines(12))),
+            Some(Act::Send { text, .. }) => {
+                assert_eq!(text, format!("mira {}", paste::sample_rows(12)))
+            }
             other => panic!("{other:?}"),
         }
         assert_eq!(ui.editor.raw(), "");
@@ -5613,8 +5599,8 @@ mod tests {
         ui.paste("git status\ngit diff --stat");
         assert_eq!(ui.editor.raw(), "git status\ngit diff --stat");
         ui.editor.take();
-        ui.paste(&pasted_lines(4));
-        assert_eq!(ui.editor.raw(), pasted_lines(4), "four rows");
+        ui.paste(&paste::sample_rows(4));
+        assert_eq!(ui.editor.raw(), paste::sample_rows(4), "four rows");
         ui.editor.take();
         ui.paste(&"y".repeat(700));
         assert_eq!(ui.editor.raw().chars().count(), 1);
@@ -5633,7 +5619,7 @@ mod tests {
         let conv = idle();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "a");
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         type_in(&mut ui, &conv, "b");
         press(&mut ui, &conv, KeyCode::Left);
         press(&mut ui, &conv, KeyCode::Left);
@@ -5643,7 +5629,7 @@ mod tests {
         press(&mut ui, &conv, KeyCode::Backspace);
         assert_eq!(ui.editor.text(), "ab", "backspace takes it whole");
         ui.editor.take();
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         press(&mut ui, &conv, KeyCode::Left);
         press(&mut ui, &conv, KeyCode::Delete);
         assert_eq!(ui.editor.text(), "");
@@ -5654,7 +5640,7 @@ mod tests {
     fn tab_turns_a_fold_into_its_text_and_leaves_the_others() {
         let conv = idle();
         let mut ui = Ui::default();
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         type_in(&mut ui, &conv, " ");
         ui.paste(&"z".repeat(400));
         press(&mut ui, &conv, KeyCode::Left);
@@ -5662,13 +5648,13 @@ mod tests {
         press(&mut ui, &conv, KeyCode::Left);
         assert_eq!(ui.editor.cursor(), 0);
         assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
-        assert_eq!(ui.editor.cursor(), pasted_lines(6).chars().count());
+        assert_eq!(ui.editor.cursor(), paste::sample_rows(6).chars().count());
         let (_, rows) = frame(&ui, &conv);
         row_of(&rows, "línea 6");
         row_of(&rows, "[Texto pegado #2 400 caracteres");
         assert_eq!(
             ui.editor.text(),
-            format!("{} {}", pasted_lines(6), "z".repeat(400))
+            format!("{} {}", paste::sample_rows(6), "z".repeat(400))
         );
     }
 
@@ -5677,9 +5663,9 @@ mod tests {
     fn the_folds_of_a_message_are_numbered_from_one() {
         let conv = idle();
         let mut ui = Ui::default();
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         type_in(&mut ui, &conv, " ");
-        ui.paste(&pasted_lines(7));
+        ui.paste(&paste::sample_rows(7));
         let (_, rows) = frame(&ui, &conv);
         row_of(
             &rows,
@@ -5689,7 +5675,7 @@ mod tests {
             press(&mut ui, &conv, KeyCode::Enter),
             Some(Act::Send { .. })
         ));
-        ui.paste(&pasted_lines(8));
+        ui.paste(&paste::sample_rows(8));
         let (_, rows) = frame(&ui, &conv);
         row_of(&rows, "[Texto pegado #1 +8 líneas");
     }
@@ -5699,13 +5685,16 @@ mod tests {
     fn a_message_with_two_folds_and_text_between_them_is_sent_whole() {
         let conv = idle();
         let mut ui = Ui::default();
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         type_in(&mut ui, &conv, " y ");
         ui.paste(&"z".repeat(350));
         type_in(&mut ui, &conv, "!");
         match press(&mut ui, &conv, KeyCode::Enter) {
             Some(Act::Send { text, .. }) => {
-                assert_eq!(text, format!("{} y {}!", pasted_lines(6), "z".repeat(350)));
+                assert_eq!(
+                    text,
+                    format!("{} y {}!", paste::sample_rows(6), "z".repeat(350))
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -5718,7 +5707,7 @@ mod tests {
         let conv = idle();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "x ");
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         type_in(&mut ui, &conv, " y");
         let rows = frame(&ui, &conv).1;
         let y = row_of(&rows, "[Texto pegado #1");
@@ -5744,7 +5733,7 @@ mod tests {
         let conv = idle();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "ab");
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         type_in(&mut ui, &conv, "cd");
         ui.key(
             &conv,
@@ -5756,7 +5745,7 @@ mod tests {
         for _ in 0..4 {
             press(&mut ui, &conv, KeyCode::Up);
         }
-        let label = Fold::new(1, pasted_lines(6))
+        let label = Fold::new(1, paste::sample_rows(6))
             .label(ui.row_width())
             .chars()
             .count();
@@ -5782,7 +5771,7 @@ mod tests {
     fn a_long_message_of_the_person_is_drawn_folded_to_three_rows() {
         let mut conv = idle();
         let user = |text: String| Item::User { text, images: 0 };
-        conv.items = vec![user(pasted_lines(12))];
+        conv.items = vec![user(paste::sample_rows(12))];
         let ui = Ui::default();
         let rows = frame(&ui, &conv).1;
         row_of(&rows, "❯ línea 1");
@@ -5793,11 +5782,11 @@ mod tests {
             "{}",
             rows.join("\n")
         );
-        conv.items = vec![user(pasted_lines(5))];
+        conv.items = vec![user(paste::sample_rows(5))];
         let rows = frame(&ui, &conv).1;
         row_of(&rows, "… +2 filas más");
         // four rows are drawn whole: a fold of one would take the room of the row it hides
-        conv.items = vec![user(pasted_lines(4))];
+        conv.items = vec![user(paste::sample_rows(4))];
         let rows = frame(&ui, &conv).1;
         row_of(&rows, "línea 4");
         assert!(!rows.iter().any(|r| r.contains("filas más")));
@@ -5939,11 +5928,14 @@ mod tests {
         let conv = idle();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "mira ");
-        ui.paste(&pasted_lines(7));
+        ui.paste(&paste::sample_rows(7));
         type_in(&mut ui, &conv, " ya");
         press(&mut ui, &conv, KeyCode::Enter);
         press(&mut ui, &conv, KeyCode::Up);
-        assert_eq!(ui.editor.text(), format!("mira {} ya", pasted_lines(7)));
+        assert_eq!(
+            ui.editor.text(),
+            format!("mira {} ya", paste::sample_rows(7))
+        );
         assert_eq!(
             ui.editor.raw().chars().count(),
             9,
@@ -5988,11 +5980,14 @@ mod tests {
     fn a_fold_at_the_edge_of_the_line_loses_the_blanks_the_trim_takes() {
         let conv = idle();
         let mut ui = Ui::default();
-        ui.paste(&format!("\n\n{}\n\n", pasted_lines(6)));
+        ui.paste(&format!("\n\n{}\n\n", paste::sample_rows(6)));
         type_in(&mut ui, &conv, " fin");
         press(&mut ui, &conv, KeyCode::Enter);
         press(&mut ui, &conv, KeyCode::Up);
-        assert_eq!(ui.editor.text(), format!("{}\n\n fin", pasted_lines(6)));
+        assert_eq!(
+            ui.editor.text(),
+            format!("{}\n\n fin", paste::sample_rows(6))
+        );
         assert_eq!(
             ui.editor.raw().chars().count(),
             5,
@@ -6121,7 +6116,7 @@ mod tests {
         for t in ["arregla el login", "corre cargo test", "haz un commit"] {
             send(&mut ui, &conv, t);
         }
-        send(&mut ui, &conv, &pasted_lines(6));
+        send(&mut ui, &conv, &paste::sample_rows(6));
         type_in(&mut ui, &conv, "borrador");
         assert_eq!(ctrl_r(&mut ui, &conv), None);
         let rows = frame(&ui, &conv).1;
@@ -6164,7 +6159,7 @@ mod tests {
     fn esc_closes_the_list_and_a_chosen_message_with_a_fold_comes_back_folded() {
         let conv = idle();
         let mut ui = Ui::default();
-        ui.paste(&pasted_lines(8));
+        ui.paste(&paste::sample_rows(8));
         press(&mut ui, &conv, KeyCode::Enter);
         type_in(&mut ui, &conv, "x");
         ctrl_r(&mut ui, &conv);
@@ -6173,7 +6168,7 @@ mod tests {
         assert_eq!((ui.editor.text(), ui.recalling), ("x".into(), None));
         ctrl_r(&mut ui, &conv);
         press(&mut ui, &conv, KeyCode::Enter);
-        assert_eq!(ui.editor.text(), pasted_lines(8));
+        assert_eq!(ui.editor.text(), paste::sample_rows(8));
         assert_eq!(ui.editor.raw().chars().count(), 1);
         row_of(
             &frame(&ui, &conv).1,
@@ -6219,12 +6214,12 @@ mod tests {
     #[test]
     fn a_character_that_would_pass_for_a_fold_is_written_as_the_replacement_one() {
         let mut ui = Ui::default();
-        ui.paste(&pasted_lines(6));
+        ui.paste(&paste::sample_rows(6));
         ui.paste("a\u{E000}b");
         ui.editor.insert("\u{E001}");
         assert_eq!(
             ui.editor.text(),
-            format!("{}a\u{FFFD}b\u{FFFD}", pasted_lines(6))
+            format!("{}a\u{FFFD}b\u{FFFD}", paste::sample_rows(6))
         );
     }
 
