@@ -446,7 +446,9 @@ enum Kind {
 #[derive(Debug, Clone)]
 struct Questions {
     all: Vec<Q>,
-    answered: Vec<(String, String)>,
+    /// Per question: its text, what the engine is told (the labels and the person's own words joined with
+    /// `, `) and what the tool's line shows (the own words between « »).
+    answered: Vec<(String, String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1225,7 +1227,7 @@ impl State {
         }
         let p = self.pending.take().expect("checked above");
         match p.kind {
-            Kind::Question(_) => return self.answer_question(p, key, by),
+            Kind::Question(_) => return self.answer_question(p, key, text, by),
             Kind::Plan => return Ok(self.answer_plan(&p, key, text, by)),
             Kind::Permission => {}
         }
@@ -1273,31 +1275,50 @@ impl State {
     }
 
     /// The answer to one of the questions Claude asks: the number of the option (several, with commas, for a
-    /// choice of several). The engine is answered when the last one is, with `answers` (REQ-435).
+    /// choice of several), the person's own words in `text`, or both in a choice of several (REQ-750). The
+    /// engine is answered when the last one is, with `answers` (REQ-435).
     fn answer_question(
         &mut self,
         mut p: Pending,
         key: &str,
+        text: Option<&str>,
         by: Option<&str>,
     ) -> Result<Vec<Effect>, String> {
         let Kind::Question(mut qs) = p.kind.clone() else {
             return Err("that is not a question".into());
         };
         let q = &qs.all[qs.answered.len()];
-        let picks: Vec<usize> = key
-            .split(',')
-            .map(|k| k.trim().parse().unwrap_or(usize::MAX))
-            .collect();
-        if picks.iter().any(|i| *i >= q.options.len()) || (!q.multi && picks.len() != 1) {
+        let own = text.map(str::trim).filter(|t| !t.is_empty());
+        let picks: Vec<usize> = if key.trim().is_empty() && own.is_some() {
+            Vec::new()
+        } else {
+            key.split(',')
+                .map(|k| k.trim().parse().unwrap_or(usize::MAX))
+                .collect()
+        };
+        // An option, or the own words; in a choice of one not both, in a choice of several the options with them.
+        let single_with_both = !q.multi && own.is_some() && !picks.is_empty();
+        if picks.iter().any(|i| *i >= q.options.len())
+            || (!q.multi && own.is_none() && picks.len() != 1)
+            || single_with_both
+        {
             self.pending = Some(p);
             return Err(format!("{key} is not one of its answers"));
         }
-        let label = picks
+        let labels: Vec<String> = picks.iter().map(|i| q.options[*i].0.clone()).collect();
+        let told = labels
             .iter()
-            .map(|i| q.options[*i].0.clone())
+            .map(String::as_str)
+            .chain(own)
             .collect::<Vec<_>>()
             .join(", ");
-        qs.answered.push((q.question.clone(), label));
+        let shown = labels
+            .iter()
+            .cloned()
+            .chain(own.map(|t| format!("«{t}»")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        qs.answered.push((q.question.clone(), told, shown));
         if qs.answered.len() < qs.all.len() {
             p.ask = question_ask(&p.request, qs.answered.len(), &qs.all[qs.answered.len()]);
             p.kind = Kind::Question(qs);
@@ -1308,13 +1329,13 @@ impl State {
         input["answers"] = Value::Object(
             qs.answered
                 .iter()
-                .map(|(q, a)| (q.clone(), json!(a)))
+                .map(|(q, told, _)| (q.clone(), json!(told)))
                 .collect(),
         );
         let said = qs
             .answered
             .iter()
-            .map(|(_, a)| a.clone())
+            .map(|(_, _, shown)| shown.clone())
             .collect::<Vec<_>>()
             .join(" · ");
         if let Some(id) = &p.tool_use_id {
