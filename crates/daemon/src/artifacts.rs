@@ -522,6 +522,9 @@ pub fn decide(
     let publisher = item.versions.last().and_then(|v| v.publisher.clone());
     let message = verdict_message(&item.title, n, hash, verdict, note.as_deref());
     let delivered = deliver(shared, publisher.as_deref(), &message);
+    // Saved twice on purpose: the verdict first (above), so it survives a crash before delivery,
+    // then again with `delivered` set. The second save is best effort: a lost mark only shows
+    // the verdict as undelivered.
     // The artifact may have been removed meanwhile: then there is nothing to mark.
     let mut core = shared.lock();
     if let Some(root) = core.artifacts_dir.clone() {

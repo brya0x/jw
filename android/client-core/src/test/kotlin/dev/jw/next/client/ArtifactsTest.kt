@@ -17,7 +17,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** N171d against the shared fixtures: the list, the bar, the page that holds an artifact, and what is seen. */
+/** REQ-776, 778, 779, 781, 782, 783, 784 and 791 against the shared fixtures: the list, the bar, the page that holds an artifact, the copies, and what is seen. */
 class ArtifactsTest {
     private val dir = File(System.getProperty("contract.dir") ?: error("contract.dir is not set"), "fixtures/daemon")
 

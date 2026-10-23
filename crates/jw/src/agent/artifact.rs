@@ -116,16 +116,26 @@ fn publish(args: &[&str]) -> Out {
         text,
         pane: Some(pane),
     })?;
-    let (id, n, hash) = (
-        reply["id"].as_str().unwrap_or_default().to_owned(),
-        reply["n"].as_u64().unwrap_or(0) as u32,
-        reply["hash"].as_str().unwrap_or_default().to_owned(),
-    );
+    let n = version_of(&reply)?;
+    let id = reply["id"]
+        .as_str()
+        .ok_or_else(|| Fail::Error("the daemon's reply has no artifact id".into()))?
+        .to_owned();
+    let hash = reply["hash"].as_str().unwrap_or_default().to_owned();
     println!("{id} v{n} {}", hash.get(..6).unwrap_or(&hash));
     match timeout {
         Some(t) => wait_verdict(&mut s, &ws.id, &id, n, t),
         None => Ok(()),
     }
+}
+
+/// The version number the daemon gave a publish: it must fit a `u32`, else the wait would watch
+/// the wrong version.
+fn version_of(reply: &Value) -> Out<u32> {
+    reply["n"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| Fail::Error("the daemon's reply has no usable version number".into()))
 }
 
 /// The `artifacts` node of a workspace, open and current.
@@ -270,6 +280,13 @@ mod tests {
         );
         assert!(matches!(format_of("a.txt"), Err(Fail::Usage(_))));
         assert!(matches!(format_of("noext"), Err(Fail::Usage(_))));
+    }
+
+    #[test]
+    fn the_version_of_a_publish_must_fit_a_u32() {
+        assert_eq!(version_of(&json!({ "n": 3 })).ok(), Some(3));
+        assert!(version_of(&json!({ "n": 1u64 << 32 })).is_err());
+        assert!(version_of(&json!({})).is_err());
     }
 
     #[test]

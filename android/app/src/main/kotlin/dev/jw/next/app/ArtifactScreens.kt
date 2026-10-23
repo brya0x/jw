@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Color as AndroidColor
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -354,7 +355,7 @@ private fun ArtifactWebView(shell: String) {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
                         WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                    override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail) = true
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail) = true
                 }
                 webChromeClient = object : WebChromeClient() {
                     override fun onPermissionRequest(request: PermissionRequest) = request.deny()
