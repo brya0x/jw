@@ -106,6 +106,20 @@ pub enum Manage {
         current: Option<String>,
         cursor: usize,
     },
+    /// `A`: the archived conversations of their own, the most recent first (REQ-808).
+    Archived {
+        chats: Vec<(String, String)>,
+        cursor: usize,
+    },
+    /// `d` in `Archived`: its folder goes with it; Claude's own transcript stays (REQ-808).
+    DeleteChat { workspace: String, name: String },
+    /// `P` on a conversation: the workspaces to take it to as a new conversation (REQ-809).
+    ChatTo {
+        chat: String,
+        name: String,
+        targets: Vec<(String, String)>,
+        cursor: usize,
+    },
 }
 
 /// The most characters the name of a group has (REQ-686): the box takes no more.
@@ -171,6 +185,12 @@ pub enum Act {
     MoveTo {
         workspace: String,
         to: Dest,
+    },
+    ResumeChat(String),
+    DeleteChat(String),
+    PromoteChat {
+        chat: String,
+        to: String,
     },
 }
 
@@ -294,6 +314,79 @@ impl Manage {
                     None,
                 )
             }
+            Manage::DeleteChat { workspace, .. } if key('y') => {
+                (None, Some(Act::DeleteChat(workspace)))
+            }
+            // `esc` goes back to the list it came from only when it is asked again (`A`).
+            Manage::DeleteChat { .. } if esc || key('n') => (None, None),
+            Manage::Archived { chats, cursor } => {
+                let at = |cursor| {
+                    Some(Manage::Archived {
+                        chats: chats.clone(),
+                        cursor,
+                    })
+                };
+                match code {
+                    KeyCode::Esc | KeyCode::Char('q') => (None, None),
+                    KeyCode::Enter => match chats.get(cursor) {
+                        Some((id, _)) => (None, Some(Act::ResumeChat(id.clone()))),
+                        None => (at(cursor), None),
+                    },
+                    KeyCode::Char('d') => match chats.get(cursor) {
+                        Some((id, name)) => (
+                            Some(Manage::DeleteChat {
+                                workspace: id.clone(),
+                                name: name.clone(),
+                            }),
+                            None,
+                        ),
+                        None => (at(cursor), None),
+                    },
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        (at((cursor + 1).min(chats.len().saturating_sub(1))), None)
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => (at(cursor.saturating_sub(1)), None),
+                    _ => (at(cursor), None),
+                }
+            }
+            Manage::ChatTo {
+                chat,
+                name,
+                targets,
+                cursor,
+            } => {
+                let stay = |cursor| {
+                    Some(Manage::ChatTo {
+                        chat: chat.clone(),
+                        name: name.clone(),
+                        targets: targets.clone(),
+                        cursor,
+                    })
+                };
+                match code {
+                    KeyCode::Esc | KeyCode::Char('q') => (None, None),
+                    KeyCode::Enter => match targets.get(cursor) {
+                        Some((to, _)) => (
+                            None,
+                            Some(Act::PromoteChat {
+                                chat: chat.clone(),
+                                to: to.clone(),
+                            }),
+                        ),
+                        None => (stay(cursor), None),
+                    },
+                    KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < targets.len() => {
+                        let to = targets[c as usize - '1' as usize].0.clone();
+                        (None, Some(Act::PromoteChat { chat, to }))
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => (
+                        stay((cursor + 1).min(targets.len().saturating_sub(1))),
+                        None,
+                    ),
+                    KeyCode::Char('k') | KeyCode::Up => (stay(cursor.saturating_sub(1)), None),
+                    _ => (stay(cursor), None),
+                }
+            }
             Manage::Settings { cursor, shown } => {
                 let here = |cursor| Some(Manage::Settings { cursor, shown });
                 match code {
@@ -403,6 +496,9 @@ impl Manage {
             Manage::GroupName { .. } => "↵ aceptar · esc cancelar",
             Manage::DeleteGroup { .. } => "y borrar el grupo · esc cancelar",
             Manage::MoveTo { .. } => "j/k · ↵ mover · 1…9 un grupo · 0 sin grupo · n nuevo · esc",
+            Manage::Archived { .. } => "j/k · ↵ reanudar · d borrar · esc cerrar",
+            Manage::DeleteChat { .. } => "y borrar la conversación · esc cancelar",
+            Manage::ChatTo { .. } => "j/k · ↵ llevarla · 1…9 un workspace · esc cancelar",
         }
     }
 
@@ -650,6 +746,59 @@ impl Manage {
                 lines.push(row(groups.len() + 1, "n".into(), "grupo nuevo…", false));
                 lines.extend([blank(), dim(self.hint())]);
                 (format!("mover {name}"), look::blue(), lines)
+            }
+            Manage::Archived { chats, cursor } => {
+                let mut lines: Vec<(String, Look)> = chats
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, name))| {
+                        let (marker, look) = if i == *cursor {
+                            ('❯', Look::Accent)
+                        } else {
+                            (' ', Look::Plain)
+                        };
+                        (format!("{marker} ✦ {name}"), look)
+                    })
+                    .collect();
+                lines.extend([blank(), dim(self.hint())]);
+                ("conversaciones archivadas".to_owned(), look::blue(), lines)
+            }
+            Manage::DeleteChat { name, .. } => (
+                format!("Borrar la conversación {name}?"),
+                look::yellow(),
+                vec![
+                    plain("Se borra su carpeta."),
+                    dim("El transcript de Claude queda en ~/.claude/projects/."),
+                    blank(),
+                    dim(self.hint()),
+                ],
+            ),
+            Manage::ChatTo {
+                name,
+                targets,
+                cursor,
+                ..
+            } => {
+                let mut lines: Vec<(String, Look)> = vec![
+                    dim("Una conversación nueva, con un resumen de esta."),
+                    dim("Esta se queda donde está."),
+                    blank(),
+                ];
+                for (i, (_, target)) in targets.iter().enumerate() {
+                    let (marker, look) = if i == *cursor {
+                        ('❯', Look::Accent)
+                    } else {
+                        (' ', Look::Plain)
+                    };
+                    let key = if i < 9 {
+                        (i + 1).to_string()
+                    } else {
+                        " ".to_owned()
+                    };
+                    lines.push((format!("{marker} {key} {target}"), look));
+                }
+                lines.extend([blank(), dim(self.hint())]);
+                (format!("llevar {name} a un proyecto"), look::blue(), lines)
             }
             Manage::Syncing {
                 branch, cancelling, ..
