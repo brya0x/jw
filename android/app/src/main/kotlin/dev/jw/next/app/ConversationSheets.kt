@@ -86,13 +86,19 @@ internal fun ConvSheet(dismiss: () -> Unit, content: @Composable ColumnScope.() 
     }
 }
 
-/** What the question needs from the person (REQ-441): what the tool is about to do, and a button of at least 48 dp for each option, the first one primary. */
+/** What the question needs from the person (REQ-441): what the tool is about to do, and a button of at least 48 dp for each option, the first one primary; a question ends with the row «Otra…» that opens a field for the person's own words (REQ-752). */
 @Composable
 internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: () -> Unit, preview: MarkdownDoc? = null, answer: (String, String?) -> Unit) {
     // A choice of several: the options marked, sent together as their numbers with commas (REQ-435).
     var marked by remember(ask.id) { mutableStateOf(setOf<Int>()) }
     // «Seguir planeando» of a plan asks what to do next before it answers (REQ-595).
     var writing by remember(ask.id) { mutableStateOf(false) }
+    // «Otra…» of a question: the words, and whether their card is open in place of the options (REQ-752).
+    val other = ask.kind == AskKind.Question
+    var otherText by remember(ask.id) { mutableStateOf("") }
+    var otherOpen by remember(ask.id) { mutableStateOf(false) }
+    val said = other && otherText.isNotBlank()
+    val keys = { marked.sorted().joinToString(",") }
     ConvSheet(dismiss) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Mono(ask.title, Palette.fg, 14, bold = true, lines = 3, modifier = Modifier.weight(1f))
@@ -104,7 +110,11 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
         if (ask.kind == AskKind.Plan) PlanPreview(ask, preview)
         if (ask.kind == AskKind.Plan) SheetAction("▤", "Ver el plan completo" + preview?.let { d -> outline(d).size.takeIf { it > 0 }?.let { " · $it títulos" }.orEmpty() }.orEmpty(), Palette.blue, click = viewPlan)
         else ask.plan.forEach { Mono(it, Palette.fg, 13, lines = 6) }
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (other && otherOpen) OtherBox(
+            otherText, { otherText = it }, note = if (ask.multi) "se envía con lo marcado (${marked.size})" else null,
+            canSend = !busy && said, back = { otherOpen = false },
+        ) { answer(if (ask.multi) keys() else "", otherText.trim()) }
+        else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ask.options.forEachIndexed { i, o ->
                 val primary = i == 0 && !ask.multi
                 val refuse = o.key == "no"
@@ -127,12 +137,21 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
                     Mono((if (ask.multi) (if (on) "☑ " else "☐ ") else "") + o.label, if (primary) Palette.panel else if (refuse) Palette.red else Palette.fg, 13, bold = primary || on, lines = 3)
                 }
             }
+            if (other) Box(
+                Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
+                    .background(Palette.sel, RoundedCornerShape(8.dp))
+                    .clickable(enabled = !busy) { otherOpen = true }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) { Mono((if (ask.multi) (if (said) "☑ " else "☐ ") else "") + "✎ " + (if (said) "Otra: ${otherText.trim()}" else "Otra…"), Palette.blue, 13, bold = said, lines = 3) }
+            // The count is what is marked and the words, when there are some.
+            val count = marked.size + if (said) 1 else 0
             if (ask.multi) Box(
                 Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
-                    .background(if (marked.isEmpty()) Palette.sel else Palette.green, RoundedCornerShape(8.dp))
-                    .clickable(enabled = !busy && marked.isNotEmpty()) { answer(marked.sorted().joinToString(","), null) },
+                    .background(if (count == 0) Palette.sel else Palette.green, RoundedCornerShape(8.dp))
+                    .clickable(enabled = !busy && count > 0) { answer(keys(), otherText.trim().takeIf { said }) },
                 contentAlignment = Alignment.Center,
-            ) { Mono(if (marked.isEmpty()) "marca una o más" else "Enviar (${marked.size})", if (marked.isEmpty()) Palette.dim else Palette.panel, 13, bold = true) }
+            ) { Mono(if (count == 0) "marca una o más" else "Enviar ($count)", if (count == 0) Palette.dim else Palette.panel, 13, bold = true) }
         }
     }
 }
@@ -157,33 +176,49 @@ private const val PREVIEW_LINES = 8
 @Composable
 internal fun InstructionBox(busy: Boolean, back: () -> Unit, send: (String?) -> Unit) {
     var text by remember { mutableStateOf("") }
+    TextCard("Seguir planeando", Palette.red, "¿qué sigue? (opcional)", text, { text = it }, null, "Seguir planeando", !busy, back) { send(keepPlanningNote(text)) }
+}
+
+/** The card of «Otra…»: the person's own words for the question, «Volver» keeps them and goes back to the options, «Enviar» is off while nothing is written (REQ-752). */
+@Composable
+internal fun OtherBox(text: String, onText: (String) -> Unit, note: String?, canSend: Boolean, back: () -> Unit, send: () -> Unit) {
+    TextCard("Otra respuesta", Palette.blue, "escribe tu respuesta", text, onText, note, "Enviar", canSend, back, send)
+}
+
+/** A card with a heading, a field, and two buttons: «Volver» and the one that sends. */
+@Composable
+private fun TextCard(
+    heading: String, headingColour: Color, hint: String, text: String, onText: (String) -> Unit, note: String?,
+    sendLabel: String, canSend: Boolean, back: () -> Unit, send: () -> Unit,
+) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     Column(Modifier.fillMaxWidth().background(Palette.sel, RoundedCornerShape(8.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Mono("Seguir planeando", Palette.red, 13, bold = true)
+        Mono(heading, headingColour, 13, bold = true)
         BasicTextField(
             value = text,
-            onValueChange = { text = it },
+            onValueChange = onText,
             textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
             cursorBrush = SolidColor(Palette.blue),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
             decorationBox = { inner ->
                 Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 84.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).background(Palette.bg, RoundedCornerShape(6.dp)).padding(10.dp)) {
-                    if (text.isEmpty()) Mono("¿qué sigue? (opcional)", Palette.dim, 13)
+                    if (text.isEmpty()) Mono(hint, Palette.dim, 13)
                     inner()
                 }
             },
         )
+        note?.let { Mono(it, Palette.dim, 12) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.panel, RoundedCornerShape(8.dp)).clickable(onClick = back),
                 contentAlignment = Alignment.Center,
             ) { Mono("Volver", Palette.fg, 13) }
             Box(
-                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.green, RoundedCornerShape(8.dp)).clickable(enabled = !busy) { send(keepPlanningNote(text)) },
+                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(if (canSend) Palette.green else Palette.panel, RoundedCornerShape(8.dp)).clickable(enabled = canSend, onClick = send),
                 contentAlignment = Alignment.Center,
-            ) { Mono("Seguir planeando", Palette.panel, 13, bold = true) }
+            ) { Mono(sendLabel, if (canSend) Palette.panel else Palette.dim, 13, bold = true) }
         }
     }
 }
