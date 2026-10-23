@@ -95,7 +95,7 @@ pub fn is_panel(name: &str) -> bool {
 /// The group of the keys that are the program's own: its tag is the product name.
 const OWN: &str = "\0";
 
-const KEYS: [(&str, &str, &str); 22] = [
+const KEYS: [(&str, &str, &str); 23] = [
     ("↵", "enviar; en cola mientras Claude trabaja", "escribir"),
     ("⇧↵ · ^J", "un salto de línea", "escribir"),
     ("⇥", "completar lo que se propone o la lista", "escribir"),
@@ -105,6 +105,11 @@ const KEYS: [(&str, &str, &str); 22] = [
         "escribir",
     ),
     ("@", "los archivos del workspace", "escribir"),
+    (
+        "@ · espacio",
+        "en el árbol de archivos (t): escribir la ruta de la fila, o de las marcadas con espacio",
+        "árbol",
+    ),
     (
         "RePág · AvPág",
         "en la lista de comandos, de una sección a otra",

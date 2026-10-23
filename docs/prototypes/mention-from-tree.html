@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>jw · mencionar archivos con @ desde el árbol</title>
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+p{margin:0;max-width:92ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;background:var(--panel);color:var(--fg)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+fieldset{border:1px solid var(--line);border-radius:6px;margin:0;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-width:0}
+legend{font:600 12px var(--mono);color:var(--yellow);padding:0 6px}
+fieldset label{display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer;min-height:28px;padding:2px 0}
+fieldset input{margin-top:5px;accent-color:var(--blue)}
+.rec{color:var(--green);font:11px var(--mono)}
+.q{color:var(--mut);font-size:12px;max-width:60ch}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font:12px var(--mono);color:var(--mut)}
+.bar label{display:flex;gap:6px;align-items:center;min-height:32px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0;overflow:hidden;max-width:100%;outline:none}
+.term:focus{box-shadow:0 0 0 2px var(--blue)}
+.scr{display:grid;grid-template-columns:1fr 26ch;height:420px;font:13px/1.3 var(--mono);color:var(--fg)}
+.pan{padding:8px 10px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;overflow:hidden}
+.pan .log{flex:1;overflow:hidden;color:var(--fg);white-space:pre-wrap}
+.pan .in{border:1px solid var(--line);border-radius:4px;padding:4px 6px;min-height:3.4em;background:var(--panel);word-break:break-all;white-space:pre-wrap}
+.pan.typing .in{border-color:var(--blue)}
+.pan .ttl{color:var(--dim)}
+.tree{padding:6px 0;background:var(--panel);overflow:hidden;display:flex;flex-direction:column}
+.tree .ttl{color:var(--dim);padding:0 8px 4px}
+.tree.focus .ttl{color:var(--blue)}
+.tree .r{padding:0 8px;white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.tree .r.sel{background:var(--sel)}
+.tree.focus .r.sel{background:#3a4150;box-shadow:inset 2px 0 var(--blue)}
+.tree .r.mk .m{color:var(--yellow)}
+.tree .flt{padding:0 8px;color:var(--yellow)}
+.foot{border-top:1px solid var(--line);padding:3px 10px;font:12px var(--mono);color:var(--dim);background:var(--panel);min-height:1.9em}
+.foot .flash{color:var(--green)}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.mag{color:var(--magenta)}.b{font-weight:700}
+.cap{font:12px var(--mono);color:var(--mut);max-width:96ch;margin-top:6px}
+.risk{border-left:3px solid var(--red);padding-left:12px}
+table{border-collapse:collapse;font:12px var(--mono)}
+td,th{padding:3px 14px 3px 0;text-align:left;vertical-align:top}
+th{color:var(--dim);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>jw · mencionar archivos con @ desde el árbol</h1>
+<p>Hoy el árbol de archivos (<kbd>t</kbd>) solo sirve para leer: <kbd>↵</kbd> abre el visor. Y el <kbd>@</kbd> del campo del agente solo busca dentro del workspace, escribiendo letras. Aquí el árbol también sirve para <b>elegir</b>: <kbd>@</kbd> sobre una fila escribe <code>@ruta</code> en el campo del agente, igual que <kbd>V</kbd> escribe <code>@archivo#L10-14</code> desde el visor (REQ-592). Nada se manda.</p>
+
+<div class="box">
+  <h2>Pruébalo (haz clic en la terminal para darle el teclado)</h2>
+  <div class="bar">
+    <span>Empieza con el foco en el árbol. <kbd>j</kbd><kbd>k</kbd> mueven · <kbd>l</kbd>/<kbd>→</kbd> abre carpeta · <kbd>h</kbd> cierra · <kbd>space</kbd> marca · <kbd>@</kbd> escribe lo marcado (o la fila) en el campo · <kbd>/</kbd> busca · <kbd>esc</kbd> pasa al campo (y otra vez <kbd>esc</kbd>, de vuelta al árbol)</span>
+  </div>
+  <div class="bar">
+    <label><input type="checkbox" id="noagent"> no hay agente en este workspace</label>
+    <label><input type="checkbox" id="outside"> la carpeta del agente es una subcarpeta (rutas relativas a ella)</label>
+    <button id="reset" style="min-height:32px">reiniciar</button>
+  </div>
+  <div class="term" id="term" tabindex="0" aria-label="terminal de jw simulada">
+    <div class="scr">
+      <div class="pan" id="pan">
+        <div class="ttl">claude · feat/login</div>
+        <div class="log" id="log"><span class="dim">tú ›</span> arregla el login
+<span class="dim">claude ›</span> Leí auth/login.rs. ¿Qué archivos más debo mirar?</div>
+        <div class="in" id="inp"></div>
+      </div>
+      <div class="tree focus" id="tree"></div>
+    </div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+
+<div class="box">
+  <h2>Qué cambia y qué no</h2>
+  <table>
+    <tr><th>tecla en el árbol</th><th>hoy</th><th>propuesta</th></tr>
+    <tr><td><kbd>↵</kbd> / <kbd>l</kbd> en archivo</td><td>abre el visor</td><td>igual</td></tr>
+    <tr><td><kbd>@</kbd></td><td>nada</td><td>escribe <code>@ruta</code> en el campo del agente y le da el teclado</td></tr>
+    <tr><td><kbd>space</kbd></td><td>nada</td><td>marca o desmarca la fila (se ve <span class="yellow">●</span>); varias filas</td></tr>
+    <tr><td>carpeta</td><td>—</td><td>se escribe como <code>@carpeta/</code></td></tr>
+    <tr><td>filtro <kbd>/</kbd></td><td>↵ abre el hit</td><td><kbd>@</kbd> también funciona sobre un hit; <kbd>↵</kbd> igual que hoy</td></tr>
+  </table>
+  <p class="cap">La ruta se escribe desde la carpeta en que corre el agente, como ya hace el visor (REQ-631, REQ-639). Sin agente en el workspace se copia al portapapeles (OSC 52) y se avisa, como REQ-592. El árbol se queda abierto y el foco pasa al campo. Para volver al árbol desde el campo, en jw real se usa el líder <kbd>^␣</kbd> y luego <kbd>t</kbd>, como con cualquier panel; <kbd>esc</kbd> aquí es solo la simulación. Lo escrito se puede editar antes de mandar.</p>
+</div>
+
+<div class="box risk">
+  <h2>Riesgo</h2>
+  <p><kbd>@</kbd> en el árbol compite con ninguna tecla existente (el árbol usa <kbd>j k h l . / y r t esc ↵</kbd>), pero <kbd>space</kbd> aún no lo usa nadie ahí: confirmar en el spec antes de tomarlo. El teléfono no cambia: no tiene árbol (esta parte es solo de la TUI).</p>
+</div>
+
+<div class="box">
+  <h2>Decisiones (marcado = mi recomendación)</h2>
+  <div class="decide">
+    <fieldset><legend>1 · tecla que escribe la mención</legend>
+      <label><input type="radio" name="d1" checked> <span><kbd>@</kbd> <span class="rec">recomendado</span><br><span class="q">la misma tecla que en el campo; fácil de recordar</span></span></label>
+      <label><input type="radio" name="d1"> <span><kbd>↵</kbd> cuando hay marcas, si no abre el visor<br><span class="q">menos teclas, pero ↵ cambia de significado según haya marcas</span></span></label>
+    </fieldset>
+    <fieldset><legend>2 · varias a la vez</legend>
+      <label><input type="radio" name="d2" checked> <span>sí, con <kbd>space</kbd> <span class="rec">recomendado</span><br><span class="q">se escriben separadas por un espacio, en el orden en que las marcaste</span></span></label>
+      <label><input type="radio" name="d2"> <span>una por vez<br><span class="q">más simple, pero hay que volver al árbol por cada archivo</span></span></label>
+    </fieldset>
+    <fieldset><legend>3 · después de escribir</legend>
+      <label><input type="radio" name="d3" checked> <span>el foco pasa al campo, el árbol sigue abierto <span class="rec">recomendado</span></span></label>
+      <label><input type="radio" name="d3"> <span>el árbol se cierra<br><span class="q">libera ancho, pero hay que reabrirlo para elegir más</span></span></label>
+    </fieldset>
+    <fieldset><legend>4 · carpetas</legend>
+      <label><input type="radio" name="d4" checked> <span>se pueden mencionar (<code>@carpeta/</code>) <span class="rec">recomendado</span><br><span class="q">Claude Code lo hace; el agente lista la carpeta</span></span></label>
+      <label><input type="radio" name="d4"> <span>solo archivos</span></label>
+    </fieldset>
+  </div>
+</div>
+</div>
+
+<script>
+const FS = [
+  ['auth/', [['login.rs'], ['session.rs'], ['tests/', [['login_test.rs']]]]],
+  ['docs/', [['spec.md'], ['notes.md']]],
+  ['src/', [['main.rs'], ['lib.rs']]],
+  ['Cargo.toml'], ['README.md'],
+];
+let open, sel, marks, focusTree, typing, field, flash, filter, searching;
+const $ = id => document.getElementById(id);
+function reset(){
+  open = new Set(['auth/']); sel = 0; marks = new Set(); focusTree = true; typing = false;
+  field = ''; flash = ''; filter = null; searching = false; draw();
+}
+function rows(){
+  const out = [];
+  (function walk(items, prefix, depth){
+    for (const it of items){
+      const isDir = it[0].endsWith('/'), path = prefix + it[0];
+      out.push({name: it[0], path, depth, isDir});
+      if (isDir && open.has(path)) walk(it[1], path, depth + 1);
+    }
+  })(FS, '', 0);
+  if (filter !== null){
+    const all = [];
+    (function flat(items, prefix){
+      for (const it of items){
+        const path = prefix + it[0];
+        if (it[0].endsWith('/')) flat(it[1], path); else all.push({name: path, path, depth: 0, isDir: false});
+      }
+    })(FS, '');
+    return all.filter(r => r.path.toLowerCase().includes(filter.toLowerCase()));
+  }
+  return out;
+}
+function rel(path){ return $('outside').checked ? path.replace(/^(auth|docs|src)\//, '') : path; }
+function draw(){
+  const rs = rows();
+  if (sel >= rs.length) sel = Math.max(0, rs.length - 1);
+  $('tree').className = 'tree' + (focusTree ? ' focus' : '');
+  $('tree').innerHTML = '<div class="ttl">archivos' + (filter !== null ? ' · /' + filter + (searching ? '▌' : '') : '') + '</div>' +
+    rs.map((r, i) => '<div class="r' + (i === sel ? ' sel' : '') + (marks.has(r.path) ? ' mk' : '') + '">' +
+      '<span class="m">' + (marks.has(r.path) ? '●' : ' ') + '</span>' + '  '.repeat(r.depth) +
+      (r.isDir ? (open.has(r.path) ? '▾ ' : '▸ ') : '  ') + esc(r.name) + '</div>').join('');
+  $('pan').className = 'pan' + (typing ? ' typing' : '');
+  $('inp').textContent = (typing ? '› ' : '  ') + field + (typing ? '▌' : '');
+  $('foot').innerHTML = flash ? '<span class="flash">' + esc(flash) + '</span>' :
+    focusTree ? (searching ? 'escribe · ↵ termina · @ menciona · esc sale' :
+      'j k mover · l h abrir/cerrar · space marcar · <b>@ mencionar</b> · / buscar · ↵ visor · t foco · esc campo') :
+    'escribe al agente · esc vuelve al árbol (en jw real: ^␣ y luego t)';
+}
+function esc(s){ return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function mention(){
+  const rs = rows(), picked = marks.size ? rs.filter(r => marks.has(r.path)) : rs[sel] ? [rs[sel]] : [];
+  const all = marks.size ? [...marks] : picked.map(r => r.path);
+  const text = all.map(p => '@' + rel(p)).join(' ') + ' ';
+  if ($('noagent').checked){ flash = 'no hay un agente aquí: ' + text.trim() + ' quedó copiado'; }
+  else {
+    field += (field && !field.endsWith(' ') ? ' ' : '') + text;
+    typing = true; focusTree = false; flash = 'referencia escrita en el campo del agente; nada se mandó';
+  }
+  marks.clear();
+}
+$('term').addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key; flash = '';
+  if (focusTree){
+    const rs = rows(), r = rs[sel];
+    if (searching){
+      if (k === 'Escape'){ filter = null; searching = false; }
+      else if (k === 'Enter'){ searching = false; }
+      else if (k === '@'){ mention(); }
+      else if (k === 'Backspace'){ filter = filter.slice(0, -1); }
+      else if (k.length === 1){ filter += k; sel = 0; }
+    } else if (k === 'j' || k === 'ArrowDown'){ sel = Math.min(rs.length - 1, sel + 1); }
+    else if (k === 'k' || k === 'ArrowUp'){ sel = Math.max(0, sel - 1); }
+    else if ((k === 'l' || k === 'ArrowRight' || k === 'Enter') && r){
+      if (r.isDir) open.has(r.path) ? open.delete(r.path) : open.add(r.path);
+      else flash = 'abre el visor de ' + r.path + ' (sin cambios respecto a hoy)';
+    }
+    else if ((k === 'h' || k === 'ArrowLeft') && r && r.isDir) open.delete(r.path);
+    else if (k === ' ' && r){ marks.has(r.path) ? marks.delete(r.path) : marks.add(r.path); }
+    else if (k === '@'){ mention(); }
+    else if (k === '/'){ filter = ''; searching = true; }
+    else if (k === 't'){ focusTree = false; typing = true; }
+    else if (k === 'Escape'){ if (filter !== null) filter = null; else { focusTree = false; typing = true; } }
+    else return;
+  } else {
+    if (k === 'Escape'){ focusTree = true; typing = false; }
+    else if (k === 'Backspace'){ field = field.slice(0, -1); }
+    else if (k.length === 1){ field += k; }
+    else return;
+  }
+  e.preventDefault(); draw();
+});
+$('reset').onclick = reset; $('noagent').onchange = $('outside').onchange = () => draw();
+$('term').addEventListener('focus', draw);
+reset();
+</script>
+</body>
+</html>
