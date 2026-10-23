@@ -1,0 +1,363 @@
+<meta charset="utf-8">
+<title>jw · the composer remembers what was sent (↑) and folds what is pasted</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:92ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button,select{font:12px var(--mono);color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover,select:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.bar label{font:12px var(--mono);color:var(--mut);display:flex;gap:6px;align-items:center}
+.col{display:flex;flex-direction:column;gap:6px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:auto;width:max-content;max-width:100%}
+.term pre{margin:0;font:13px/1.3 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus{box-shadow:0 0 0 2px var(--blue)}
+.hint{font:12px var(--mono);color:var(--mut);max-width:96ch}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.mag{color:var(--magenta)}.b{font-weight:700}
+.hd{background:var(--panel);color:var(--dim)}
+.band{background:var(--panel)}
+.tok{background:var(--sel);color:var(--yellow)}
+.cur{background:var(--fg);color:var(--bg)}
+.pk{background:var(--sel)}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.box h2{margin:0 0 8px}
+.box ol,.box ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.box li{max-width:100ch}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The composer remembers and folds</h1>
+    <p>Two things the old jw had because the pane ran Claude Code itself, and the composer of today does not: <b>↑ brings back what was sent before</b>, and <b>a long paste does not fill the field</b>, it shows as a short label with its beginning. Here the composer is drawn as it would be with both. «As now» in each selector gives today's behaviour (no folding, ↑ only moves the cursor and scrolls the list), so the difference can be tried. Click the terminal and type, or paste for real (<kbd>⌘V</kbd>) or with the buttons.</p>
+  </div>
+  <div class="bar" role="group" aria-label="Paste">
+    <button id="p-short" type="button">paste 2 lines</button>
+    <button id="p-12" type="button">paste 12 lines</button>
+    <button id="p-long" type="button">paste a 700-character line</button>
+    <button id="p-two" type="button">paste 12 lines, then 8 more</button>
+    <button id="clear" type="button">clear the field</button>
+    <button id="openpick" type="button">open the history list (^R)</button>
+  </div>
+  <div class="bar" role="group" aria-label="Choices">
+    <label>a paste folds from <select id="o-fold"><option value="low">3 lines or 150 characters</option><option value="mid" selected>5 lines or 300 characters</option><option value="high">10 lines or 800 characters</option><option value="off">never (as now)</option></select></label>
+    <label>the label <select id="o-label"><option value="start" selected>says how long it is and its beginning</option><option value="size">says only how long it is</option></select></label>
+    <label>↑ on the first row <select id="o-up"><option value="on" selected>brings back what was sent</option><option value="off">only moves and scrolls the list (as now)</option></select></label>
+    <label>the list shows a long message <select id="o-list"><option value="fold" selected>folded to 3 rows</option><option value="full">whole (as now)</option></select></label>
+    <label>the history list <select id="o-pick"><option value="on" selected>^R opens it</option><option value="off">none</option></select></label>
+  </div>
+  <div class="col"><h2>COMPOSER</h2><div class="term"><pre id="scr" tabindex="0" aria-label="The composer. Type, paste, press up for the history."></pre></div></div>
+  <div class="hint" id="info"></div>
+  <div class="hint">Keys: letters type, <kbd>Enter</kbd> sends, <kbd>Shift+Enter</kbd> a new line, <kbd>←</kbd> <kbd>→</kbd> move (a label is one step), <kbd>Backspace</kbd> erases a label whole, <kbd>Tab</kbd> on a label turns it into its text, <kbd>↑</kbd> on the first row recalls the previous message and <kbd>↓</kbd> on the last row the next one (past the newest, the draft you were writing comes back). In the history list: <kbd>↑</kbd> <kbd>↓</kbd> choose, type to filter, <kbd>Enter</kbd> puts it in the field, <kbd>Esc</kbd> closes. Five rows of text show at most; the scroll of the field is the other prototype (<code>composer-scroll.html</code>).</div>
+
+  <div class="box"><h2>WHAT CHANGES</h2>
+    <ul>
+      <li><b>A long paste folds.</b> Past the limit, what is pasted goes into the line as a label (<code>[Texto pegado #1 +12 líneas «línea 1: texto qu…»]</code>) that works as one character: the cursor steps over it, Backspace erases it whole, <kbd>Tab</kbd> opens it into its text. What is <b>sent</b> is the text itself, with the label replaced; nothing is lost. It is the way <code>[Imagen#n]</code> already goes in the line (<code>conversation.rs</code>, <code>attach</code>), and a paste below the limit goes in as it does now.</li>
+      <li><b>↑ remembers.</b> On the first row of the field, ↑ puts the previous message in it (the cursor at its start, so another ↑ goes further back); ↓ on the last row goes forward and, past the newest, brings back the draft that was being written. The chips row says <code>↑ 2/6</code> while one is recalled. A message that had folded labels comes back folded.</li>
+      <li><b>^R is a list</b> of the last messages with a filter, for when ↑ one by one is too slow.</li>
+      <li><b>The list of the conversation</b> shows a long message folded to three rows and <code>… +N filas más</code>, so a paste does not push the whole conversation out of sight.</li>
+    </ul>
+  </div>
+
+  <div class="box"><h2>TO DECIDE</h2>
+    <ol>
+      <li><b>When to fold.</b> Recommended: 5 lines or 300 characters. Lower folds almost every paste of a command; higher keeps long pastes in the field.</li>
+      <li><b>↑ on the first row recalls</b> (recommended: it is what the person remembers). It changes REQ-682, which makes ↑ on the first row scroll the list; the list would keep the wheel and the page keys (to check that they exist). The alternative is <kbd>ctrl+p</kbd> / <kbd>ctrl+n</kbd>, which the composer has free and would change nothing that exists; the browser owns <kbd>ctrl+n</kbd> and this page cannot show it.</li>
+      <li><b>Where the history comes from.</b> (a) The messages of the conversation that the daemon already keeps (<code>Item::User</code>, at most 300, nothing new to store, but a new conversation starts with an empty history), or (b) a file jw keeps for each repository, the last 100, which lasts across conversations as the shell's history does. Recommended: (b). It writes to disk what is typed, pasted text included: skip entries over 20 KB and those that start with a space.</li>
+      <li><b>The history list (^R)</b> is an extra. The key has to be checked against the composer's keys (only ctrl+p and ctrl+n are known to be free). Say «none» to leave it out.</li>
+      <li><b>The long message in the list</b> folded to three rows (recommended) or whole as now. The spec has to look at how the list draws a long message today; it was not checked.</li>
+      <li><b>Order.</b> Both touch the <code>Editor</code> and the field, which <code>feat/composer-scroll</code> is changing: build this after that one is in, and keep the version and the REQ ids past main's.</li>
+      <li><b>The phone</b> is left as it is.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+const W = 80, H = 24, PROMPT = 2, MARKS = 4, AROUND = 4, CAP = 5;
+const IW = W - 2, TW = Math.max(8, IW - (PROMPT + MARKS + 2));
+const FOLD = { low: [3, 150], mid: [5, 300], high: [10, 800] };
+let CFG = { fold: 'mid', label: 'start', up: 'on', list: 'fold', pick: 'on' };
+
+const BASE = [
+  ['dim', 'claude  ·  conversación'],
+  ['', ''],
+  ['blue', 'tú'], ['', 'arregla el login con google, falla con el redirect'],
+  ['', ''],
+  ['green', 'claude'], ['', 'Miro el flujo de OAuth en auth/google.rs.'],
+  ['dim', '  ◆ Read  src/auth/google.rs'],
+  ['', 'El redirect_uri se arma con el host de la petición. Lo saco de la'],
+  ['', 'configuración.'],
+  ['dim', '  ◆ Edit  src/auth/google.rs  +4 −2'],
+  ['', ''],
+  ['blue', 'tú'], ['', 'y en los tests?'],
+  ['', ''],
+  ['green', 'claude'], ['', 'Agrego un test con el host detrás de un proxy.'],
+  ['dim', '  ◆ Bash  cargo test auth'],
+  ['green', '  ✓ 14 passed'],
+  ['', ''],
+];
+
+// A pasted text that folded is one atom of the line: {t: true, n, body}; a character is {c}.
+const ch = c => ({ c });
+const atomsOf = s => [...s].map(ch);
+const tok = (n, body) => ({ t: true, n, body });
+const real = atoms => atoms.map(a => a.t ? a.body : a.c).join('');
+function label(a) {
+  const lines = a.body.split('\n').length;
+  const size = lines > 1 ? `+${lines} líneas` : `${[...a.body].length} caracteres`;
+  if (CFG.label === 'size') return `[Texto pegado #${a.n} ${size}]`;
+  const first = a.body.split('\n').find(l => l.trim()) || '';
+  const t = first.trim(), prev = [...t].length > 16 ? [...t].slice(0, 16).join('') + '…' : t;
+  return `[Texto pegado #${a.n} ${size} «${prev}»]`;
+}
+const aw = a => a.t ? [...label(a)].length : 1;
+
+function body(n) { return Array.from({ length: n }, (_, i) => `línea ${i + 1}: ` + 'texto que se pega del portapapeles'.slice(0, 10 + (i * 7) % 24)).join('\n'); }
+const LONG = 'Quiero que el flujo de login con Google deje de fallar cuando hay un proxy delante: el redirect_uri se arma con el host de la petición y Google lo rechaza, así que hay que sacarlo de la configuración y cubrirlo con un test que ponga el host detrás de un proxy. '.repeat(3).slice(0, 700);
+
+const M = {
+  atoms: [], cursor: 0, nextN: 1,
+  sent: [],
+  hist: [atomsOf('arregla el login con google, falla con el redirect'), atomsOf('y en los tests?'), [...atomsOf('revisa este log: '), tok(1, body(14))], atomsOf('corre cargo test auth'), atomsOf('haz un commit con lo que hay')],
+  hi: -1, draft: null,
+  pick: null,
+};
+
+// field.rs `wrap` over atoms: a label is never split and takes its own width.
+function wrapA(atoms, cursor, width) {
+  const rows = [[]], starts = [0];
+  let rowW = 0, at = [0, 0], placed = false;
+  for (let i = 0; i < atoms.length; i++) {
+    const a = atoms[i], nl = a.c === '\n', w = nl ? 0 : aw(a);
+    if (!nl && rowW > 0 && rowW + w > width) { rows.push([]); starts.push(i); rowW = 0; }
+    if (i === cursor) { at = [rows.length - 1, rowW]; placed = true; }
+    if (nl) { rows.push([]); starts.push(i + 1); rowW = 0; }
+    else { for (const c of (a.t ? label(a) : a.c)) rows[rows.length - 1].push({ c, i, t: !!a.t }); rowW += w; }
+  }
+  if (!placed) {
+    if (rowW >= width) { rows.push([]); starts.push(atoms.length); rowW = 0; }
+    at = [rows.length - 1, rowW];
+  }
+  return { rows, starts, at };
+}
+const windowStart = (n, cursorRow) => Math.min(Math.max(0, n - CAP), cursorRow);
+
+function wrapText(s, width) {
+  const out = [];
+  for (const line of s.split('\n')) { const cs = [...line]; if (!cs.length) out.push(''); for (let i = 0; i < cs.length; i += width) out.push(cs.slice(i, i + width).join('')); }
+  return out;
+}
+
+class Scr {
+  constructor() { this.cells = Array.from({ length: H }, () => Array.from({ length: W }, () => [' ', ''])); }
+  put(y, x, s, cls = '') { for (const c of s) { if (y >= 0 && y < H && x >= 0 && x < W) this.cells[y][x] = [c, cls]; x++; } }
+  fill(y, cls) { for (let x = 0; x < W; x++) this.cells[y][x] = [this.cells[y][x][0], cls + ' ' + this.cells[y][x][1]]; }
+  html() {
+    const esc = s => s === '<' ? '&lt;' : s === '>' ? '&gt;' : s === '&' ? '&amp;' : s;
+    return this.cells.map(r => {
+      let out = '', cur = null, buf = '';
+      for (const [c, cls] of r) {
+        if (cls !== cur) { if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; }
+        buf += esc(c);
+      }
+      if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf;
+      return out;
+    }).join('\n');
+  }
+}
+
+function listLines() {
+  const lines = BASE.slice();
+  for (const s of M.sent) {
+    lines.push(['blue', 'tú']);
+    const rows = wrapText(s, IW);
+    if (CFG.list === 'fold' && rows.length > 3) {
+      rows.slice(0, 3).forEach(r => lines.push(['', r]));
+      lines.push(['dim', `… +${rows.length - 3} filas más`]);
+    } else rows.forEach(r => lines.push(['', r]));
+    lines.push(['', '']);
+  }
+  return lines;
+}
+
+function pickEntries() {
+  const f = M.pick.filter.toLowerCase();
+  return M.hist.map((a, i) => ({ a, i })).filter(e => !f || real(e.a).toLowerCase().includes(f)).reverse().slice(0, 8);
+}
+
+function draw() {
+  const g = new Scr();
+  const w = wrapA(M.atoms, M.cursor, TW), n = w.rows.length;
+  const start = windowStart(n, w.at[0]), v = Math.min(n, CAP);
+  const band = AROUND + v, top = H - band;
+  g.put(0, 1, BASE[0][1], 'hd'); g.fill(0, 'hd');
+  const lines = listLines(), room = top - 1, shown = lines.slice(Math.max(0, lines.length - room));
+  shown.forEach(([c, s], i) => g.put(1 + room - shown.length + i, 1, s.slice(0, IW), c));
+  for (let y = top; y < H; y++) g.fill(y, 'band');
+  g.put(top + 1, 3, '▸ ~/ws/jw', 'cyan');
+  g.put(top + 1, 14, '⎇ feat/composer-history', 'mag');
+  if (M.hi >= 0) { const s = `↑ ${M.hi + 1}/${M.hist.length}`; g.put(top + 1, W - 2 - s.length, s, 'yellow'); }
+  const rows = w.rows.slice(start, start + v), empty = !M.atoms.length;
+  const cursorAtom = M.atoms[M.cursor];
+  rows.forEach((r, i) => {
+    const y = top + 3 + i;
+    if (i === 0) { g.put(y, 1, '❯', 'green'); g.put(y, 76, '➤', 'blue'); }
+    r.forEach((cell, x) => g.put(y, 3 + x, cell.c, cell.t ? (cell.i === M.cursor ? 'cur' : 'tok') : ''));
+  });
+  if (empty) {
+    g.put(top + 3, 3, 'escribe un mensaje', 'dim');
+    if (CFG.up === 'on' && M.hist.length) g.put(top + 3, 22, '· ↑ historial', 'dim');
+  }
+  const cr = w.at[0] - start;
+  if (cr >= 0 && cr < v && !(cursorAtom && cursorAtom.t)) {
+    const y = top + 3 + cr, x = 3 + w.at[1];
+    g.cells[y][x] = [g.cells[y][x][0], 'cur band'];
+  }
+  if (M.pick) {
+    const es = pickEntries(), h = Math.min(top - 2, es.length + 3), y0 = top - h - 0;
+    for (let y = y0; y < top; y++) { for (let x = 1; x < W - 1; x++) g.cells[y][x] = [' ', 'pk']; }
+    g.put(y0, 3, 'historial', 'pk blue b');
+    g.put(y0, 14, M.pick.filter ? 'filtro: ' + M.pick.filter : 'escribe para filtrar', 'pk dim');
+    es.forEach((e, k) => {
+      const t = real(e.a), lines = t.split('\n').length;
+      const one = t.replace(/\n/g, ' ⏎ '), cut = [...one].length > 58 ? [...one].slice(0, 58).join('') + '…' : one;
+      const on = k === M.pick.sel;
+      g.put(y0 + 1 + k, 3, (on ? '❯ ' : '  ') + cut, on ? 'pk green' : 'pk');
+      if (lines > 1) g.put(y0 + 1 + k, W - 14, `${lines} líneas`, 'pk dim');
+    });
+    if (!es.length) g.put(y0 + 1, 3, 'nada que se parezca', 'pk dim');
+    g.put(top - 1, 3, '↑↓ elegir  ↵ poner en el campo  esc cierra', 'pk dim');
+  }
+  return { html: g.html(), n, v, start };
+}
+
+function insertAtoms(arr) { M.atoms.splice(M.cursor, 0, ...arr); M.cursor += arr.length; }
+function paste(text) {
+  text = text.replace(/\r\n?/g, '\n');
+  const f = FOLD[CFG.fold], lines = text.split('\n').length, chars = [...text].length;
+  if (f && (lines >= f[0] || chars >= f[1])) insertAtoms([tok(M.nextN++, text)]);
+  else insertAtoms(atomsOf(text));
+}
+function moveRow(d) {
+  const w = wrapA(M.atoms, M.cursor, TW), r = w.at[0] + d;
+  if (r < 0 || r >= w.rows.length) return;
+  let i = w.starts[r], col = 0;
+  const end = r + 1 < w.starts.length ? w.starts[r + 1] : M.atoms.length;
+  while (i < end && M.atoms[i].c !== '\n' && col + aw(M.atoms[i]) <= w.at[1]) { col += aw(M.atoms[i]); i++; }
+  M.cursor = i;
+}
+function lineEdge(endOf) {
+  let i = M.cursor;
+  if (endOf) while (i < M.atoms.length && M.atoms[i].c !== '\n') i++;
+  else while (i > 0 && M.atoms[i - 1].c !== '\n') i--;
+  M.cursor = i;
+}
+function load(arr, where) {
+  M.atoms = arr.slice();
+  M.cursor = where === 'start' ? 0 : M.atoms.length;
+  M.nextN = Math.max(1, ...M.atoms.filter(a => a.t).map(a => a.n + 1));
+}
+function recall(dir) {
+  if (dir < 0) {
+    if (M.hi === -1) { M.draft = M.atoms.slice(); M.hi = M.hist.length - 1; }
+    else if (M.hi > 0) M.hi--;
+    else return;
+    load(M.hist[M.hi], 'start');
+  } else {
+    M.hi++;
+    if (M.hi >= M.hist.length) { M.hi = -1; load(M.draft || [], 'end'); M.draft = null; }
+    else load(M.hist[M.hi], 'end');
+  }
+}
+function send() {
+  const t = real(M.atoms).trim();
+  if (!t) return;
+  M.sent.push(t);
+  const last = M.hist[M.hist.length - 1];
+  if (!last || real(last) !== real(M.atoms)) M.hist.push(M.atoms.slice());
+  M.atoms = []; M.cursor = 0; M.nextN = 1; M.hi = -1; M.draft = null;
+}
+function expand() {
+  const i = M.atoms[M.cursor] && M.atoms[M.cursor].t ? M.cursor : (M.atoms[M.cursor - 1] && M.atoms[M.cursor - 1].t ? M.cursor - 1 : -1);
+  if (i < 0) return false;
+  const body = atomsOf(M.atoms[i].body);
+  M.atoms.splice(i, 1, ...body);
+  M.cursor = i + body.length;
+  return true;
+}
+
+function pickKey(e) {
+  const k = e.key, es = pickEntries();
+  e.preventDefault();
+  if (k === 'Escape') M.pick = null;
+  else if (k === 'ArrowUp') M.pick.sel = Math.min(es.length - 1, M.pick.sel + 1);
+  else if (k === 'ArrowDown') M.pick.sel = Math.max(0, M.pick.sel - 1);
+  else if (k === 'Enter') { if (es[M.pick.sel]) { load(es[M.pick.sel].a, 'end'); M.hi = -1; } M.pick = null; }
+  else if (k === 'Backspace') { M.pick.filter = M.pick.filter.slice(0, -1); M.pick.sel = 0; }
+  else if (k.length === 1 && !e.ctrlKey && !e.metaKey) { M.pick.filter += k; M.pick.sel = 0; }
+  render();
+}
+function openPick() { if (CFG.pick === 'on' && M.hist.length) { M.pick = { sel: 0, filter: '' }; render(); } }
+
+function key(e) {
+  if (M.pick) return pickKey(e);
+  if (e.ctrlKey && e.key === 'r') { e.preventDefault(); openPick(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  let used = true;
+  const w = wrapA(M.atoms, M.cursor, TW);
+  if (k.length === 1) insertAtoms([ch(k)]);
+  else if (k === 'Enter') { if (e.shiftKey) insertAtoms([ch('\n')]); else send(); }
+  else if (k === 'Backspace') { if (M.cursor > 0) { M.atoms.splice(M.cursor - 1, 1); M.cursor--; } }
+  else if (k === 'Delete') M.atoms.splice(M.cursor, 1);
+  else if (k === 'Tab') used = expand();
+  else if (k === 'ArrowLeft') M.cursor = Math.max(0, M.cursor - 1);
+  else if (k === 'ArrowRight') M.cursor = Math.min(M.atoms.length, M.cursor + 1);
+  else if (k === 'ArrowUp') { if (CFG.up === 'on' && w.at[0] === 0 && M.hist.length) recall(-1); else moveRow(-1); }
+  else if (k === 'ArrowDown') { if (CFG.up === 'on' && M.hi >= 0 && w.at[0] === w.rows.length - 1) recall(1); else moveRow(1); }
+  else if (k === 'Home') lineEdge(false);
+  else if (k === 'End') lineEdge(true);
+  else used = false;
+  if (used) { e.preventDefault(); render(); }
+}
+
+function $(id) { return document.getElementById(id); }
+function readCfg() { CFG = { fold: $('o-fold').value, label: $('o-label').value, up: $('o-up').value, list: $('o-list').value, pick: $('o-pick').value }; }
+function render() {
+  readCfg();
+  const d = draw();
+  $('scr').innerHTML = d.html;
+  const t = real(M.atoms);
+  $('info').textContent = `the field holds ${t.split('\n').length} line(s), ${[...t].length} characters, ${M.atoms.filter(a => a.t).length} folded; shows ${d.v} of ${d.n} rows  ·  history: ${M.hist.length} messages${M.hi >= 0 ? `, recalling ${M.hi + 1}` : ''}  ·  what Enter would send starts with: «${t.slice(0, 40).replace(/\n/g, ' ⏎ ')}${t.length > 40 ? '…' : ''}»`;
+}
+
+if (typeof document !== 'undefined') {
+  $('scr').addEventListener('keydown', key);
+  $('scr').addEventListener('paste', e => { e.preventDefault(); paste(e.clipboardData.getData('text')); render(); });
+  const focus = () => $('scr').focus();
+  $('p-short').onclick = () => { paste('git status\ngit diff --stat'); render(); focus(); };
+  $('p-12').onclick = () => { paste(body(12)); render(); focus(); };
+  $('p-long').onclick = () => { paste(LONG); render(); focus(); };
+  $('p-two').onclick = () => { paste(body(12)); insertAtoms(atomsOf(' y además ')); paste(body(8)); render(); focus(); };
+  $('clear').onclick = () => { M.atoms = []; M.cursor = 0; M.nextN = 1; M.hi = -1; M.draft = null; render(); focus(); };
+  $('openpick').onclick = () => { openPick(); focus(); };
+  for (const id of ['o-fold', 'o-label', 'o-up', 'o-list', 'o-pick']) $(id).onchange = () => { render(); focus(); };
+  render();
+} else {
+  globalThis.__T = { M, CFG: () => CFG, setCfg: c => Object.assign(CFG, c), wrapA, paste, recall, send, load, expand, moveRow, real, label, atomsOf, ch, draw, insertAtoms, pickEntries, listLines, wrapText };
+}
+</script>

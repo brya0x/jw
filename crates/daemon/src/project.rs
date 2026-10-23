@@ -126,6 +126,16 @@ pub fn key(origin: Option<&str>, top: &Path) -> String {
     }
 }
 
+/// The key of the repository a folder is in, or of the folder when it is in none: the same
+/// for a worktree and the folder it came from (REQ-716).
+pub fn repo_key(folder: &Path) -> String {
+    let top = crate::git::toplevel(folder)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| folder.to_path_buf());
+    let main = main_top(&top);
+    key(origin_of(&main).as_deref(), &main)
+}
+
 /// The personal file of the repository `top` (REQ-483).
 pub fn personal_file(personal_dir: &Path, origin: Option<&str>, top: &Path) -> PathBuf {
     personal_dir.join(format!("{}.toml", key(origin, top)))

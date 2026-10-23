@@ -1,0 +1,16 @@
+{
+  "t": "reply",
+  "id": "c45",
+  "ok": true,
+  "result": {
+    "messages": [
+      {
+        "text": "arregla el login con google"
+      },
+      {
+        "text": "mira\nlínea 1\nlínea 2\nlínea 3\nlínea 4\nlínea 5 y arréglalo",
+        "folds": [[5, 40]]
+      }
+    ]
+  }
+}
