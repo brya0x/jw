@@ -1,7 +1,9 @@
 package dev.jw.next.client
 
 import dev.jw.next.contract.Accent
+import dev.jw.next.contract.ArtifactDoc
 import dev.jw.next.contract.Attention
+import dev.jw.next.contract.AttentionKind
 import dev.jw.next.contract.ConfigFrom
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConversationList
@@ -12,6 +14,7 @@ import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.TextDoc
+import dev.jw.next.contract.Verdict
 import dev.jw.next.contract.ViewKind
 import dev.jw.next.contract.OlderItems
 import dev.jw.next.contract.OpenKind
@@ -285,6 +288,21 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Ask the daemon for the `artifacts` node of [workspace] (N171). [reply] gets the node's id, or the daemon's message. */
+    fun openArtifacts(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** One version of an artifact, the latest when [n] is null. */
+    fun readArtifact(id: Id, n: Int?, reply: (Result<ArtifactDoc>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** The person's verdict on version [n] of an artifact; [reply] gets the daemon's message when it refuses (stale, decided, …). */
+    fun decideArtifact(id: Id, n: Int, hash: String, verdict: Verdict, text: String?, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Retake the saved conversation [id] in [pane]. */
     fun resumeConversation(pane: Id, id: String, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -307,6 +325,12 @@ sealed interface Screen {
 
     /** The conversations of their own that are archived, to resume or delete (REQ-817). */
     data object Archived : Screen
+
+    /** The artifacts of one workspace, reached from its header menu or from the attention that says one waits (N171). */
+    data class Artifacts(val workspace: Id) : Screen
+
+    /** One artifact, with the bar that approves it or asks for changes. */
+    data class Artifact(val workspace: Id, val id: Id) : Screen
 }
 
 /**
@@ -383,6 +407,9 @@ class Navigator(private val source: NodeSource) {
     /** A tap on the line of an attention in a Home row, or on an Avisos item: open the pane it names (REQ-34). */
     fun go(s: ClientState, a: Attention): ClientState {
         val route = routeOf(source.session(), a) ?: return s
+        // What waits is an artifact: its list opens, not a pane (REQ-782). The workspace is not opened, which would
+        // mark its pane seen for every client and end a question the person never saw; leaving the list does open it.
+        if (a.kind == AttentionKind.Artifact) return artifacts(s, route.workspace)
         return openWorkspace(s, route.workspace, route.pane)
     }
 
@@ -464,6 +491,19 @@ class Navigator(private val source: NodeSource) {
 
     /** The files of [workspace]. */
     fun files(s: ClientState, workspace: Id): ClientState = s.copy(screen = Screen.Files(workspace), last = workspace)
+
+    /** The artifacts of [workspace]. */
+    fun artifacts(s: ClientState, workspace: Id): ClientState = s.copy(screen = Screen.Artifacts(workspace), last = workspace)
+
+    /** The artifact [id] of [workspace]. */
+    fun artifact(s: ClientState, workspace: Id, id: Id): ClientState = s.copy(screen = Screen.Artifact(workspace, id), last = workspace)
+
+    /** Leaves an artifact for the list it came from, and the list for its workspace; anywhere else it is [back]. */
+    fun leaveArtifacts(s: ClientState): ClientState = when (val at = s.screen) {
+        is Screen.Artifact -> artifacts(s, at.workspace)
+        is Screen.Artifacts -> openWorkspace(s, at.workspace)
+        else -> back(s)
+    }
 
     /** The lines of [draft] go to the agent of [workspace]: its screen opens, and writes them in the agent's field (REQ-639). */
     fun refer(s: ClientState, workspace: Id, draft: Draft): ClientState = openWorkspace(s, workspace).copy(draft = draft)

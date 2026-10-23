@@ -30,6 +30,8 @@ const TURN_WAIT: Duration = Duration::from_secs(600);
 /// How long `worktree --task` waits for the new agent's conversation before it types the task.
 const CONVERSATION_WAIT: Duration = Duration::from_secs(10);
 
+mod artifact;
+
 const SKILL: &str = include_str!("../skill/SKILL.md");
 
 /// Why a command ended.
@@ -41,6 +43,8 @@ enum Fail {
     Error(String),
     /// The agent waits for an answer: what it asks goes to stdout and the exit is 3 (REQ-454).
     Waiting(String),
+    /// The person asked for changes to an artifact: what to change goes to stdout and the exit is 4 (REQ-772).
+    Changes(String),
 }
 
 type Out<T = ()> = Result<T, Fail>;
@@ -78,6 +82,9 @@ fn usage_of(cmd: &str) -> String {
         "chat" => format!(
             "usage: {b} chat new [--json]\n       {b} chat archive <chat>\n       {b} chat resume <chat>\n       {b} chat rm <chat>\n       {b} chat promote <chat> <workspace> [--no-summary]"
         ),
+        "artifact" => format!(
+            "usage: {b} artifact publish <file> [--name N] [--title T] [--kind prototype|document|report|spec] [--wait [--timeout SECONDS]]\n       {b} artifact ls [<workspace>] [--json]\n       {b} artifact wait <id> [--timeout SECONDS]\n       {b} artifact rm <id>"
+        ),
         "pane" => format!(
             "usage: {b} pane ls <workspace> [--json]\n       {b} pane open <workspace> [--split right|down] [--of <pane>] [--] [<program words>...]\n       {b} pane close <workspace> <pane> [--force]"
         ),
@@ -94,6 +101,7 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("read", rest) => read(rest),
         ("prompt", rest) => prompt(rest),
         ("worktree", rest) => worktree(rest),
+        ("artifact", rest) => artifact::run(rest),
         ("group", ["ls", rest @ ..]) => group_ls(rest),
         ("group", ["new", rest @ ..]) => group_new(rest),
         ("group", ["rename", rest @ ..]) => group_rename(rest),
@@ -130,6 +138,10 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         Err(Fail::Waiting(asks)) => {
             println!("{asks}");
             ExitCode::from(3)
+        }
+        Err(Fail::Changes(what)) => {
+            println!("changes\n{what}");
+            ExitCode::from(4)
         }
     }
 }
@@ -1556,6 +1568,20 @@ mod tests {
         );
         assert!(lines_flag(&Args::parse(&["--lines", "0"], &["lines"], &[]).unwrap()).is_err());
         assert!(lines_flag(&Args::parse(&["--lines", "x"], &["lines"], &[]).unwrap()).is_err());
+    }
+
+    #[test]
+    fn the_skill_says_how_to_publish_an_artifact_and_what_the_verdict_is_like() {
+        let text = skill_text();
+        for word in [
+            "artifact publish",
+            "artifact wait",
+            "--wait",
+            "APROBADO",
+            "exits 4",
+        ] {
+            assert!(text.contains(word), "the skill does not say {word:?}");
+        }
     }
 
     #[test]

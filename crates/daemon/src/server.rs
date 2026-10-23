@@ -184,6 +184,9 @@ impl Daemon {
             )),
         ))));
         shared.lock().history_dir = Some(crate::history::dir(&config.state_dir));
+        shared
+            .lock()
+            .load_artifacts(crate::artifacts::dir(&config.state_dir));
         shared.lock().conv_dir = Some(config.state_dir.join("conversations"));
         shared.lock().projects_dir = config.projects.clone();
         shared.lock().gh = config.gh.clone();

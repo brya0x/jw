@@ -22,13 +22,14 @@ use crate::persist;
 use crate::pty::{self, Event, Term};
 
 /// The node document versions this daemon can serve.
-pub const SUPPORTED: [(&str, &[u32]); 7] = [
+pub const SUPPORTED: [(&str, &[u32]); 8] = [
     ("session", &[1]),
     ("workspace", &[1]),
     ("pane", &[1]),
     ("blocks", &[1]),
     ("diff", &[1]),
     ("commits", &[1]),
+    ("artifacts", &[1]),
     ("conversation", &[1]),
 ];
 
@@ -131,6 +132,11 @@ pub struct Core {
     pub projects_dir: PathBuf,
     /// Where each pane's blocks are kept so they come back with the daemon; none keeps nothing.
     pub history_dir: Option<PathBuf>,
+    /// Where the artifacts of the workspaces are kept, what each workspace has (all of it, loaded
+    /// at start) and the `artifacts` nodes in use, by node id (N171).
+    pub(crate) artifacts_dir: Option<PathBuf>,
+    pub(crate) artifact_items: HashMap<Id, Vec<contract::artifacts::ArtifactItem>>,
+    pub(crate) artifact_nodes: HashMap<Id, crate::artifacts::ArtifactsEntry>,
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
     pub convs: HashMap<Id, crate::engine::Conv>,
     pub conv_dir: Option<PathBuf>,
@@ -188,6 +194,9 @@ impl Core {
             blocks_views: HashMap::new(),
             blocks_ids: HashMap::new(),
             history_dir: None,
+            artifacts_dir: None,
+            artifact_items: HashMap::new(),
+            artifact_nodes: HashMap::new(),
             convs: HashMap::new(),
             conv_dir: None,
             chrome: false,
@@ -645,6 +654,7 @@ impl Core {
         self.removing.remove(workspace);
         if result.is_ok() {
             self.model.workspaces.retain(|w| w.id != workspace);
+            self.forget_artifacts(workspace);
         }
         self.finish_job(job, result);
         self.refresh();
@@ -918,12 +928,19 @@ impl Core {
                 e.idle_since = now;
             }
         }
-        let before = self.diffs.len() + self.commit_lists.len();
+        for (id, e) in &mut self.artifact_nodes {
+            if watched.contains(id) {
+                e.idle_since = now;
+            }
+        }
+        let before = self.diffs.len() + self.commit_lists.len() + self.artifact_nodes.len();
         self.diffs
             .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
         self.commit_lists
             .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
-        if self.diffs.len() + self.commit_lists.len() != before {
+        self.artifact_nodes
+            .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
+        if self.diffs.len() + self.commit_lists.len() + self.artifact_nodes.len() != before {
             self.refresh();
         }
         self.diffs
@@ -1175,6 +1192,9 @@ impl Core {
         let live: HashSet<Id> = self.model.workspaces.iter().map(|w| w.id.clone()).collect();
         self.diffs.retain(|_, e| live.contains(&e.workspace));
         self.commit_lists.retain(|_, e| live.contains(&e.workspace));
+        self.artifact_nodes
+            .retain(|_, e| live.contains(&e.workspace));
+        self.artifact_items.retain(|ws, _| live.contains(ws));
         self.model
             .viewed
             .retain(|key, _| key.split('|').next().is_some_and(|w| live.contains(w)));
@@ -1221,6 +1241,9 @@ impl Core {
         }
         self.diffs.values_mut().for_each(|e| e.dirty = false);
         self.commit_lists.values_mut().for_each(|e| e.dirty = false);
+        self.artifact_nodes
+            .values_mut()
+            .for_each(|e| e.dirty = false);
         let epoch = self.epoch.clone();
         for (node, from, to, ops) in patches {
             self.broadcast(
@@ -1496,6 +1519,17 @@ impl Core {
                 base: e.list.base.clone(),
                 more: e.list.more,
                 commits: e.list.commits.clone(),
+            }));
+        }
+        for (id, e) in &self.artifact_nodes {
+            if !e.dirty && self.docs.contains_key(id) {
+                kept.push(id.clone());
+                continue;
+            }
+            nodes.push(Node::Artifacts(contract::artifacts::Artifacts {
+                head: head(id, Vec::new()),
+                workspace: e.workspace.clone(),
+                items: self.artifact_items_of(&e.workspace),
             }));
         }
         (nodes, kept)

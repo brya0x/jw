@@ -28,7 +28,7 @@ const USAGE: &str = "usage:
   {n} bench               measure sizes and latency on a private daemon
   {n} hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does
   {n} claude [args]       what `claude` typed in a pane runs (the shell integration's function): a conversation
-  {n} ls | read | prompt | worktree | pane | group | chat | skill
+  {n} ls | read | prompt | worktree | artifact | pane | group | chat | skill
                           what an agent in a pane uses: {n} <command> shows each one's usage";
 
 fn main() -> ExitCode {
@@ -52,7 +52,8 @@ fn main() -> ExitCode {
         ["hook", event] => Ok(hook::run(event)),
         ["claude", rest @ ..] => Ok(claude::run(rest)),
         [
-            c @ ("ls" | "read" | "prompt" | "worktree" | "pane" | "group" | "chat" | "skill"),
+            c @ ("ls" | "read" | "prompt" | "worktree" | "artifact" | "pane" | "group" | "chat"
+            | "skill"),
             rest @ ..,
         ] => Ok(agent::run(c, rest)),
         [] | ["tui"] => enter().map(|()| ExitCode::SUCCESS),

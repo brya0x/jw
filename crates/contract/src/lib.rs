@@ -6,6 +6,7 @@
 //! break an old peer. Optional fields are skipped when absent so a round trip through
 //! these types reproduces the document exactly.
 
+pub mod artifacts;
 pub mod conversation;
 pub mod link;
 pub mod markdown;
@@ -412,6 +413,47 @@ pub enum Cmd {
     OpenCommits {
         workspace: Id,
     },
+    /// Publish an artifact (N171): the next version of the one named `name` in `workspace`. The
+    /// result is `{id, n, hash, new}`; `new` is false when the bytes equal the latest version.
+    /// Only the CLI sends it: the bridge refuses it from a phone.
+    ArtifactPublish {
+        workspace: Id,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<artifacts::ArtifactKind>,
+        format: artifacts::ArtifactFormat,
+        text: String,
+        /// The pane that publishes, where the verdict goes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane: Option<Id>,
+    },
+    /// Make (or find) the `artifacts` node of `workspace`. The result is `{node}`.
+    OpenArtifacts {
+        workspace: Id,
+    },
+    /// One version of an artifact, the latest by default. The result is an `artifacts::ArtifactDoc`.
+    ArtifactRead {
+        id: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        n: Option<u32>,
+    },
+    /// The person's verdict on version `n`, which must still be the latest and have that `hash`.
+    ArtifactDecide {
+        id: Id,
+        n: u32,
+        hash: String,
+        #[serde(rename = "type")]
+        verdict: artifacts::Verdict,
+        /// What to change; a `changes` verdict needs it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    /// Remove an artifact and all its versions. Only the CLI sends it.
+    ArtifactRm {
+        id: Id,
+    },
     /// Read a `diff` node again now.
     RefreshDiff {
         node: Id,
@@ -606,6 +648,7 @@ pub enum Node {
     Blocks(Blocks),
     Diff(Diff),
     Commits(Commits),
+    Artifacts(artifacts::Artifacts),
     /// Boxed: it is by far the largest document and the others are not made larger by it.
     Conversation(Box<conversation::Conversation>),
 }
@@ -1293,6 +1336,8 @@ pub enum AttentionKind {
     Screen,
     Merged,
     CiFailed,
+    /// An artifact of the workspace waits for a verdict (N171).
+    Artifact,
 }
 
 /// One edit of a node document: the RFC 6902 subset `add`, `remove`, `replace`.
@@ -1312,6 +1357,7 @@ pub fn node_id(node: &Node) -> &Id {
         Node::Blocks(n) => &n.head.id,
         Node::Diff(n) => &n.head.id,
         Node::Commits(n) => &n.head.id,
+        Node::Artifacts(n) => &n.head.id,
         Node::Conversation(n) => &n.head.id,
     }
 }

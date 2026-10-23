@@ -33,6 +33,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -88,7 +90,10 @@ import dev.jw.next.client.Navigator
 import dev.jw.next.client.Need
 import dev.jw.next.client.RemoveSheet
 import dev.jw.next.client.Screen
+import dev.jw.next.client.WorkspaceMenuRow
 import dev.jw.next.client.WorkspaceTarget
+import dev.jw.next.client.label
+import dev.jw.next.client.pendingArtifacts
 import dev.jw.next.client.WsAction
 import dev.jw.next.client.avisos
 import dev.jw.next.client.hasInk
@@ -527,6 +532,11 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         if (ws.panes.any { it.id == chatTarget } && screen.pane != chatTarget) set(nav.selectPane(state, chatTarget))
     }
     LaunchedEffect(chatOpen) { if (chatOpen != null) { delay(CHAT_FIELD_WAIT_MS); set(nav.spendChatOpen(latestState)) } }
+    // The `⋮` of the header (REQ-780) and the search of workspaces its first row opens; what waits for a verdict is the badge.
+    var headerMenu by remember(screen.id) { mutableStateOf(false) }
+    var finding by remember(screen.id) { mutableStateOf(false) }
+    val artifacts = rememberArtifacts(source, screen.id)
+    val waitingArtifacts = artifacts?.let { pendingArtifacts(it.items) } ?: 0
     var removing by remember(screen.id) { mutableStateOf<RemoveSheet?>(null) }
     // A shell asked for: the answer, then the pane once the workspace shows it (REQ-234, REQ-235).
     var asking by remember(screen.id) { mutableStateOf(false) }
@@ -578,21 +588,47 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
         Header(title, ws?.let { (if (it.branch != null) "⎇ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }, onTitleLongClick = { if (ws != null) { if (ws.chat != null) chatSheet = true else wsMenu = true } }) {
             Row {
-                if (chat != null) Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { chatSheet = true }.semantics { contentDescription = "Conversación" }, contentAlignment = Alignment.Center) {
-                    Mono("⋯", Palette.blue, 20, bold = true)
-                }
-                Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { set(nav.files(state, screen.id)) }.semantics { contentDescription = "Archivos" }, contentAlignment = Alignment.Center) {
-                    GlyphIcon(Glyph.Folder, Palette.blue, 20)
-                }
-                // A conversation of its own has no git: no changes to see (REQ-796).
-                if (chat == null) Box(
-                    Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable {
-                        ws?.views?.firstOrNull { it.kind == ViewKind.Diff }?.let { set(nav.selectPane(state, it.id)) } ?: askView(ViewKind.Diff, null)
-                    }.semantics { contentDescription = "Cambios" },
+            // A conversation of its own has its own sheet, `⋯`; the `⋮` menu stays for what every workspace has (REQ-817).
+            if (chat != null) Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { chatSheet = true }.semantics { contentDescription = "Conversación" }, contentAlignment = Alignment.Center) {
+                Mono("⋯", Palette.blue, 20, bold = true)
+            }
+            Box {
+                Box(
+                    Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { headerMenu = true }
+                        .semantics { contentDescription = "Menú del workspace" + if (waitingArtifacts > 0) ": $waitingArtifacts artefactos por revisar" else "" },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Mono("±", Palette.blue, 18, bold = true)
+                    Mono("⋮", Palette.fg, 20, bold = true)
+                    if (waitingArtifacts > 0) Box(
+                        Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp).defaultMinSize(minWidth = 16.dp)
+                            .background(Palette.yellow, RoundedCornerShape(8.dp)).padding(horizontal = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Mono("$waitingArtifacts", Palette.bg, 10, bold = true) }
                 }
+                DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }, containerColor = Palette.panel) {
+                    // A conversation of its own has no git: no changes to see (REQ-796).
+                    WorkspaceMenuRow.entries.filter { chat == null || it != WorkspaceMenuRow.Cambios }.forEach { row ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Mono(row.label(), Palette.fg, 14)
+                                    if (row == WorkspaceMenuRow.Artefactos && waitingArtifacts > 0) Mono("$waitingArtifacts", Palette.yellow, 12, bold = true)
+                                }
+                            },
+                            onClick = {
+                                headerMenu = false
+                                when (row) {
+                                    WorkspaceMenuRow.Cambiar -> finding = true
+                                    WorkspaceMenuRow.Archivos -> set(nav.files(state, screen.id))
+                                    WorkspaceMenuRow.Cambios ->
+                                        ws?.views?.firstOrNull { it.kind == ViewKind.Diff }?.let { set(nav.selectPane(state, it.id)) } ?: askView(ViewKind.Diff, null)
+                                    WorkspaceMenuRow.Artefactos -> set(nav.artifacts(state, screen.id))
+                                }
+                            },
+                        )
+                    }
+                }
+            }
             }
         }
         if (ws == null) {
@@ -727,6 +763,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             screen.pane?.let { source.write(it, line + "\r") }
         }
     }
+    if (finding) FindSheet(source, state, nav, dismiss = { finding = false }) { finding = false; set(it) }
     paneMenu?.let { held ->
         PaneMenuSheet(held, dismiss = { paneMenu = null }, rename = { naming = Naming.Pane(held.id, held.title); paneMenu = null }) {
             closeError = null

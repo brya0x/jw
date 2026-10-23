@@ -1,11 +1,12 @@
 //! What a client's `cmd` does. Runs without the hub lock held for anything slow.
 
 pub use contract::ErrorBody;
-use contract::{Cmd, ErrorCode, Outcome};
+use contract::{AttentionKind, Cmd, ErrorCode, Outcome};
 use contract::{False, True};
 use serde_json::Value;
 
 use crate::agents;
+use crate::artifacts;
 use crate::browse;
 use crate::changes;
 use crate::engine;
@@ -151,6 +152,36 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             commit,
         } => changes::open_diff(shared, &workspace, scope, commit.as_deref()),
         Cmd::OpenCommits { workspace } => changes::open_commits(shared, &workspace),
+        Cmd::ArtifactPublish {
+            workspace,
+            name,
+            title,
+            kind,
+            format,
+            text,
+            pane,
+        } => artifacts::publish(
+            shared,
+            artifacts::Publish {
+                workspace,
+                name,
+                title,
+                kind,
+                format,
+                text,
+                pane,
+            },
+        ),
+        Cmd::OpenArtifacts { workspace } => artifacts::open(shared, &workspace),
+        Cmd::ArtifactRead { id, n } => artifacts::read(shared, &id, n),
+        Cmd::ArtifactDecide {
+            id,
+            n,
+            hash,
+            verdict,
+            text,
+        } => artifacts::decide(shared, &id, n, &hash, verdict, text),
+        Cmd::ArtifactRm { id } => artifacts::rm(shared, &id),
         Cmd::RefreshDiff { node } => changes::refresh(shared, &node),
         Cmd::SetViewed { node, path, viewed } => changes::set_viewed(shared, &node, &path, viewed),
         Cmd::AgentEvent {
@@ -237,7 +268,8 @@ fn mark_seen(shared: &Shared, node: &str, rev: u64) -> Done {
     let mut core = shared.lock();
     let ended = |own: &mut Vec<crate::model::Own>| {
         let before = own.len();
-        own.retain(|o| !o.rev.is_some_and(|r| r <= rev));
+        // An artifact waits for a verdict, not for a look (REQ-791).
+        own.retain(|o| o.kind == AttentionKind::Artifact || !o.rev.is_some_and(|r| r <= rev));
         before != own.len()
     };
     let mut found = false;

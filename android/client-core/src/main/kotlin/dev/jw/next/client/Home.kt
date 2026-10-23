@@ -13,7 +13,7 @@ data class Mark(val glyph: String, val tone: Tone)
 enum class Tone { Danger, Warn, Plan, Good, Dim, Merged }
 
 private val urgency = listOf(
-    AttentionKind.Permission, AttentionKind.Question, AttentionKind.Plan, AttentionKind.CiFailed,
+    AttentionKind.Permission, AttentionKind.Question, AttentionKind.Plan, AttentionKind.Artifact, AttentionKind.CiFailed,
     AttentionKind.ShellDone, AttentionKind.Screen, AttentionKind.AgentDone, AttentionKind.Merged,
 )
 
@@ -21,6 +21,7 @@ fun Attention.mark(): Mark = when (kind) {
     AttentionKind.Permission -> Mark("!", Tone.Danger)
     AttentionKind.Question -> Mark("?", Tone.Warn)
     AttentionKind.Plan -> Mark("◆", Tone.Plan)
+    AttentionKind.Artifact -> Mark("▣", Tone.Merged) // cyan, as the terminal client draws it
     AttentionKind.CiFailed -> Mark("✗", Tone.Danger)
     AttentionKind.ShellDone -> if ((exitCode ?: 0) != 0) Mark("✗", Tone.Danger) else Mark("❯", Tone.Good)
     AttentionKind.Screen -> Mark("…", Tone.Dim)
@@ -35,7 +36,7 @@ fun Attention.need(): Need = when (kind) {
     AttentionKind.Permission, AttentionKind.Question, AttentionKind.Plan -> Need.Decide
     AttentionKind.CiFailed -> Need.Failed
     AttentionKind.ShellDone -> if ((exitCode ?: 0) != 0) Need.Failed else Need.Review
-    AttentionKind.Screen, AttentionKind.AgentDone, AttentionKind.Merged -> Need.Review
+    AttentionKind.Screen, AttentionKind.AgentDone, AttentionKind.Merged, AttentionKind.Artifact -> Need.Review
 }
 
 /** What an attention says, in Spanish like the rest of the app. */
@@ -43,6 +44,7 @@ fun Attention.what(): String = when (kind) {
     AttentionKind.Permission -> "pide permiso"
     AttentionKind.Question -> "hace una pregunta"
     AttentionKind.Plan -> "plan listo"
+    AttentionKind.Artifact -> "artefacto por revisar"
     AttentionKind.CiFailed -> "CI falló"
     AttentionKind.ShellDone -> "comando terminó · salió ${exitCode ?: 0}"
     AttentionKind.Screen -> "espera en pantalla"

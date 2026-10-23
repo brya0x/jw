@@ -20,6 +20,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import dev.jw.next.client.ClientState
+import dev.jw.next.client.LinkFail
 import dev.jw.next.client.Look
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Pairing
@@ -42,6 +43,7 @@ private sealed interface Mode {
 
 class MainActivity : ComponentActivity() {
     private val links by lazy { LinkStore(this) }
+    private val artifactStore by lazy { ArtifactStore(this) }
 
     private fun open(linkText: String, back: Mode): Mode {
         val link = parsePairLink(linkText, BuildConfig.LINK_SCHEME) ?: return Mode.Paste(back, error = true)
@@ -132,6 +134,8 @@ class MainActivity : ComponentActivity() {
             open = { m.current?.let { go(Mode.Running(it, m.from)) } },
             forget = { p ->
                 links.update { it.remove(p.device) }
+                // A PC that is forgotten leaves nothing of its artifacts on this phone (REQ-784).
+                artifactStore.wipe(p.device)
                 val dropped = m.current?.device == p.device
                 if (dropped) m.current?.close()
                 go(if (links.load().pcs.isEmpty()) Mode.Welcome else Mode.Pcs(if (dropped) null else m.current, from = m.from))
@@ -148,6 +152,8 @@ class MainActivity : ComponentActivity() {
     private fun Running(source: AppSource, start: Screen, store: SeenStore, folds: FoldedStore, look: Look, osDark: Boolean, setLook: (Look) -> Unit, go: (Mode) -> Unit) {
         val link = source as? WsLinkSource
         val ui = link?.ui?.value
+        // A phone the PC revoked keeps nothing of its artifacts (REQ-784); forgetting a PC does the same.
+        LaunchedEffect(ui) { if (link != null && ui is LinkUi.Failed && ui.fail == LinkFail.Revoked) link.device?.let(artifactStore::wipe) }
         when (ui) {
             is LinkUi.Pairing -> return PairingScreen(ui) {
                 link.close()
@@ -161,7 +167,14 @@ class MainActivity : ComponentActivity() {
             )
             else -> {}
         }
-        if (link?.offline?.value == true) return OfflineScreen(link.name, link::retryNow) { go(Mode.Pcs(link)) }
+        // Back at the offline screen the next time there is no link, not at the list it was left on.
+        var showSaved by remember(source, link?.offline?.value) { mutableStateOf(false) }
+        val copies = remember(source) { ArtifactCopyBox(artifactStore, link?.device ?: "fixture") }
+        if (link?.offline?.value == true) {
+            // With no link the artifacts it opened before are still there, read only (REQ-783).
+            if (showSaved) return SavedArtifactsScreen(copies.copies) { showSaved = false }
+            return OfflineScreen(link.name, link::retryNow, copies.copies.copies.size, { showSaved = true }) { go(Mode.Pcs(link)) }
+        }
         val nav = remember(source) { Navigator(source) }
         // A record from another epoch is not trusted: it is emptied before first use.
         // What is folded is kept for the PC it is folded on, by its device.
@@ -177,6 +190,8 @@ class MainActivity : ComponentActivity() {
             is Screen.Archived -> ArchivedScreen(source, state, nav) { state = it }
             is Screen.Folders -> FoldersScreen(source, state, nav) { state = it }
             is Screen.Files -> FilesScreen(source, state, screen, nav) { state = it }
+            is Screen.Artifacts -> ArtifactsScreen(source, state, screen, nav) { state = it }
+            is Screen.Artifact -> ArtifactScreen(source, state, screen, nav, copies) { state = it }
             is Screen.Settings -> {
                 val pc = link?.let { PcEntry(it.name ?: "este PC", source.status, links.load().pcs.size) { go(Mode.Pcs(it, from = Screen.Settings)) } }
                 SettingsScreen(state, nav, look, osDark, pc, setLook) { state = it }
