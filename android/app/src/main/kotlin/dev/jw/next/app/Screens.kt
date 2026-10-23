@@ -47,6 +47,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,6 +70,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
+import dev.jw.next.client.ChatAction
+import dev.jw.next.client.ChatOpen
 import dev.jw.next.client.AvisosTab
 import dev.jw.next.client.JobsMark
 import dev.jw.next.client.endNotice
@@ -126,6 +129,9 @@ import kotlinx.coroutines.launch
 private val Gutter = 16.dp
 private val MarkColumn = 28.dp
 private const val PANE_WAIT_MS = 5_000L
+
+/** How long the field of a conversation just made, resumed or promoted is waited for before the phone stops (REQ-828). */
+private const val CHAT_FIELD_WAIT_MS = 50_000L
 
 /** How many lines the composer grows to before it scrolls. */
 private const val COMPOSER_LINES = 5
@@ -203,7 +209,7 @@ private fun SearchButton(open: () -> Unit) {
 /** Opens the sheet of a workspace made new, as a long press on the title does. */
 @Composable
 private fun PlusButton(open: () -> Unit) {
-    Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = "Workspace nuevo" }, contentAlignment = Alignment.Center) {
+    Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = "Nuevo" }, contentAlignment = Alignment.Center) {
         Mono("+", Palette.blue, 20, bold = true)
     }
 }
@@ -266,8 +272,13 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var moving by remember { mutableStateOf<MoveTo?>(null) }
     var groupOpen by remember { mutableStateOf<Id?>(null) }
     var newGroup by remember { mutableStateOf(false) }
-    // A long press on the title, or the `+`: a folder to open (REQ-201); a worktree is made from a workspace (REQ-213).
+    // A long press on the title, or the `+`: a folder to open, a group, a conversation of its own (REQ-201, REQ-827); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
+    // The sheet of a conversation of its own (a long press on its row), taking it to a project, and the conversation just made or promoted that waits to be opened (REQ-828, REQ-830, REQ-831).
+    var chatSheet by remember { mutableStateOf<Id?>(null) }
+    var promoting by remember { mutableStateOf<Id?>(null) }
+    var promoteError by remember { mutableStateOf<String?>(null) }
+    var pendingChat by remember { mutableStateOf<ChatOpen?>(null) }
     var finding by remember { mutableStateOf(false) }
     var worktree by remember { mutableStateOf<WorktreeAt?>(null) }
     var project by remember { mutableStateOf<String?>(null) }
@@ -284,7 +295,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
                         )
                     }
                 })
-            } else Header("jwn · ${session.name}", source.status, action = {
+            } else Header("jwn · ${session.name}", source.status, onTitleLongClick = { newMenu = true }, action = {
                 SearchButton { finding = true }
                 PlusButton { newMenu = true }
                 BellButton(waiting.size, jobsMark, now) { set(nav.openAvisos(state)) }
@@ -294,7 +305,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
                 if (onAvisos) AvisosBody(session, waiting, state, nav, set, now) { jobOpen = it.id } else WorkspaceList(
                     homeItems(session, state.seen, state.folded), nav, state, set, now,
                     removing = { source.say("ya se está quitando") }, create = { newMenu = true },
-                    holdGroup = { groupOpen = it }, newGroup = { newGroup = true },
+                    holdGroup = { groupOpen = it }, holdChat = { chatSheet = it },
                 ) { id ->
                     session.workspaces.firstOrNull { it.id == id }?.let { menu = session.target(it) }
                 }
@@ -313,12 +324,43 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
         moving?.let { m -> MoveSheet(source, m, unfold = { set(state.copy(folded = state.folded - it)) }) { moving = null } }
         session.groups.firstOrNull { it.id == groupOpen }?.let { GroupSheet(source, session, it) { groupOpen = null } }
         if (newGroup) NewGroupSheet(source, session.groups) { newGroup = false }
+        chatSheet?.let { id ->
+            session.chat(id)?.let { w ->
+                ChatSheet(w.name, w.chat?.last != null, dismiss = { chatSheet = null }) { action ->
+                    when (action) {
+                        ChatAction.Rename -> naming = Naming.Workspace(w.id, w.name)
+                        ChatAction.Promote -> { promoteError = null; promoting = w.id }
+                        ChatAction.Archive -> source.archiveChat(w.id) { r -> r.onFailure { source.say("✗ ${it.message ?: "el PC no pudo archivar la conversación"}") } }
+                    }
+                }
+            }
+        }
+        promoting?.let { id ->
+            session.chat(id)?.let { w ->
+                PromoteSheet(session, w.name, promoteError, dismiss = { promoting = null; promoteError = null }) { target ->
+                    promoteError = null
+                    source.promoteChat(w.id, target.id) { r ->
+                        r.onSuccess { p -> promoting = null; pendingChat = ChatOpen(target.id, p.pane, p.text) }
+                            .onFailure { promoteError = it.message ?: "el PC no pudo llevar la conversación" }
+                    }
+                }
+            }
+        }
+        OpenChatWhenShown(source, pendingChat, state, nav, set) { pendingChat = null }
         naming?.let { RenameSheet(source, it) { naming = null } }
         removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null } }
         session.jobs.firstOrNull { it.id == jobOpen }?.let { JobSheet(source, session, it, state, nav, set, now) { jobOpen = null } }
         Notice(source)
         if (finding) FindSheet(source, state, nav, dismiss = { finding = false }) { finding = false; set(it) }
-        if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
+        if (newMenu) NewWorkspaceSheet(
+            dismiss = { newMenu = false },
+            folders = { newMenu = false; set(nav.show(state, Screen.Folders)) },
+            group = { newMenu = false; newGroup = true },
+            chat = {
+                newMenu = false
+                source.chatNew { r -> r.onSuccess { pendingChat = ChatOpen(it, null, null) }.onFailure { source.say("✗ ${it.message ?: "el PC no pudo hacer la conversación"}") } }
+            },
+        )
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
         project?.let { ProjectDialog(source, it) { project = null } }
     }
@@ -339,7 +381,7 @@ internal fun Section(text: String, onLongClick: (() -> Unit)? = null, indent: Dp
 @Composable
 private fun WorkspaceList(
     items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, now: Long, removing: () -> Unit, create: () -> Unit,
-    holdGroup: (Id) -> Unit, newGroup: () -> Unit, hold: (Id) -> Unit,
+    holdGroup: (Id) -> Unit, holdChat: (Id) -> Unit, hold: (Id) -> Unit,
 ) {
     // The number before a row is its place among the rows that are drawn (REQ-697): a folded group leaves no gap.
     val numbers = remember(items) { items.filterIsInstance<HomeItem.Row>().mapIndexed { i, r -> r.row.id to i + 1 }.toMap() }
@@ -351,6 +393,13 @@ private fun WorkspaceList(
                 is HomeItem.Group -> GroupRow(item, toggle = { set(nav.toggleGroup(state, item.id)) }, hold = { holdGroup(item.id) })
                 is HomeItem.Empty -> EmptyGroup()
                 HomeItem.Ungrouped -> Section("sin grupo")
+                is HomeItem.Chats -> Section("conversaciones · ${item.count}")
+                is HomeItem.Chat -> ChatRow(
+                    item.row, current = item.row.id == state.last,
+                    open = { set(nav.openWorkspace(state, item.row.id)) }, hold = { holdChat(item.row.id) },
+                )
+                HomeItem.NoChats -> NoChatsLine()
+                is HomeItem.ArchivedLink -> ArchivedLinkRow(item.count) { set(nav.show(state, Screen.Archived)) }
                 is HomeItem.Row -> WorkspaceRow(
                     item.row, number = numbers[item.row.id] ?: item.row.number, grouped = item.grouped, current = item.row.id == state.last, now = now,
                     open = { if (item.row.removing) removing() else set(nav.openWorkspace(state, item.row.id)) },
@@ -359,7 +408,6 @@ private fun WorkspaceList(
                 )
             }
         }
-        item { NewGroupLine(newGroup) }
         item { Legend(create) }
     }
 }
@@ -467,6 +515,23 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var moving by remember { mutableStateOf<MoveTo?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
+    // A conversation of its own: its sheet (`⋯`, or a long press on the title) and taking it to a project (REQ-830, REQ-831). One that is archived, from here or from the PC, leaves this screen.
+    var chatSheet by remember(screen.id) { mutableStateOf(false) }
+    var promoting by remember(screen.id) { mutableStateOf(false) }
+    var promoteError by remember(screen.id) { mutableStateOf<String?>(null) }
+    var pendingChat by remember(screen.id) { mutableStateOf<ChatOpen?>(null) }
+    val chat = ws?.chat
+    LaunchedEffect(version, screen) { nav.leaveArchivedChat(state).let { if (it != state) set(it) } }
+    // A conversation just made, resumed or promoted: the panel the PC named (else the first) is the one shown, and its field takes the focus
+    // once it has its conversation, with the summary in it (REQ-828, REQ-830); the wait ends after a while whatever happens.
+    val chatOpen = state.chatOpen?.takeIf { it.workspace == screen.id }
+    val chatTarget = chatOpen?.let { it.pane ?: ws?.panes?.firstOrNull()?.id }
+    val latestState by rememberUpdatedState(state)
+    LaunchedEffect(chatOpen, version, ws?.panes?.map { it.id }) {
+        if (chatOpen == null || ws == null || chatTarget == null) return@LaunchedEffect
+        if (ws.panes.any { it.id == chatTarget } && screen.pane != chatTarget) set(nav.selectPane(state, chatTarget))
+    }
+    LaunchedEffect(chatOpen) { if (chatOpen != null) { delay(CHAT_FIELD_WAIT_MS); set(nav.spendChatOpen(latestState)) } }
     // The `⋮` of the header (REQ-780) and the search of workspaces its first row opens; what waits for a verdict is the badge.
     var headerMenu by remember(screen.id) { mutableStateOf(false) }
     var finding by remember(screen.id) { mutableStateOf(false) }
@@ -521,7 +586,12 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
-        Header(title, ws?.let { (if (it.branch != null) "⎇ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }, onTitleLongClick = { if (ws != null) wsMenu = true }) {
+        Header(title, ws?.let { (if (it.branch != null) "⎇ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }, onTitleLongClick = { if (ws != null) { if (ws.chat != null) chatSheet = true else wsMenu = true } }) {
+            Row {
+            // A conversation of its own has its own sheet, `⋯`; the `⋮` menu stays for what every workspace has (REQ-830).
+            if (chat != null) Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { chatSheet = true }.semantics { contentDescription = "Conversación" }, contentAlignment = Alignment.Center) {
+                Mono("⋯", Palette.blue, 20, bold = true)
+            }
             Box {
                 Box(
                     Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { headerMenu = true }
@@ -536,7 +606,8 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                     ) { Mono("$waitingArtifacts", Palette.bg, 10, bold = true) }
                 }
                 DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }, containerColor = Palette.panel) {
-                    WorkspaceMenuRow.entries.forEach { row ->
+                    // A conversation of its own has no git: no changes to see (REQ-809).
+                    WorkspaceMenuRow.entries.filter { chat == null || it != WorkspaceMenuRow.Cambios }.forEach { row ->
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -557,6 +628,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                         )
                     }
                 }
+            }
             }
         }
         if (ws == null) {
@@ -603,7 +675,10 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         if (pane != null && convId != null) {
             when (val conv = tabConv) {
                 null -> Box(Modifier.weight(1f).padding(Gutter)) { PaneSkeleton() }
-                else -> ConversationPane(source, conv, pane, screen.id, ws.path, ws.branch, settingsAsked, draft) { set(nav.spendDraft(state)) }
+                else -> ConversationPane(
+                    source, conv, pane, screen.id, ws.path, ws.branch, settingsAsked, draft,
+                    focusField = chatOpen != null && screen.pane == chatTarget, fieldText = chatOpen?.text, fieldDone = { set(nav.spendChatOpen(state)) },
+                ) { set(nav.spendDraft(state)) }
             }
             return@Column
         }
@@ -712,6 +787,25 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     project?.let { ProjectDialog(source, it) { project = null } }
     removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null; set(nav.back(state)) } }
     naming?.let { RenameSheet(source, it) { naming = null } }
+    if (chatSheet && ws != null && chat != null) {
+        ChatSheet(ws.name, chat.last != null, dismiss = { chatSheet = false }) { action ->
+            when (action) {
+                ChatAction.Rename -> naming = Naming.Workspace(screen.id, ws.name)
+                ChatAction.Promote -> { promoteError = null; promoting = true }
+                ChatAction.Archive -> source.archiveChat(screen.id) { r -> r.onSuccess { set(nav.back(state)) }.onFailure { source.say("✗ ${it.message ?: "el PC no pudo archivar la conversación"}") } }
+            }
+        }
+    }
+    if (promoting && ws != null) {
+        PromoteSheet(source.session(), ws.name, promoteError, dismiss = { promoting = false; promoteError = null }) { target ->
+            promoteError = null
+            source.promoteChat(screen.id, target.id) { r ->
+                r.onSuccess { p -> promoting = false; pendingChat = ChatOpen(target.id, p.pane, p.text) }
+                    .onFailure { promoteError = it.message ?: "el PC no pudo llevar la conversación" }
+            }
+        }
+    }
+    OpenChatWhenShown(source, pendingChat, state, nav, set) { pendingChat = null }
     closing?.let { sheet ->
         ClosePaneSheet(sheet, closeError, closeBusy, cancel = { closing = null }) {
             closeBusy = true

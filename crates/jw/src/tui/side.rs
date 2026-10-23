@@ -21,6 +21,14 @@ pub enum Side {
     /// What an open group with no workspace says.
     Empty,
     Workspace(usize),
+    /// The heading of the conversations of their own, with how many are live (REQ-818).
+    Chats(usize),
+    /// A live chat, at an index into the session's workspaces.
+    Chat(usize),
+    /// What the zone says while it has no live chat.
+    NoChats,
+    /// How many chats are archived, when some are.
+    Archived(usize),
 }
 
 /// `list` as rows. With no group it is what REQ-219 to REQ-223 say. With groups, the row of each
@@ -28,9 +36,44 @@ pub enum Side {
 /// (but with no `carpetas`) or `vacío`; last, under `sin grupo`, the workspaces of no group (or of
 /// a group that is not listed).
 pub fn rows(list: &[WorkspaceSummary], groups: &[Group], folded: &HashSet<String>) -> Vec<Side> {
-    let all: Vec<usize> = (0..list.len()).collect();
+    // A chat is no repository, folder or member of a group: it has its own zone, last (REQ-810).
+    let all: Vec<usize> = (0..list.len())
+        .filter(|&i| list[i].chat.is_none())
+        .collect();
+    let mut rows = workspace_rows(list, groups, folded, &all);
+    rows.extend(chat_rows(list));
+    rows
+}
+
+/// The zone of the conversations of their own, in the order the daemon sent them (REQ-818): the
+/// live ones, and a line for the archived, which have no row of their own.
+fn chat_rows(list: &[WorkspaceSummary]) -> Vec<Side> {
+    let chat = |i: &usize| list[*i].chat.as_ref();
+    let live: Vec<usize> = (0..list.len())
+        .filter(|i| chat(i).is_some_and(|c| !c.archived))
+        .collect();
+    let archived = (0..list.len())
+        .filter(|i| chat(i).is_some_and(|c| c.archived))
+        .count();
+    let mut rows = vec![Side::Chats(live.len())];
+    if live.is_empty() {
+        rows.push(Side::NoChats);
+    }
+    rows.extend(live.into_iter().map(Side::Chat));
+    if archived > 0 {
+        rows.push(Side::Archived(archived));
+    }
+    rows
+}
+
+fn workspace_rows(
+    list: &[WorkspaceSummary],
+    groups: &[Group],
+    folded: &HashSet<String>,
+    all: &[usize],
+) -> Vec<Side> {
     if groups.is_empty() {
-        return rows_of(list, &all, true);
+        return rows_of(list, all, true);
     }
     let mut rows = Vec::new();
     for (at, g) in groups.iter().enumerate() {
@@ -126,6 +169,7 @@ mod tests {
             working: false,
             removing: false,
             group: None,
+            chat: None,
         }
     }
 
@@ -137,8 +181,75 @@ mod tests {
                 Side::Group(g) => format!("@{g}"),
                 Side::Empty => "vacío".into(),
                 Side::Workspace(i) => i.to_string(),
+                Side::Chats(n) => format!("chats {n}"),
+                Side::Chat(i) => format!("c{i}"),
+                Side::NoChats => "ninguna".into(),
+                Side::Archived(n) => format!("archivadas {n}"),
             })
             .collect()
+    }
+
+    /// The rows above the zone of the chats: what there was before it.
+    fn above(rows: &[Side]) -> Vec<String> {
+        let at = rows
+            .iter()
+            .position(|r| matches!(r, Side::Chats(_)))
+            .expect("the zone is always there");
+        heads(&rows[..at])
+    }
+
+    fn chat(archived: bool) -> WorkspaceSummary {
+        let mut w = ws(Folder, None);
+        w.chat = Some(contract::ChatInfo {
+            archived,
+            active: 0,
+            last: None,
+        });
+        w
+    }
+
+    /// REQ-818: the chats leave the repositories, `carpetas` and the groups, and come last in the
+    /// order the daemon sent them, the archived as a line and with no row of their own.
+    #[test]
+    fn the_chats_are_a_zone_after_everything_and_the_archived_are_a_line() {
+        let list = [
+            chat(false),
+            in_group(ws(Folder, None), "g1"),
+            chat(true),
+            ws(Folder, None),
+            chat(false),
+        ];
+        let rows = rows(&list, &[group("g1")], &HashSet::new());
+        assert_eq!(
+            heads(&rows),
+            [
+                "@0",
+                "1",
+                "sin grupo",
+                "3",
+                "chats 2",
+                "c0",
+                "c4",
+                "archivadas 1"
+            ]
+        );
+    }
+
+    #[test]
+    fn with_no_chat_the_zone_says_how_to_make_one_and_with_no_workspace_it_is_all_there_is() {
+        assert_eq!(
+            heads(&rows(&[ws(Folder, None)], &[], &HashSet::new())),
+            ["0", "chats 0", "ninguna"]
+        );
+        assert_eq!(
+            heads(&rows(&[], &[], &HashSet::new())),
+            ["chats 0", "ninguna"]
+        );
+        // only archived chats: no live one, and the line says how many are kept
+        assert_eq!(
+            heads(&rows(&[chat(true), chat(true)], &[], &HashSet::new())),
+            ["chats 0", "ninguna", "archivadas 2"]
+        );
     }
 
     #[test]
@@ -152,7 +263,7 @@ mod tests {
             ws(Folder, None),
         ];
         assert_eq!(
-            heads(&rows(&list, &[], &HashSet::new())),
+            above(&rows(&list, &[], &HashSet::new())),
             ["0", "1", "# tools", "2", "# carpetas", "3", "4"]
         );
     }
@@ -160,8 +271,8 @@ mod tests {
     #[test]
     fn folders_alone_have_no_heading() {
         let list = [ws(Folder, None), ws(Folder, None)];
-        assert_eq!(heads(&rows(&list, &[], &HashSet::new())), ["0", "1"]);
-        assert!(rows(&[], &[], &HashSet::new()).is_empty());
+        assert_eq!(above(&rows(&list, &[], &HashSet::new())), ["0", "1"]);
+        assert!(above(&rows(&[], &[], &HashSet::new())).is_empty());
     }
 
     #[test]
@@ -172,7 +283,7 @@ mod tests {
             ws(Worktree, Some("/r/b")),
         ];
         assert_eq!(
-            heads(&rows(&list, &[], &HashSet::new())),
+            above(&rows(&list, &[], &HashSet::new())),
             ["# a", "0", "1", "# b", "2"]
         );
     }
@@ -183,7 +294,7 @@ mod tests {
         root.path = "/r/loom".into();
         let list = [root, ws(Worktree, Some("/r/loom")), ws(Folder, None)];
         assert_eq!(
-            heads(&rows(&list, &[], &HashSet::new())),
+            above(&rows(&list, &[], &HashSet::new())),
             ["0", "1", "# carpetas", "2"]
         );
     }
@@ -213,7 +324,7 @@ mod tests {
         ];
         let groups = [group("g1"), group("g2"), group("g3")];
         assert_eq!(
-            heads(&rows(&list, &groups, &HashSet::new())),
+            above(&rows(&list, &groups, &HashSet::new())),
             [
                 "@0",
                 "0",
@@ -240,12 +351,12 @@ mod tests {
         let groups = [group("g1"), group("g2")];
         let folded: HashSet<String> = ["g1".to_owned(), "g2".to_owned()].into();
         assert_eq!(
-            heads(&rows(&list, &groups, &folded)),
+            above(&rows(&list, &groups, &folded)),
             ["@0", "@1", "sin grupo", "2"]
         );
         // an empty group that is folded has no `vacío`
         assert_eq!(
-            heads(&rows(&[], &[group("g1")], &["g1".to_owned()].into())),
+            above(&rows(&[], &[group("g1")], &["g1".to_owned()].into())),
             ["@0"]
         );
     }
@@ -254,11 +365,11 @@ mod tests {
     fn a_workspace_whose_group_is_not_listed_is_in_none_and_with_no_group_the_list_is_as_before() {
         let list = [in_group(ws(Folder, None), "gone"), ws(Folder, None)];
         assert_eq!(
-            heads(&rows(&list, &[group("g1")], &HashSet::new())),
+            above(&rows(&list, &[group("g1")], &HashSet::new())),
             ["@0", "vacío", "sin grupo", "0", "1"]
         );
         assert_eq!(
-            heads(&rows(&list, &[], &HashSet::new())),
+            above(&rows(&list, &[], &HashSet::new())),
             ["0", "1"],
             "a workspace that names a group the session does not list is drawn as without groups"
         );

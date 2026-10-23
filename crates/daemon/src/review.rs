@@ -406,6 +406,7 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
             ports: None,
             review: Some(review),
             github: None,
+            chat: None,
         },
     );
     if let Err(e) = made {

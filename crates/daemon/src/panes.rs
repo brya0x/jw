@@ -223,8 +223,24 @@ pub fn close_pane(shared: &Shared, pane: &Id) -> Done {
         .iter_mut()
         .find(|w| w.panes.iter().any(|p| p.id == *pane))
         .ok_or_else(|| no_pane(pane))?;
+    // A chat keeps the id of the conversation of the panel that goes, so that it can be resumed
+    // (REQ-811); with its last panel gone it is archived, or discarded when nothing was said.
+    let session = ws
+        .panes
+        .iter()
+        .find(|p| p.id == *pane)
+        .and_then(|p| p.resume.as_ref()?.get(2).cloned());
+    if let (Some(chat), Some(id)) = (ws.chat.as_mut(), session) {
+        chat.session = Some(id);
+    }
     ws.panes.retain(|p| p.id != *pane);
+    let last_of_a_chat = ws.chat.is_some() && ws.panes.is_empty();
+    let workspace = ws.id.clone();
     core.refresh();
+    drop(core);
+    if last_of_a_chat {
+        crate::chats::archive(shared, &workspace)?;
+    }
     Ok(None)
 }
 
@@ -263,6 +279,7 @@ struct Wanted {
     cwd: String,
     resume: Option<Vec<String>>,
     root: String,
+    chat: bool,
 }
 
 /// Start the shells of the panes a restored session remembers; a pane whose shell cannot
@@ -283,6 +300,7 @@ pub fn restore(shared: &Shared) {
                         cwd,
                         resume: p.resume.clone(),
                         root: w.path.clone(),
+                        chat: w.chat.is_some(),
                     }
                 })
             })
@@ -304,6 +322,7 @@ pub fn restore(shared: &Shared) {
         cwd,
         resume,
         root,
+        chat,
     } in wanted
     {
         let shell = if saved_shell.is_empty() {
@@ -320,8 +339,13 @@ pub fn restore(shared: &Shared) {
         if resume.is_some() {
             resumed.push(id.clone());
         }
+        // A chat that said nothing has no transcript: it comes back as an empty conversation and
+        // not as a shell (REQ-814).
+        let program = resume
+            .clone()
+            .or_else(|| chat.then(|| vec!["claude".to_owned()]));
         let setup = shared.lock().integration_for(&shell);
-        let launched = with_agent_hooks(resume.as_deref(), hooks.as_deref());
+        let launched = with_agent_hooks(program.as_deref(), hooks.as_deref());
         let pane_env: Vec<_> = env.iter().cloned().chain(workspace_dir(&root)).collect();
         match pty::spawn(
             &id,

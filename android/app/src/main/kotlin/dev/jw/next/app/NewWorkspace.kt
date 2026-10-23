@@ -74,12 +74,15 @@ private fun OpenWhenShown(source: AppSource, id: Id?, state: ClientState, nav: N
     LaunchedEffect(version, id) { if (id != null) nav.openWhenShown(state, id)?.let(set) }
 }
 
-/** What a long press on the title of Home, or its `+`, offers (REQ-201). */
+/** What a long press on the title of Home, or its `+`, offers: a folder of the PC, a group and a conversation of its own (REQ-201, REQ-827). */
 @Composable
-internal fun BoxScope.NewWorkspaceSheet(dismiss: () -> Unit, folders: () -> Unit) {
+internal fun BoxScope.NewWorkspaceSheet(dismiss: () -> Unit, folders: () -> Unit, group: () -> Unit, chat: () -> Unit) {
     Sheet(dismiss) {
-        Mono("workspace nuevo", Palette.fg, 14, bold = true)
+        Mono("nuevo", Palette.fg, 14, bold = true)
         SheetAction("o", "abrir una carpeta del PC", click = folders)
+        SheetAction("＋", "grupo nuevo…", click = group)
+        SheetAction("✦", "conversación nueva", Palette.green, click = chat)
+        Mono("Sin carpeta ni rama: se abre y se escribe.", Palette.dim, 11, lines = 2)
         Mono("Un worktree se hace, o se abren los que ya existen, con una pulsación larga sobre un workspace.", Palette.dim, 12, lines = 3)
     }
 }

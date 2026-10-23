@@ -362,7 +362,8 @@
         "review": { "$ref": "#/$defs/Review" },
         "working": { "type": "boolean" },
         "removing": { "type": "boolean" },
-        "group": { "$ref": "#/$defs/Id" }
+        "group": { "$ref": "#/$defs/Id" },
+        "chat": { "$ref": "#/$defs/ChatInfo" }
       }
     },
     "Group": {
@@ -394,6 +395,11 @@
       "type": "object",
       "required": ["pr", "base"],
       "properties": { "pr": { "type": "integer", "minimum": 1 }, "base": { "type": "string" } }
+    },
+    "ChatInfo": {
+      "type": "object",
+      "required": ["active"],
+      "properties": { "archived": { "type": "boolean" }, "active": { "type": "integer", "minimum": 0 }, "last": { "type": "string", "maxLength": 80 } }
     },
     "SplitDir": { "enum": ["row", "col"] },
     "Layout": {
@@ -495,7 +501,8 @@
             "layout": { "$ref": "#/$defs/Layout" },
             "views": { "type": "array", "items": { "$ref": "#/$defs/ViewSummary" }, "minItems": 1 },
             "review": { "$ref": "#/$defs/Review" },
-            "removing": { "type": "boolean" }
+            "removing": { "type": "boolean" },
+            "chat": { "$ref": "#/$defs/ChatInfo" }
           }
         },
         {
@@ -653,6 +660,11 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "move_to_group" }, "workspace": { "$ref": "#/$defs/Id" }, "group": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "group", "delta"], "properties": { "cmd": { "const": "move_group" }, "group": { "$ref": "#/$defs/Id" }, "delta": { "type": "integer" } } },
         { "type": "object", "required": ["cmd", "workspace", "delta"], "properties": { "cmd": { "const": "move_repo" }, "workspace": { "$ref": "#/$defs/Id" }, "delta": { "type": "integer" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "chat_new" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "archive_chat" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "resume_chat" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "delete_chat" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace", "to"], "properties": { "cmd": { "const": "promote_chat" }, "workspace": { "$ref": "#/$defs/Id" }, "to": { "$ref": "#/$defs/Id" }, "summary": { "type": "boolean" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "cancel" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "pane", "dir", "by"], "properties": { "cmd": { "const": "grow_pane" }, "pane": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" }, "by": { "type": "integer", "minimum": -800, "maximum": 800 } } },

@@ -255,6 +255,31 @@ pub enum Cmd {
         workspace: Id,
         delta: i32,
     },
+    /// Make a conversation of its own (N173, REQ-807): an empty folder under the state directory, a
+    /// workspace with `chat` and one conversation panel in it. The reply is `{workspace}`.
+    ChatNew {},
+    /// Close a chat's panel and keep the chat (REQ-811); a chat with no message is removed instead
+    /// and the reply is `{discarded: true}`.
+    ArchiveChat {
+        workspace: Id,
+    },
+    /// Open a panel again in an archived chat's folder, on its saved session (REQ-812). The reply is `{pane}`.
+    ResumeChat {
+        workspace: Id,
+    },
+    /// Remove a chat's folder and the chat itself (REQ-813); Claude's own transcripts are not touched.
+    DeleteChat {
+        workspace: Id,
+    },
+    /// Start a new conversation in the workspace `to` and leave the chat as it was (REQ-816). The reply
+    /// is `{pane, text}`: `text` is the summary of the chat for the client's field, unless `summary` is
+    /// false.
+    PromoteChat {
+        workspace: Id,
+        to: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<bool>,
+    },
     /// Give a workspace a name to be shown by; an empty name brings back the one it had
     /// (the folder's name, or `repo: branch` for a worktree). Its folder is not touched.
     RenameWorkspace {
@@ -732,6 +757,23 @@ pub struct Workspace {
     /// A worktree is being removed: nothing can be done with the workspace (REQ-651).
     #[serde(default, skip_serializing_if = "is_false")]
     pub removing: bool,
+    /// The workspace is a conversation of its own (REQ-805).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatInfo>,
+}
+
+/// What makes a workspace a conversation of its own, with what Home draws of it so that no
+/// conversation has to be opened for that (REQ-805): its place in the order and its last line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatInfo {
+    /// The panel is closed and the chat waits to be resumed (REQ-811).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
+    /// When the last item was added to its conversation, in seconds: a chat is ordered by it.
+    pub active: u64,
+    /// The text of that item on one line, clipped to 80 characters; absent while nothing was said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<String>,
 }
 
 /// What makes a workspace the review of a pull request: its number and the branch the pull
@@ -1203,6 +1245,9 @@ pub struct WorkspaceSummary {
     /// The group of the workspace's repository, when it has one (REQ-684).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<Id>,
+    /// The workspace is a conversation of its own (REQ-805).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatInfo>,
 }
 
 fn is_false(b: &bool) -> bool {

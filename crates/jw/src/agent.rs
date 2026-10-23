@@ -79,6 +79,9 @@ fn usage_of(cmd: &str) -> String {
         "group" => format!(
             "usage: {b} group ls [--json]\n       {b} group new <name>\n       {b} group rename <group> <name>\n       {b} group rm <group>\n       {b} group move <workspace> [<group>]"
         ),
+        "chat" => format!(
+            "usage: {b} chat new [--json]\n       {b} chat archive <chat>\n       {b} chat resume <chat>\n       {b} chat rm <chat>\n       {b} chat promote <chat> <workspace> [--no-summary]"
+        ),
         "artifact" => format!(
             "usage: {b} artifact publish <file> [--name N] [--title T] [--kind prototype|document|report|spec] [--wait [--timeout SECONDS]]\n       {b} artifact ls [<workspace>] [--json]\n       {b} artifact wait <id> [--timeout SECONDS]\n       {b} artifact rm <id>"
         ),
@@ -104,6 +107,11 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("group", ["rename", rest @ ..]) => group_rename(rest),
         ("group", ["rm", rest @ ..]) => group_rm(rest),
         ("group", ["move", rest @ ..]) => group_move(rest),
+        ("chat", ["new", rest @ ..]) => chat_new(rest),
+        ("chat", ["archive", rest @ ..]) => chat_archive(rest),
+        ("chat", ["resume", rest @ ..]) => chat_resume(rest),
+        ("chat", ["rm", rest @ ..]) => chat_rm(rest),
+        ("chat", ["promote", rest @ ..]) => chat_promote(rest),
         ("pane", ["ls", rest @ ..]) => pane_ls(rest),
         ("pane", ["open", rest @ ..]) => pane_open(rest),
         ("pane", ["close", rest @ ..]) => pane_close(rest),
@@ -512,6 +520,9 @@ fn ls(args: &[&str]) -> Out {
                 if let Some(g) = group_name(w, &groups) {
                     row["group"] = json!(g);
                 }
+                if let Some(c) = &w.chat {
+                    row["chat"] = json!(c);
+                }
                 row
             })
             .collect();
@@ -525,7 +536,7 @@ fn ls(args: &[&str]) -> Out {
                 "{}\t{}\t{}\t{} panes\t{}\t{}",
                 w.name,
                 name_of(w.kind),
-                w.branch.as_deref().unwrap_or("-"),
+                chat_word(w).or(w.branch.as_deref()).unwrap_or("-"),
                 w.pane_count,
                 most_urgent(&w.attention).map_or_else(|| "-".to_owned(), name_of),
                 group_name(w, &groups).unwrap_or("-"),
@@ -625,6 +636,133 @@ fn group_move(args: &[&str]) -> Out {
     Ok(())
 }
 
+/// What `ls` says of a chat where it says the branch (REQ-833).
+fn chat_word(w: &WorkspaceSummary) -> Option<&'static str> {
+    w.chat
+        .as_ref()
+        .map(|c| if c.archived { "chat archivada" } else { "chat" })
+}
+
+/// The chat `word` names: a workspace that is one.
+fn chat_named(s: &mut Link, word: &str) -> Out<WorkspaceSummary> {
+    let ws = s.workspace(word)?;
+    if ws.chat.is_none() {
+        return fail(format!("{} is not a conversation of its own", ws.name));
+    }
+    Ok(ws)
+}
+
+/// The archived chat `ws` cannot be read from or prompted: it has no panel (REQ-834).
+fn not_archived(ws: &WorkspaceSummary, word: &str) -> Out<()> {
+    if ws.chat.as_ref().is_some_and(|c| c.archived) {
+        return fail(format!("archivada: {} chat resume {word}", bin()));
+    }
+    Ok(())
+}
+
+/// `chat new [--json]`: a conversation of its own; prints its id and name (REQ-833).
+fn chat_new(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &["json"])?;
+    a.words::<0>()?;
+    let mut s = Link::connect()?;
+    let id = s.cmd(Cmd::ChatNew {})?["workspace"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    // The session says it a moment after the reply: its name is waited for.
+    let deadline = Instant::now() + NODE_WAIT;
+    let name = loop {
+        if let Some(w) = s.workspaces()?.into_iter().find(|w| w.id == id) {
+            break w.name;
+        }
+        if Instant::now() >= deadline {
+            return fail(format!("the conversation {id} was made but is not listed"));
+        }
+        let _ = s.c.poll(Duration::from_millis(100));
+    };
+    // `claude` starts a moment after the panel and opens its conversation a moment after that:
+    // they are waited for, as `worktree --task` does (REQ-456), so that `prompt --wait` works at
+    // once. An agent that does not come is not an error: the chat is made.
+    let deadline = Instant::now() + agent_wait();
+    loop {
+        // Whatever fails here, the chat exists: its id is printed all the same.
+        if let Ok(panes) = s.panes(&id)
+            && let Some(p) = panes.into_iter().find(|p| p.agent.is_some())
+        {
+            let _ = with_conversation(&mut s, &id, p);
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        let _ = s.c.poll(Duration::from_millis(200));
+    }
+    if a.has("json") {
+        println!("{}", json!({"id": id, "name": name}));
+    } else {
+        println!("{id}\t{name}");
+    }
+    Ok(())
+}
+
+fn chat_archive(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let [word] = a.words()?;
+    let mut s = Link::connect()?;
+    let ws = chat_named(&mut s, word)?;
+    let reply = s.cmd(Cmd::ArchiveChat {
+        workspace: ws.id.clone(),
+    })?;
+    if reply["discarded"] == true {
+        println!("discarded: {} had nothing said", ws.name);
+    }
+    Ok(())
+}
+
+fn chat_resume(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let [word] = a.words()?;
+    let mut s = Link::connect()?;
+    let ws = chat_named(&mut s, word)?;
+    let reply = s.cmd(Cmd::ResumeChat {
+        workspace: ws.id.clone(),
+    })?;
+    println!("{}", reply["pane"].as_str().unwrap_or_default());
+    Ok(())
+}
+
+fn chat_rm(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let [word] = a.words()?;
+    let mut s = Link::connect()?;
+    let ws = chat_named(&mut s, word)?;
+    s.cmd(Cmd::DeleteChat {
+        workspace: ws.id.clone(),
+    })?;
+    Ok(())
+}
+
+/// `chat promote <chat> <workspace> [--no-summary]`: a new conversation in the workspace; prints
+/// the pane and, on stdout after it, the summary of the chat for the agent to start from.
+fn chat_promote(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &["no-summary"])?;
+    let [word, to] = a.words()?;
+    let mut s = Link::connect()?;
+    let ws = chat_named(&mut s, word)?;
+    let to = s.workspace(to)?;
+    let reply = s.cmd(Cmd::PromoteChat {
+        workspace: ws.id.clone(),
+        to: to.id.clone(),
+        summary: a.has("no-summary").then_some(false),
+    })?;
+    println!("{}", reply["pane"].as_str().unwrap_or_default());
+    let text = reply["text"].as_str().unwrap_or_default();
+    if !text.is_empty() {
+        print!("{text}");
+    }
+    Ok(())
+}
+
 fn pane_ls(args: &[&str]) -> Out {
     let a = Args::parse(args, &[], &["json"])?;
     let [word] = a.words()?;
@@ -690,6 +828,7 @@ fn read(args: &[&str]) -> Out {
     let n = lines_flag(&a)?;
     let mut s = Link::connect()?;
     let ws = s.workspace(word)?;
+    not_archived(&ws, word)?;
     let panes = s.panes(&ws.id)?;
     let Some(pane) = pick_agent_pane(&a, &panes)?.or(panes.first()) else {
         return fail(format!("{} has no panes", ws.name));
@@ -872,6 +1011,7 @@ fn prompt(args: &[&str]) -> Out {
     }
     let mut s = Link::connect()?;
     let ws = s.workspace(word)?;
+    not_archived(&ws, word)?;
     let panes = s.panes(&ws.id)?;
     let Some(target) = pick_agent_pane(&a, &panes)? else {
         return fail(format!("no agent runs in {}", ws.name));
@@ -1174,6 +1314,7 @@ mod tests {
             working: false,
             removing: false,
             group: None,
+            chat: None,
         }
     }
 

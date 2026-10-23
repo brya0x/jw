@@ -380,6 +380,29 @@ enum Cursor {
     Workspace(usize),
 }
 
+/// How long the client waits for a conversation of its own to open its panel's conversation: the
+/// agent starts a moment after the panel and the conversation a moment after that, as the
+/// binary's `chat new` waits for them (REQ-819). A summary exists only in the reply to `P`, so
+/// it is not given up on early.
+const CHAT_WAIT_MS: u64 = 50_000;
+
+/// What the client waits for after it made, resumed or took a summary to a conversation of its
+/// own: the panel (`pane`, else the workspace's first) to have its conversation, and then the
+/// cursor in the field (REQ-819). Typing starts only then: before, the panel is a terminal that
+/// runs `claude` and would take the person's first keys. `until` is in `now_ms`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChatWait {
+    workspace: String,
+    pane: Option<String>,
+    draft: Option<String>,
+    until: u64,
+}
+
+/// An archived chat is listed and has no row: nothing selects it until it is live (REQ-818).
+fn archived(w: &contract::WorkspaceSummary) -> bool {
+    w.chat.as_ref().is_some_and(|c| c.archived)
+}
+
 /// What the cursor goes to once the session lists it: a group that was just made, or the
 /// workspace that was put in one.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -459,6 +482,12 @@ pub enum Key {
     Group,
     /// `G`: a new group (REQ-694).
     NewGroup,
+    /// `C`: a conversation of its own (REQ-819).
+    ChatNew,
+    /// `A`: the archived conversations (REQ-821).
+    Archived,
+    /// `P`: take a conversation to a project (REQ-822).
+    Promote,
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
     Resize(SplitDir, bool),
     /// The phone link: its box.
@@ -623,6 +652,25 @@ pub enum After {
     ReadPlan {
         node: String,
         ask: String,
+    },
+    /// A conversation of its own (REQ-819).
+    ChatNew,
+    /// Archive a conversation of its own (REQ-820).
+    ArchiveChat {
+        workspace: String,
+    },
+    /// Resume an archived conversation (REQ-821).
+    ResumeChat {
+        workspace: String,
+    },
+    /// Delete an archived conversation and its folder (REQ-821).
+    DeleteChat {
+        workspace: String,
+    },
+    /// Take a conversation to a workspace as a new conversation, with a summary (REQ-822).
+    PromoteChat {
+        chat: String,
+        to: String,
     },
     /// Close a pane.
     ClosePane(String),
@@ -807,6 +855,9 @@ pub struct View {
     size: (usize, usize),
     /// The question being asked before a pane or a workspace is closed.
     manage: Option<Manage>,
+    /// The conversation of its own the client just made, resumed or took a summary to: once its
+    /// panel's conversation is there, the cursor goes in its field, with the summary in it (REQ-819).
+    chat_wait: Option<ChatWait>,
     /// The `uncommitted` node `manage` reads a worktree's changes from, while it is open.
     check_node: Option<String>,
     /// What the last command did, in the status bar until the next key.
@@ -921,6 +972,7 @@ impl View {
             asks: Vec::new(),
             size: (0, 0),
             manage: None,
+            chat_wait: None,
             check_node: None,
             flash: String::new(),
             settings: Settings::default(),
@@ -1264,6 +1316,7 @@ impl View {
                     if let Some(at) = at {
                         self.selected = at;
                     }
+                    self.keep_cursor_on_a_row();
                 }
                 Node::Workspace(w) => {
                     self.workspaces.insert(id, w);
@@ -1317,6 +1370,7 @@ impl View {
         self.advance_manage();
         self.follow_restore();
         self.follow_goto();
+        self.follow_chat();
         self.follow_cursor();
         self.keep_focus(focused);
         self.clamp();
@@ -1867,10 +1921,38 @@ impl View {
             .into_iter()
             .filter_map(|r| match r {
                 side::Side::Group(g) => Some(Cursor::Group(g)),
-                side::Side::Workspace(i) => Some(Cursor::Workspace(i)),
+                side::Side::Workspace(i) | side::Side::Chat(i) => Some(Cursor::Workspace(i)),
                 _ => None,
             })
             .collect()
+    }
+
+    /// An archived chat is in the session and has no row: a cursor that was on it (it was just
+    /// archived, or the session is older than the person's last key) goes to the nearest row that
+    /// is drawn, as when a workspace is closed elsewhere (REQ-818).
+    fn keep_cursor_on_a_row(&mut self) {
+        if self.on_group.is_some() {
+            return;
+        }
+        let Some(s) = &self.session else { return };
+        let hidden = s.workspaces.get(self.selected).is_some_and(archived);
+        if !hidden {
+            return;
+        }
+        let rows = self.cursor_rows();
+        let at = self.selected;
+        // the nearest visible workspace before it in the list, else the first row
+        let to = rows
+            .iter()
+            .rev()
+            .find(|c| matches!(c, Cursor::Workspace(i) if *i < at))
+            .or_else(|| rows.first())
+            .copied();
+        if let Some(c) = to {
+            self.set_cursor(c);
+            self.opened = None;
+            self.focus = 0;
+        }
     }
 
     /// Where the cursor is now.
@@ -1977,7 +2059,7 @@ impl View {
         let at = self.cursor()?;
         rows.iter().position(|r| match (r, at) {
             (side::Side::Group(g), Cursor::Group(c)) => *g == c,
-            (side::Side::Workspace(i), Cursor::Workspace(c)) => *i == c,
+            (side::Side::Workspace(i) | side::Side::Chat(i), Cursor::Workspace(c)) => *i == c,
             _ => false,
         })
     }
@@ -2608,6 +2690,18 @@ impl View {
         self.goto = Some((workspace.to_owned(), self.now_ms + 8_000));
     }
 
+    /// Wait for the panel of a conversation of its own to have its conversation, to put the cursor
+    /// in its field with `draft` in it (REQ-819, REQ-822): `pane` is the panel the daemon said, or
+    /// the workspace's first.
+    pub fn chat_wait(&mut self, workspace: &str, pane: Option<String>, draft: Option<String>) {
+        self.chat_wait = Some(ChatWait {
+            workspace: workspace.to_owned(),
+            pane,
+            draft: draft.filter(|d| !d.is_empty()),
+            until: self.now_ms + CHAT_WAIT_MS,
+        });
+    }
+
     /// The workspace the person was in, to be opened once the session shows it.
     pub fn restore(&mut self, last: Option<last::Last>) {
         self.recorded.clone_from(&last);
@@ -2666,7 +2760,7 @@ impl View {
         let at = self
             .session
             .as_ref()
-            .and_then(|s| s.workspaces.iter().position(|w| w.id == id));
+            .and_then(|s| s.workspaces.iter().position(|w| w.id == id && !archived(w)));
         if let Some(i) = at {
             self.go_to(i);
             self.open(&id, 0);
@@ -2674,6 +2768,106 @@ impl View {
         } else if self.now_ms > until {
             self.goto = None;
         }
+    }
+
+    /// The conversation just made, resumed or promoted: once the workspace is open and its panel
+    /// has a conversation, the focus goes to the panel and the cursor into its field, with the
+    /// draft in it (REQ-819, REQ-822). A draft that does not arrive is said, not copied.
+    fn follow_chat(&mut self) {
+        let Some(wait) = self.chat_wait.clone() else {
+            return;
+        };
+        let ready = (self.opened.as_deref() == Some(wait.workspace.as_str()))
+            .then(|| self.workspaces.get(&wait.workspace))
+            .flatten()
+            .and_then(|w| {
+                let at = match &wait.pane {
+                    Some(id) => w.panes.iter().position(|p| p.id == *id)?,
+                    None => 0,
+                };
+                let node = self.panes.get(&w.panes.get(at)?.id)?.conversation.clone()?;
+                Some((at, node))
+            });
+        if let Some((at, node)) = ready {
+            self.focus = at;
+            self.typing = true;
+            if let Some(text) = &wait.draft {
+                self.conv_ui.entry(node).or_default().editor.insert(text);
+            }
+            self.chat_wait = None;
+        } else if self.now_ms > wait.until {
+            if wait.draft.is_some() {
+                self.flash("el resumen no llegó: la conversación no abrió a tiempo");
+            }
+            self.chat_wait = None;
+        }
+    }
+
+    /// `A`: the archived conversations, the most recent first as the daemon lists them (REQ-821).
+    fn ask_archived(&mut self) {
+        let chats: Vec<(String, String)> = self
+            .session
+            .iter()
+            .flat_map(|s| &s.workspaces)
+            .filter(|w| archived(w))
+            .map(|w| (w.id.clone(), w.name.clone()))
+            .collect();
+        if chats.is_empty() {
+            self.flash("no hay conversaciones archivadas");
+            return;
+        }
+        self.manage = Some(Manage::Archived { chats, cursor: 0 });
+    }
+
+    /// `P`: the workspaces to take the highlighted conversation to (REQ-822).
+    fn ask_promote(&mut self) {
+        let Some(chat) = self.selected_chat() else {
+            self.flash("P lleva una conversación a un proyecto: ponte en una");
+            return;
+        };
+        if chat.chat.as_ref().is_some_and(|c| c.last.is_none()) {
+            self.flash("nada que llevar: la conversación está vacía");
+            return;
+        }
+        let (id, name) = (chat.id.clone(), chat.name.clone());
+        let targets: Vec<(String, String)> = self
+            .session
+            .iter()
+            .flat_map(|s| &s.workspaces)
+            .filter(|w| w.chat.is_none() && !w.removing)
+            .map(|w| (w.id.clone(), self.label(&w.id)))
+            .collect();
+        if targets.is_empty() {
+            self.flash("no hay un workspace al que llevarla");
+            return;
+        }
+        self.manage = Some(Manage::ChatTo {
+            chat: id,
+            name,
+            targets,
+            cursor: 0,
+        });
+    }
+
+    /// The conversation of its own the cursor is on.
+    fn selected_chat(&self) -> Option<&WorkspaceSummary> {
+        self.selected_summary().filter(|w| w.chat.is_some())
+    }
+
+    /// What `key` says when the highlighted row is a conversation of its own and the key is
+    /// for something it has not (REQ-823).
+    fn chat_refusal(&self, key: Key) -> Option<&'static str> {
+        self.selected_chat()?;
+        Some(match key {
+            Key::Changes => "una conversación no tiene diff",
+            Key::Worktree | Key::Sync | Key::Review => "una conversación no tiene rama",
+            Key::Group | Key::Swap(split::Side::Up | split::Side::Down) => {
+                "una conversación no va en un grupo"
+            }
+            Key::Project => "una conversación no tiene proyecto",
+            Key::Tree => "una conversación no tiene archivos propios",
+            _ => return None,
+        })
     }
 
     /// The group whose row the cursor is on.
@@ -2823,7 +3017,7 @@ impl View {
             Follow::Workspace(id) => s
                 .workspaces
                 .iter()
-                .position(|w| w.id == *id)
+                .position(|w| w.id == *id && !archived(w))
                 .map(Cursor::Workspace),
         });
         match found {
@@ -2856,15 +3050,23 @@ impl View {
             Level::Workspaces => {
                 let Some(w) = self
                     .selected_summary()
-                    .filter(|w| w.kind == WorkspaceKind::Worktree)
+                    .filter(|w| w.kind == WorkspaceKind::Worktree || w.chat.is_some())
                 else {
                     return;
                 };
-                (
-                    Named::Workspace(w.id.clone()),
-                    "renombrar el worktree".to_owned(),
-                    shown_name(&w.name, w.kind, w.branch.as_deref()).to_owned(),
-                )
+                if w.chat.is_some() {
+                    (
+                        Named::Workspace(w.id.clone()),
+                        "renombrar la conversación".to_owned(),
+                        w.name.clone(),
+                    )
+                } else {
+                    (
+                        Named::Workspace(w.id.clone()),
+                        "renombrar el worktree".to_owned(),
+                        shown_name(&w.name, w.kind, w.branch.as_deref()).to_owned(),
+                    )
+                }
             }
             _ => {
                 let Some(p) = self.shown().and_then(|w| w.panes.get(self.focus)) else {
@@ -2992,6 +3194,9 @@ impl View {
                 Naming::Rename(group) => After::RenameGroup { group, name },
             },
             Some(Act::DeleteGroup(group)) => After::DeleteGroup { group },
+            Some(Act::ResumeChat(workspace)) => After::ResumeChat { workspace },
+            Some(Act::DeleteChat(workspace)) => After::DeleteChat { workspace },
+            Some(Act::PromoteChat { chat, to }) => After::PromoteChat { chat, to },
             Some(Act::MoveTo { workspace, to }) => match to {
                 Dest::New => {
                     let name = self.label(&workspace);
@@ -3572,8 +3777,29 @@ impl View {
             self.flash("ya se está quitando");
             return After::Continue;
         }
+        // What a conversation of its own has no use for is said, and nothing is sent (REQ-823).
+        if self.mode == Mode::Workspaces
+            && level == Level::Workspaces
+            && let Some(why) = self.chat_refusal(key)
+        {
+            self.flash(why);
+            return After::Continue;
+        }
         match (self.mode, key) {
             (_, Key::Quit) => return After::Quit,
+            // `C` makes a conversation of its own, from any row of the list (REQ-819).
+            (Mode::Workspaces, Key::ChatNew) if level == Level::Workspaces => {
+                return After::ChatNew;
+            }
+            (Mode::Workspaces, Key::Archived) if level == Level::Workspaces => self.ask_archived(),
+            (Mode::Workspaces, Key::Promote) if level == Level::Workspaces => self.ask_promote(),
+            // `x` archives it: nothing is lost, and `A` brings it back (REQ-820).
+            (Mode::Workspaces, Key::Close)
+                if level == Level::Workspaces && self.selected_chat().is_some() =>
+            {
+                let workspace = self.selected_id().unwrap_or_default();
+                return After::ArchiveChat { workspace };
+            }
             // `esc` goes up a level; at the first there is nowhere to go.
             (Mode::Workspaces, Key::Back) => {
                 if level == Level::Panels {
@@ -4562,12 +4788,17 @@ impl View {
                 all.into_iter().nth(y - 2 + top)
             });
         match row {
-            Some(side::Side::Workspace(i)) => {
+            Some(side::Side::Workspace(i) | side::Side::Chat(i)) => {
                 let same = self.selected == i && self.on_group.is_none();
                 self.set_cursor(Cursor::Workspace(i));
                 if let Some(id) = self.selected_id() {
                     self.open(&id, if same { self.focus } else { 0 });
                 }
+                return After::Continue;
+            }
+            // The line of the archived chats opens their list, as `A` does (REQ-821).
+            Some(side::Side::Archived(_)) => {
+                self.ask_archived();
                 return After::Continue;
             }
             // A click on a group's row folds or unfolds it, with the cursor on it (REQ-694).
@@ -5819,7 +6050,20 @@ impl View {
         for (k, row) in all.iter().enumerate().skip(top).take(avail) {
             let y = 2 + k - top;
             let i = match row {
-                side::Side::Workspace(i) => *i,
+                side::Side::Workspace(i) | side::Side::Chat(i) => *i,
+                side::Side::Chats(n) => {
+                    g.put_over(1, y, "CONVERSACIONES", dim);
+                    g.put_over(SIDEBAR - 3, y, &n.to_string(), dim);
+                    continue;
+                }
+                side::Side::NoChats => {
+                    g.put_over(2, y, "ninguna · C abre una", dim);
+                    continue;
+                }
+                side::Side::Archived(n) => {
+                    g.put_over(2, y, &format!("archivadas {n} · A"), dim);
+                    continue;
+                }
                 side::Side::Head(head) => {
                     g.put_over(2 + indent, y, &clip(head, SIDEBAR - 4 - indent), dim);
                     continue;
@@ -5837,7 +6081,12 @@ impl View {
                     continue;
                 }
             };
-            number += 1;
+            // A chat is drawn at the edge of the sidebar and has no number (REQ-818).
+            let chat = matches!(row, side::Side::Chat(_));
+            if !chat {
+                number += 1;
+            }
+            let indent = if chat { 0 } else { indent };
             let w = &session.workspaces[i];
             let worktree = w.kind == WorkspaceKind::Worktree;
             let on = i == self.selected && self.on_group.is_none() && self.mode == Mode::Workspaces;
@@ -5866,7 +6115,7 @@ impl View {
                 Style::fg(look::fg())
             };
             // The numbers are the position among the workspaces that are drawn (REQ-693).
-            let label = if number <= 9 {
+            let label = if number <= 9 && !chat {
                 number.to_string()
             } else {
                 " ".into()
@@ -5878,7 +6127,13 @@ impl View {
             g.put_over(
                 dot,
                 y,
-                if w.pane_count > 0 { "●" } else { "○" },
+                if chat {
+                    "✦"
+                } else if w.pane_count > 0 {
+                    "●"
+                } else {
+                    "○"
+                },
                 if w.pane_count > 0 {
                     Style::fg(look::green())
                 } else {
@@ -5926,8 +6181,12 @@ impl View {
                 );
             }
         }
-        if session.workspaces.is_empty() {
-            g.put(1, 2, "^␣ o abre una carpeta", dim);
+        // With no workspace the sidebar says how to open one, under the zone of the chats.
+        if session.workspaces.iter().all(|w| w.chat.is_some()) {
+            let y = 3 + all.len().saturating_sub(top);
+            if y < 2 + avail {
+                g.put(1, y, "^␣ o abre una carpeta", dim);
+            }
         }
         for (i, line) in [
             "! permiso  ? pregunta",
@@ -6122,10 +6381,15 @@ impl View {
                     look::blue(),
                     "j/k mover · ↵ plegar · h l · z todos · r renombrar · x borrar · J K orden · G nuevo · m teléfono · ? teclas",
                 ),
+                (_, Level::Workspaces) if self.selected_chat().is_some() => (
+                    " CONVERSACIÓN ",
+                    look::blue(),
+                    "j/k mover · ↵ entrar · r renombrar · x archivar · P a un proyecto · C nueva · A archivadas · ? teclas",
+                ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · p proyecto · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · C conversación · o carpeta · w worktree · p proyecto · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
                 ),
             },
         };
@@ -6792,7 +7056,13 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
         "z",
         "plegar todos los grupos, o abrirlos si todos están plegados",
     ),
-    ("r", "renombrar el worktree; en un grupo, el grupo"),
+    (
+        "r",
+        "renombrar el worktree o la conversación; en un grupo, el grupo",
+    ),
+    ("C", "una conversación nueva, sin carpeta ni rama"),
+    ("A", "las conversaciones archivadas: reanudar o borrar"),
+    ("P", "llevar la conversación a un workspace, con un resumen"),
     ("o", "abrir una carpeta"),
     ("t", "archivos del workspace"),
     ("w", "worktrees del proyecto: nuevo o los que ya existen"),
@@ -6801,7 +7071,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("s", "subir el worktree a origin"),
     (
         "x",
-        "cerrar el workspace (y quitar su worktree); en un grupo, borrarlo",
+        "cerrar el workspace (y quitar su worktree); en un grupo, borrarlo; una conversación, archivarla",
     ),
     ("g", "el grupo del repositorio del workspace"),
     ("G", "un grupo nuevo"),
@@ -7231,6 +7501,9 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('z') => Key::Fold,
         KeyCode::Char('g') => Key::Group,
         KeyCode::Char('G') => Key::NewGroup,
+        KeyCode::Char('C') => Key::ChatNew,
+        KeyCode::Char('A') => Key::Archived,
+        KeyCode::Char('P') => Key::Promote,
         KeyCode::Char('S') => Key::SwapPick,
         KeyCode::Char('H') => Key::Swap(split::Side::Left),
         KeyCode::Char('L') => Key::Swap(split::Side::Right),
@@ -7960,6 +8233,76 @@ fn do_after(
                 "grupo renombrado",
                 reply,
             );
+        }
+        After::ChatNew => {
+            let reply = client.cmd(Cmd::ChatNew {});
+            match &reply {
+                Ok(Ok(made)) => {
+                    let ws = made
+                        .as_ref()
+                        .map_or("", |m| m["workspace"].as_str().unwrap_or(""));
+                    view.goto(ws);
+                    view.chat_wait(ws, None, None);
+                    view.flash("conversación nueva · escribe y ↵");
+                }
+                _ => told(view, "No se pudo hacer la conversación", "", reply),
+            }
+        }
+        After::ArchiveChat { workspace } => {
+            let name = view.label(&workspace);
+            let reply = client.cmd(Cmd::ArchiveChat { workspace });
+            match &reply {
+                Ok(Ok(r)) if r.as_ref().is_some_and(|r| r["discarded"] == true) => {
+                    view.flash("vacía: se descartó");
+                }
+                Ok(Ok(_)) => view.flash(&format!("«{name}» archivada · A para reanudar")),
+                _ => told(view, "No se pudo archivar la conversación", "", reply),
+            }
+        }
+        After::ResumeChat { workspace } => {
+            let reply = client.cmd(Cmd::ResumeChat {
+                workspace: workspace.clone(),
+            });
+            match &reply {
+                Ok(Ok(r)) => {
+                    let pane = r
+                        .as_ref()
+                        .and_then(|r| r["pane"].as_str())
+                        .map(str::to_owned);
+                    view.goto(&workspace);
+                    view.chat_wait(&workspace, pane, None);
+                    view.flash("reanudada");
+                }
+                _ => told(view, "No se pudo reanudar la conversación", "", reply),
+            }
+        }
+        After::DeleteChat { workspace } => {
+            let reply = client.cmd(Cmd::DeleteChat { workspace });
+            told(
+                view,
+                "No se pudo borrar la conversación",
+                "conversación borrada",
+                reply,
+            );
+        }
+        After::PromoteChat { chat, to } => {
+            let name = view.label(&to);
+            let reply = client.cmd(Cmd::PromoteChat {
+                workspace: chat,
+                to: to.clone(),
+                summary: None,
+            });
+            match &reply {
+                Ok(Ok(r)) => {
+                    let get = |k: &str| r.as_ref().and_then(|r| r[k].as_str()).map(str::to_owned);
+                    view.goto(&to);
+                    view.chat_wait(&to, get("pane"), get("text"));
+                    view.flash(&format!(
+                        "conversación nueva en «{name}» · la de aquí sigue"
+                    ));
+                }
+                _ => told(view, "No se pudo llevar la conversación", "", reply),
+            }
         }
         After::DeleteGroup { group } => {
             let reply = client.cmd(Cmd::DeleteGroup { group });
@@ -15106,5 +15449,324 @@ mod tests {
         }
         let plain = erase::canonical(key(KeyCode::Char('\x08'), KeyModifiers::NONE));
         assert_eq!(bytes_of(&plain).as_deref(), Some("\x7f"));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // N173b: the conversations of their own (REQ-818 to REQ-825)
+
+    const CHAT: &str = "00000000-0000-4000-8000-0000000000b4";
+    const SHELVED: &str = "00000000-0000-4000-8000-0000000000b5";
+    const APP: &str = "00000000-0000-4000-8000-0000000000b1";
+
+    fn chats_doc() -> serde_json::Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contract/fixtures/daemon/snapshot-session-chats.json");
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()
+            ["node"]
+            .clone()
+    }
+
+    fn chats_view_with(edit: impl FnOnce(&mut serde_json::Value)) -> View {
+        let mut doc = chats_doc();
+        edit(&mut doc);
+        let mut v = View::new("chats");
+        v.set_size(120, 30);
+        v.sync([doc].iter());
+        v
+    }
+
+    fn chats_view() -> View {
+        chats_view_with(|_| {})
+    }
+
+    /// The session as the daemon sends it after a change to the chat at `at`.
+    fn chats_update(v: &mut View, edit: impl FnOnce(&mut serde_json::Value)) {
+        let mut doc = chats_doc();
+        doc["rev"] = 14.into();
+        edit(&mut doc);
+        v.sync([doc].iter());
+    }
+
+    /// REQ-818: the zone is after the workspaces, with the live chats as `✦` rows with no number,
+    /// its count, and the archived as a line; at 60 columns the sidebar is the same.
+    #[test]
+    fn the_chats_are_a_zone_at_the_end_of_the_sidebar_with_no_numbers_and_a_line_for_the_archived()
+    {
+        for cols in [120, 60] {
+            let mut v = chats_view();
+            v.set_size(cols, 30);
+            // the sidebar's columns of each row of the screen, as wide as the screen is
+            let rows: Vec<String> = v
+                .plain(cols, 30)
+                .lines()
+                .map(|l| l.chars().take(SIDEBAR - 1).collect::<String>())
+                .collect();
+            let at = |what: &str| {
+                rows.iter()
+                    .position(|r| r.contains(what))
+                    .unwrap_or_else(|| panic!("{what}: {rows:?}"))
+            };
+            assert!(at("app") < at("CONVERSACIONES"), "{rows:?}");
+            assert!(at("CONVERSACIONES") < at("✦"));
+            assert!(rows[at("CONVERSACIONES")].trim_end().ends_with('1'));
+            assert!(rows[at("✦")].contains("¿qué diferencia"), "{rows:?}");
+            assert!(
+                rows[at("✦")].starts_with(' '),
+                "no number: {:?}",
+                rows[at("✦")]
+            );
+            assert!(at("archivadas 1 · A") > at("✦"));
+            assert!(
+                !rows.iter().any(|r| r.contains("ideas para el nombre")),
+                "an archived chat has no row"
+            );
+        }
+        // with none the zone says how to make one
+        let rows = sidebar_rows(
+            &chats_view_with(|d| {
+                d["workspaces"].as_array_mut().unwrap().truncate(1);
+            }),
+            30,
+        );
+        assert!(
+            rows.iter().any(|r| r.contains("ninguna · C abre una")),
+            "{rows:?}"
+        );
+    }
+
+    /// REQ-819, REQ-820: `C` asks for a chat from any row of the list, `x` archives the chat the
+    /// cursor is on and asks nothing about a workspace.
+    #[test]
+    fn c_makes_a_chat_from_any_row_and_x_archives_the_one_the_cursor_is_on() {
+        let mut v = chats_view();
+        assert_eq!(v.press(Key::ChatNew), After::ChatNew);
+        assert_eq!(v.selected_id().as_deref(), Some(APP));
+        v.press(Key::Down);
+        assert_eq!(v.selected_id().as_deref(), Some(CHAT));
+        assert_eq!(v.press(Key::ChatNew), After::ChatNew);
+        assert_eq!(
+            v.press(Key::Close),
+            After::ArchiveChat {
+                workspace: CHAT.into()
+            }
+        );
+        assert!(v.manage.is_none());
+        // on a workspace `x` is the question it always was
+        let mut v = chats_view();
+        assert_eq!(v.press(Key::Close), After::Continue);
+        assert!(
+            matches!(v.manage, Some(Manage::Workspace(_))),
+            "{:?}",
+            v.manage
+        );
+    }
+
+    /// REQ-823: what a chat has no use for is said and nothing is sent or asked.
+    #[test]
+    fn what_a_chat_has_no_use_for_is_said_and_sends_nothing() {
+        for (key, said) in [
+            (Key::Changes, "diff"),
+            (Key::Worktree, "rama"),
+            (Key::Sync, "rama"),
+            (Key::Review, "rama"),
+            (Key::Group, "grupo"),
+            (Key::Swap(split::Side::Up), "grupo"),
+            (Key::Swap(split::Side::Down), "grupo"),
+            (Key::Project, "proyecto"),
+            (Key::Tree, "archivos"),
+        ] {
+            let mut v = chats_view();
+            v.press(Key::Down);
+            assert_eq!(v.press(key), After::Continue, "{key:?}");
+            assert!(
+                v.flash.starts_with("una conversación no"),
+                "{key:?}: {}",
+                v.flash
+            );
+            assert!(v.flash.contains(said), "{key:?}: {}", v.flash);
+            assert!(v.manage.is_none(), "{key:?}");
+        }
+        // `r` renames a chat, which a folder is not
+        let mut v = chats_view();
+        v.press(Key::Down);
+        v.press(Key::Repeat);
+        assert!(
+            matches!(&v.manage, Some(Manage::Rename { title, text, .. })
+                if title == "renombrar la conversación" && text.starts_with("¿qué diferencia")),
+            "{:?}",
+            v.manage
+        );
+    }
+
+    /// The cursor is never on a row that is not drawn: a chat archived under it moves it to the
+    /// nearest drawn row, and the session that lists it archived does not select it.
+    #[test]
+    fn an_archived_chat_leaves_the_cursor_on_a_row_that_is_drawn() {
+        let mut v = chats_view();
+        v.press(Key::Down);
+        assert_eq!(v.selected_id().as_deref(), Some(CHAT));
+        chats_update(&mut v, |d| {
+            d["workspaces"][1]["chat"]["archived"] = true.into();
+            d["workspaces"][1]["pane_count"] = 0.into();
+        });
+        assert_eq!(v.selected_id().as_deref(), Some(APP), "a drawn row");
+        v.press(Key::Down);
+        assert_eq!(v.selected_id().as_deref(), Some(APP), "nothing below it");
+        // resuming: the chat is listed (archived) when the reply arrives and is not selected
+        // until the session says it is live
+        v.goto(CHAT);
+        v.follow_goto();
+        assert!(v.goto.is_some(), "waits for a row");
+        assert_eq!(v.selected_id().as_deref(), Some(APP));
+        chats_update(&mut v, |d| {
+            d["rev"] = 15.into();
+        });
+        assert_eq!(
+            v.selected_id().as_deref(),
+            Some(CHAT),
+            "live again: selected"
+        );
+        assert!(v.goto.is_none());
+    }
+
+    /// REQ-821: `A` lists the archived, `↵` resumes, `d` asks and then deletes; with none it
+    /// says so and opens nothing.
+    #[test]
+    fn a_lists_the_archived_enter_resumes_and_d_asks_before_deleting() {
+        let mut v = chats_view_with(|d| {
+            d["workspaces"].as_array_mut().unwrap().truncate(2);
+        });
+        assert_eq!(v.press(Key::Archived), After::Continue);
+        assert!(v.manage.is_none());
+        assert_eq!(v.flash, "no hay conversaciones archivadas");
+
+        let mut v = chats_view();
+        v.press(Key::Archived);
+        assert!(
+            matches!(&v.manage, Some(Manage::Archived { chats, cursor: 0 })
+                if chats == &[(SHELVED.to_owned(), "ideas para el nombre del proyecto".to_owned())]),
+            "{:?}",
+            v.manage
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::ResumeChat {
+                workspace: SHELVED.into()
+            }
+        );
+        assert!(v.manage.is_none());
+
+        v.press(Key::Archived);
+        assert_eq!(v.press_key(plain(KeyCode::Char('d'))), After::Continue);
+        assert!(
+            matches!(v.manage, Some(Manage::DeleteChat { .. })),
+            "{:?}",
+            v.manage
+        );
+        assert_eq!(
+            tap(&mut v, 'y'),
+            After::DeleteChat {
+                workspace: SHELVED.into()
+            }
+        );
+        // `n` keeps it
+        v.press(Key::Archived);
+        v.press_key(plain(KeyCode::Char('d')));
+        assert_eq!(tap(&mut v, 'n'), After::Continue);
+        assert!(v.manage.is_none());
+    }
+
+    /// REQ-822: `P` lists the workspaces that are no chat, and `↵` takes the chat to one; an empty
+    /// chat has nothing to take and a workspace row has nothing to ask about.
+    #[test]
+    fn p_lists_the_workspaces_and_takes_the_chat_to_the_one_chosen() {
+        let mut v = chats_view();
+        v.press(Key::Promote);
+        assert!(v.manage.is_none());
+        assert!(
+            v.flash.starts_with("P lleva una conversación"),
+            "{}",
+            v.flash
+        );
+        v.press(Key::Down);
+        v.press(Key::Promote);
+        assert!(
+            matches!(&v.manage, Some(Manage::ChatTo { chat, targets, cursor: 0, .. })
+                if chat == CHAT && targets.len() == 1 && targets[0].0 == APP),
+            "{:?}",
+            v.manage
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::PromoteChat {
+                chat: CHAT.into(),
+                to: APP.into()
+            }
+        );
+        // an empty chat
+        let mut v = chats_view_with(|d| {
+            d["workspaces"][1]["chat"]
+                .as_object_mut()
+                .unwrap()
+                .remove("last");
+        });
+        v.press(Key::Down);
+        v.press(Key::Promote);
+        assert!(v.manage.is_none());
+        assert!(v.flash.starts_with("nada que llevar"), "{}", v.flash);
+    }
+
+    /// A click on a chat's row selects it as a click on a workspace does, and one on the line of
+    /// the archived opens their list.
+    #[test]
+    fn a_click_on_a_chat_row_selects_it_and_one_on_the_archived_line_opens_the_list() {
+        let mut v = chats_view();
+        let rows: Vec<String> = v
+            .plain(120, 30)
+            .lines()
+            .map(|l| l.chars().take(SIDEBAR - 1).collect::<String>())
+            .collect();
+        let at = |what: &str| rows.iter().position(|r| r.contains(what)).unwrap();
+        v.click(5, at("✦"), 120, 30);
+        assert_eq!(v.selected_id().as_deref(), Some(CHAT));
+        assert_eq!(v.opened.as_deref(), Some(CHAT));
+        v.click(5, at("archivadas"), 120, 30);
+        assert!(
+            matches!(v.manage, Some(Manage::Archived { .. })),
+            "{:?}",
+            v.manage
+        );
+    }
+
+    /// The cursor goes into the field only once the panel has its conversation (before, the panel
+    /// is a terminal that runs `claude` and would take the first keys), and a summary is put in
+    /// the field and not sent; one that does not arrive is said, not copied.
+    #[test]
+    fn the_field_is_typed_in_only_once_the_conversation_is_there_and_a_summary_goes_in_it() {
+        // the panel has no conversation yet: nothing is typed into it
+        let mut v = View::new("fixtures");
+        v.set_size(120, 40);
+        v.sync(fixture_docs().iter());
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.chat_wait(&ws, Some(CONV_PANE.into()), Some("resumen".into()));
+        v.follow_chat();
+        assert!(v.chat_wait.is_some());
+        assert_eq!(v.typing_pane(), None);
+        // it never arrives: said, and nothing is copied
+        v.now_ms += CHAT_WAIT_MS + 1_000;
+        v.follow_chat();
+        assert!(v.chat_wait.is_none());
+        assert!(v.flash.contains("el resumen no llegó"), "{}", v.flash);
+
+        // with the conversation there, the field has the summary and the keyboard is in it
+        let mut v = conv_view(true);
+        v.typing = false;
+        let ws = v.selected_id().unwrap();
+        v.chat_wait(&ws, Some(CONV_PANE.into()), Some("resumen".into()));
+        v.follow_chat();
+        assert!(v.chat_wait.is_none());
+        assert_eq!(v.typing_pane().as_deref(), Some(CONV_PANE));
+        assert_eq!(v.conv_ui[CONV].editor.text(), "resumen");
     }
 }

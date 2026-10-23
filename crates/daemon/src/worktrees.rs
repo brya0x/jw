@@ -217,6 +217,7 @@ pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
             }),
             review: None,
             github: None,
+            chat: None,
         },
     )
 }

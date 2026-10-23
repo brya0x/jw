@@ -6,6 +6,7 @@ mod blocks;
 pub mod browse;
 mod cancel;
 mod changes;
+mod chats;
 mod commands;
 mod conversation;
 mod core;

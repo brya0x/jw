@@ -184,9 +184,10 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
         LaunchedEffect(state.seen) { store.save(state.seen) }
         LaunchedEffect(state.folded) { folds.save(pc, state.folded) }
-        BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos) { state = nav.back(state) }
+        BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos || state.screen is Screen.Archived) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
+            is Screen.Archived -> ArchivedScreen(source, state, nav) { state = it }
             is Screen.Folders -> FoldersScreen(source, state, nav) { state = it }
             is Screen.Files -> FilesScreen(source, state, screen, nav) { state = it }
             is Screen.Artifacts -> ArtifactsScreen(source, state, screen, nav) { state = it }

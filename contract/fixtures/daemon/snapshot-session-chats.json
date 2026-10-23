@@ -1,0 +1,48 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000a1",
+    "type": "session",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 13,
+    "attention": [],
+    "name": "work",
+    "workspaces": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000b1",
+        "name": "app",
+        "kind": "folder",
+        "path": "/home/u/code/app",
+        "project": "/home/u/code/app",
+        "pane_count": 1,
+        "attention": []
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000b4",
+        "name": "¿qué diferencia hay entre un índice parcial y uno cubriente?",
+        "kind": "folder",
+        "path": "/home/u/.local/state/jw/chats/00000000-0000-4000-8000-0000000000b4",
+        "pane_count": 1,
+        "attention": [],
+        "chat": {
+          "active": 1761212000,
+          "last": "Un índice parcial solo cubre las filas que cumplen una condición."
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000b5",
+        "name": "ideas para el nombre del proyecto",
+        "kind": "folder",
+        "path": "/home/u/.local/state/jw/chats/00000000-0000-4000-8000-0000000000b5",
+        "pane_count": 0,
+        "attention": [],
+        "chat": {
+          "archived": true,
+          "active": 1761100000,
+          "last": "Te propongo cinco: Brisa, Nodo, Faro, Tinta y Lienzo."
+        }
+      }
+    ]
+  }
+}
