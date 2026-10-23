@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use contract::conversation::{CommandSource, Conversation, SavedConversation, TaskState};
 
 use super::agents::Section;
+use super::sections::{self, Head};
 use super::{Rgb, look};
 
 /// What choosing a row does.
@@ -36,6 +37,8 @@ pub struct Row {
     pub tag: Option<(String, Rgb)>,
     /// When it happened, in milliseconds since the epoch: drawn as how long ago.
     pub at: Option<u64>,
+    /// The section it is listed in, when the list has sections (REQ-803).
+    pub group: Option<Head>,
     pub act: RowAct,
 }
 
@@ -46,6 +49,7 @@ impl Row {
             detail: detail.into(),
             tag: None,
             at: None,
+            group: None,
             act: RowAct::Nothing,
         }
     }
@@ -91,7 +95,7 @@ pub fn is_panel(name: &str) -> bool {
 /// The group of the keys that are the program's own: its tag is the product name.
 const OWN: &str = "\0";
 
-const KEYS: [(&str, &str, &str); 21] = [
+const KEYS: [(&str, &str, &str); 22] = [
     ("↵", "enviar; en cola mientras Claude trabaja", "escribir"),
     ("⇧↵ · ^J", "un salto de línea", "escribir"),
     ("⇥", "completar lo que se propone o la lista", "escribir"),
@@ -101,6 +105,11 @@ const KEYS: [(&str, &str, &str); 21] = [
         "escribir",
     ),
     ("@", "los archivos del workspace", "escribir"),
+    (
+        "RePág · AvPág",
+        "en la lista de comandos, de una sección a otra",
+        "escribir",
+    ),
     ("!", "una línea de shell", "escribir"),
     ("^V", "pegar una imagen del portapapeles", "escribir"),
     ("esc · ^C", "interrumpir lo que Claude hace", "Claude"),
@@ -207,7 +216,7 @@ pub fn status(conv: &Conversation, cwd: &str) -> Panel {
 }
 
 pub fn skills(conv: &Conversation) -> Panel {
-    let rows = conv
+    let mut skills: Vec<_> = conv
         .commands
         .iter()
         .filter(|c| {
@@ -216,15 +225,15 @@ pub fn skills(conv: &Conversation) -> Panel {
                 CommandSource::Skill | CommandSource::Project | CommandSource::Plugin
             )
         })
+        .collect();
+    skills.sort_by_key(|c| sections::order(c, ""));
+    let rows = skills
+        .into_iter()
         .map(|c| {
-            let (tag, colour) = match c.source {
-                CommandSource::Project => ("proyecto", look::green()),
-                CommandSource::Plugin => ("plugin", look::cyan()),
-                _ => ("skill", look::yellow()),
-            };
-            Row::new(c.name.clone(), c.description.clone().unwrap_or_default())
-                .tagged(tag, colour)
-                .doing(RowAct::Insert(format!("{} ", c.name)))
+            let mut row = Row::new(c.name.clone(), c.description.clone().unwrap_or_default())
+                .doing(RowAct::Insert(format!("{} ", c.name)));
+            row.group = Some(sections::slot(c).1);
+            row
         })
         .collect();
     Panel {
@@ -291,6 +300,7 @@ pub fn saved(list: &[SavedConversation]) -> Panel {
             detail: String::new(),
             tag: Some((c.id.chars().take(8).collect(), look::dim())),
             at: Some(c.at),
+            group: None,
             act: RowAct::Resume(c.id.clone()),
         })
         .collect();
@@ -315,6 +325,7 @@ pub fn sent(messages: &[super::paste::Sent]) -> Panel {
                 detail: String::new(),
                 tag: (rows > 1).then(|| (format!("{rows} líneas"), look::dim())),
                 at: None,
+                group: None,
                 act: RowAct::Recall(i),
             }
         })
@@ -483,8 +494,19 @@ mod tests {
     fn skills_are_the_commands_that_are_not_claudes_or_jwns_and_choosing_one_puts_it_in_the_line() {
         let p = skills(&fixture());
         let labels: Vec<&str> = p.rows.iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, ["/deploy", "/vercel:deploy", "/jwn"]);
-        assert_eq!(p.rows[0].act, RowAct::Insert("/deploy ".into()));
+        assert_eq!(
+            labels,
+            ["/jwn", "/deploy", "/vercel:deploy"],
+            "by section: Personales, Proyecto, plugins (REQ-803)"
+        );
+        assert_eq!(p.rows[0].act, RowAct::Insert("/jwn ".into()));
+        let titles: Vec<_> = p
+            .rows
+            .iter()
+            .map(|r| r.group.as_ref().unwrap().title.as_str())
+            .collect();
+        assert_eq!(titles, ["Personales", "Proyecto", "vercel"]);
+        assert!(p.rows.iter().all(|r| r.tag.is_none()), "no word of origin");
     }
 
     #[test]

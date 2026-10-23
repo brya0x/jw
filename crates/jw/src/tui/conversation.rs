@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 use contract::PaneInput;
 use contract::conversation::{
-    Accent, Ask, AskKind, CommandKind, CommandSource, ConvCommand, ConvStatus, Conversation,
-    DiffLine, DiffSign, Held, Image, Item, Mode, SavedConversation, Tone, ToolState,
+    Accent, Ask, AskKind, CommandKind, ConvCommand, ConvStatus, Conversation, DiffLine, DiffSign,
+    Held, Image, Item, Mode, SavedConversation, Tone, ToolState,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -22,6 +22,7 @@ use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
 use super::paste::{self, Fold};
+use super::sections::{self, Entry};
 use super::{Grid, Rgb, Style, clip, look, select};
 use crate::claude::tools_word;
 
@@ -146,7 +147,7 @@ const SHELL_SHOWN: usize = 12;
 const PAGE: usize = 10;
 /// Files the `@` list shows at most.
 const FILES_SHOWN: usize = 8;
-/// Commands the `/` list shows at once.
+/// Lines the `/` list shows at once, the titles of its sections among them (REQ-798).
 const MENU_SHOWN: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -757,6 +758,8 @@ pub struct Ui {
     /// The command lit in the `/` list, and the line the person closed it on.
     menu_at: usize,
     menu_off: String,
+    /// The line of the list of commands its window began at when it was last drawn (REQ-798).
+    menu_first: Cell<usize>,
     /// The options of a choice of several that are marked, and the ask they are for.
     picks: Vec<usize>,
     ask_id: String,
@@ -972,17 +975,18 @@ impl Ui {
             return Vec::new();
         };
         let typed = typed.to_lowercase();
-        let mut hits: Vec<(bool, usize, &ConvCommand)> = conv
+        let mut hits: Vec<&ConvCommand> = conv
             .commands
             .iter()
-            .filter_map(|c| {
-                let name = c.name.trim_start_matches('/').to_lowercase();
-                name.contains(&typed)
-                    .then(|| (!name.starts_with(&typed), source_look(c.source).rank, c))
+            .filter(|c| {
+                c.name
+                    .trim_start_matches('/')
+                    .to_lowercase()
+                    .contains(&typed)
             })
             .collect();
-        hits.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
-        hits.into_iter().map(|(_, _, c)| c).collect()
+        hits.sort_by_key(|c| sections::order(c, &typed));
+        hits
     }
 
     /// `^B`, or a click on the agents of the footer: open or close the area of the agents when
@@ -1039,7 +1043,7 @@ impl Ui {
             if chars[i] == '/' {
                 let word: String = chars[i..end].iter().collect();
                 if let Some(c) = conv.commands.iter().find(|c| c.name == word) {
-                    out.push((i, end, source_look(c.source).colour));
+                    out.push((i, end, sections::slot(c).1.colour));
                 }
             }
             i = end;
@@ -2175,9 +2179,14 @@ impl Ui {
             return;
         }
         let at = self.menu_at.min(menu.len() - 1);
-        let shown = menu.len().min(MENU_SHOWN);
-        let first = (at + 1).saturating_sub(shown);
-        let h = shown + 2;
+        let (plan, top) = sections::lines(
+            &sections::heads_of(&menu),
+            at,
+            MENU_SHOWN,
+            self.menu_first.get(),
+        );
+        self.menu_first.set(top);
+        let h = plan.len() + 2;
         let (x, y) = (ix, band_y.saturating_sub(h));
         g.clear_box((x, y, iw, h));
         g.boxed(
@@ -2190,35 +2199,64 @@ impl Ui {
                 Style::fg(look::dim()),
             )),
         );
-        let name_w = menu[first..first + shown]
+        let name_w = plan
             .iter()
-            .map(|c| c.name.chars().count())
+            .filter_map(|l| match l {
+                Entry::Item(i) => Some(menu[*i].name.chars().count()),
+                Entry::Head { .. } => None,
+            })
             .max()
             .unwrap_or(0)
             .min(iw / 2);
-        for (i, c) in menu[first..first + shown].iter().enumerate() {
-            let lit = first + i == at;
-            let bg = if lit { look::sel() } else { look::panel() };
-            let row = y + 1 + i;
-            g.paint_bg(x + 1, row, iw - 2, bg);
-            let SourceLook { colour, tag, .. } = source_look(c.source);
-            // One that only works in Claude's own screen is dimmed.
-            let name_style = if c.kind == CommandKind::Screen {
-                Style::fg(look::dim()).on(bg)
-            } else {
-                Style::fg(colour).bold().on(bg)
-            };
-            g.put(x + 2, row, &clip(&c.name, name_w), name_style);
-            let tag_at = (x + iw).saturating_sub(tag.chars().count() + 3);
-            g.put(tag_at, row, tag, Style::fg(colour).on(bg));
-            let from = x + 4 + name_w;
-            if let Some(d) = &c.description {
-                g.put(
-                    from,
-                    row,
-                    &clip(d, tag_at.saturating_sub(from + 1)),
-                    Style::fg(look::dim()).on(bg),
-                );
+        for (n, line) in plan.iter().enumerate() {
+            let row = y + 1 + n;
+            match line {
+                Entry::Head {
+                    head,
+                    count,
+                    sticky,
+                } => {
+                    let text = format!(
+                        "── {}{} · {count} ",
+                        head.title,
+                        if *sticky { " ↑" } else { "" }
+                    );
+                    let used = text.chars().count();
+                    g.put(
+                        x + 1,
+                        row,
+                        &clip(&text, iw - 2),
+                        Style::fg(head.colour).on(look::panel()).bold(),
+                    );
+                    let rule = "─".repeat((iw - 2).saturating_sub(used));
+                    g.put(
+                        x + 1 + used.min(iw - 2),
+                        row,
+                        &rule,
+                        Style::fg(look::dim()).on(look::panel()),
+                    );
+                }
+                Entry::Item(i) => {
+                    let c = menu[*i];
+                    let bg = if *i == at { look::sel() } else { look::panel() };
+                    g.paint_bg(x + 1, row, iw - 2, bg);
+                    // One that only works in Claude's own screen is dimmed.
+                    let name_style = if c.kind == CommandKind::Screen {
+                        Style::fg(look::dim()).on(bg)
+                    } else {
+                        Style::fg(sections::slot(c).1.colour).bold().on(bg)
+                    };
+                    g.put(x + 2, row, &clip(&c.name, name_w), name_style);
+                    let from = x + 4 + name_w;
+                    if let Some(d) = &c.description {
+                        g.put(
+                            from,
+                            row,
+                            &clip(d, (x + iw).saturating_sub(from + 1)),
+                            Style::fg(look::dim()).on(bg),
+                        );
+                    }
+                }
             }
         }
     }
@@ -2311,7 +2349,7 @@ impl Ui {
             return;
         }
         let capacity = h - 3;
-        let first = (at + 1).saturating_sub(capacity);
+        let plan = list_plan(&rows, at, capacity);
         let two = rows.iter().any(|r| !r.detail.is_empty());
         let label_w = rows
             .iter()
@@ -2319,9 +2357,37 @@ impl Ui {
             .max()
             .unwrap_or(0)
             .min(w / 3);
-        for (i, r) in rows.iter().skip(first).take(capacity).enumerate() {
+        for (i, entry) in plan.iter().enumerate() {
             let row = y + 2 + i;
-            let lit = first + i == at;
+            let (n, r) = match entry {
+                Entry::Item(n) => (*n, rows[*n]),
+                Entry::Head {
+                    head,
+                    count,
+                    sticky,
+                } => {
+                    let text = format!(
+                        "── {}{} · {count} ",
+                        head.title,
+                        if *sticky { " ↑" } else { "" }
+                    );
+                    let used = text.chars().count().min(w - 2);
+                    g.put(
+                        x + 1,
+                        row,
+                        &clip(&text, w - 2),
+                        Style::fg(head.colour).on(ground).bold(),
+                    );
+                    g.put(
+                        x + 1 + used,
+                        row,
+                        &"─".repeat((w - 2) - used),
+                        Style::fg(look::dim()).on(ground),
+                    );
+                    continue;
+                }
+            };
+            let lit = n == at;
             let bg = if lit { look::sel() } else { ground };
             g.paint_bg(x + 1, row, w - 2, bg);
             let mut right = String::new();
@@ -2496,6 +2562,11 @@ impl Ui {
                 }
                 KeyCode::Down => {
                     self.menu_at = (at + 1).min(menu.len() - 1);
+                    return None;
+                }
+                KeyCode::PageUp | KeyCode::PageDown => {
+                    let heads = sections::heads_of(&menu);
+                    self.menu_at = sections::jump(&heads, at, ev.code == KeyCode::PageDown);
                     return None;
                 }
                 KeyCode::Tab => {
@@ -3530,27 +3601,36 @@ impl Ui {
             let rows = visible(l);
             let at = l.at.min(rows.len().saturating_sub(1));
             let capacity = h.saturating_sub(3);
-            let first = (at + 1).saturating_sub(capacity);
-            if h >= 5
-                && y >= top + 2
-                && y < top + 2 + capacity
-                && first + (y - top - 2) < rows.len()
-            {
-                let act = rows[first + y - top - 2].act.clone();
-                self.pop = None;
-                return self.row_act(conv, act);
+            let plan = list_plan(&rows, at, capacity);
+            if h >= 5 && y >= top + 2 && y < top + 2 + capacity && y - top - 2 < plan.len() {
+                // A title is no row: a click on it does nothing and the list stays.
+                if let Entry::Item(n) = plan[y - top - 2] {
+                    let act = rows[n].act.clone();
+                    self.pop = None;
+                    return self.row_act(conv, act);
+                }
+                return None;
             }
             self.pop = None;
             return None;
         }
         let menu = self.menu(conv);
         if self.pop.is_none() && conv.ask.is_none() && !menu.is_empty() {
-            let shown = menu.len().min(MENU_SHOWN);
-            let first = (self.menu_at.min(menu.len() - 1) + 1).saturating_sub(shown);
-            let h = shown + 2;
+            let at = self.menu_at.min(menu.len() - 1);
+            let (plan, _) = sections::lines(
+                &sections::heads_of(&menu),
+                at,
+                MENU_SHOWN,
+                self.menu_first.get(),
+            );
+            let h = plan.len() + 2;
             let top = geo.band.0.saturating_sub(h);
             if y > top && y + 1 < top + h {
-                return self.choose_command(conv, menu[first + y - top - 1]);
+                // A title is no command: a click on it does nothing and the list stays.
+                return match plan[y - top - 1] {
+                    Entry::Item(i) => self.choose_command(conv, menu[i]),
+                    Entry::Head { .. } => None,
+                };
             }
         }
         if let Some(Pop::Pick { of, .. }) = &self.pop {
@@ -3698,6 +3778,27 @@ impl Ui {
 }
 
 /// The rows of a list that hold what is typed to narrow it, wherever they hold it.
+/// What a list draws in its window: the rows, with the titles of their sections when they have
+/// them (REQ-803) and the window of REQ-798, or just the rows around the lit one.
+fn list_plan(rows: &[&panels::Row], at: usize, capacity: usize) -> Vec<Entry> {
+    if rows.iter().any(|r| r.group.is_some()) {
+        let heads: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                r.group.clone().unwrap_or_else(|| sections::Head {
+                    title: String::new(),
+                    colour: look::dim(),
+                })
+            })
+            .collect();
+        return sections::lines(&heads, at, capacity, 0).0;
+    }
+    let first = (at + 1).saturating_sub(capacity);
+    (first..rows.len().min(first + capacity))
+        .map(Entry::Item)
+        .collect()
+}
+
 fn visible(l: &ListState) -> Vec<&panels::Row> {
     let typed = l.filter.to_lowercase();
     l.panel
@@ -3710,6 +3811,9 @@ fn visible(l: &ListState) -> Vec<&panels::Row> {
                 || r.tag
                     .as_ref()
                     .is_some_and(|(t, _)| t.to_lowercase().contains(&typed))
+                || r.group
+                    .as_ref()
+                    .is_some_and(|g| g.title.to_lowercase().contains(&typed))
         })
         .collect()
 }
@@ -3717,25 +3821,6 @@ fn visible(l: &ListState) -> Vec<&panels::Row> {
 /// The pane's title: what it runs and the conversation's name.
 pub fn title(conv: &Conversation) -> String {
     format!("claude · {}", conv.name)
-}
-
-/// How a command's source is shown: its place in the list, the colour it is written in and the
-/// word that says it.
-struct SourceLook {
-    rank: usize,
-    colour: Rgb,
-    tag: &'static str,
-}
-
-fn source_look(s: CommandSource) -> SourceLook {
-    let (rank, colour, tag) = match s {
-        CommandSource::Jwn => (0, look::blue(), identity::get().name.as_str()),
-        CommandSource::Claude => (1, look::magenta(), "claude"),
-        CommandSource::Project => (2, look::green(), "proyecto"),
-        CommandSource::Skill => (3, look::yellow(), "skill"),
-        CommandSource::Plugin => (4, look::cyan(), "plugin"),
-    };
-    SourceLook { rank, colour, tag }
 }
 
 pub fn accent_rgb(a: Accent) -> Rgb {
@@ -4221,6 +4306,8 @@ pub(super) fn tests_fixture() -> Conversation {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    use contract::conversation::CommandSource;
 
     use super::*;
 
@@ -6645,20 +6732,28 @@ mod tests {
             [
                 "/exit",
                 "/tasks",
-                "/context",
-                "/doctor",
-                "/deploy",
                 "/jwn",
-                "/vercel:deploy"
+                "/deploy",
+                "/vercel:deploy",
+                "/context",
+                "/doctor"
             ],
-            "by where each is defined (jwn, claude, project, skill, plugin), then by name"
+            "by section (jwn, Personales, Proyecto, plugins, Claude), then by name (REQ-795)"
         );
         let (_, rows) = frame(&ui, &conv);
         row_of(&rows, "comandos");
         row_of(&rows, "salir de la conversación");
         row_of(&rows, "publicar la rama en staging");
-        row_of(&rows, "proyecto");
-        row_of(&rows, "plugin");
+        for title in ["Personales · 1", "Proyecto · 1", "vercel · 1"] {
+            row_of(&rows, title);
+        }
+        // 7 commands and 5 titles do not fit in 8 lines: the last section shows when the list gets to it
+        ui.menu_at = 6;
+        row_of(&frame(&ui, &conv).1, "Claude · 2");
+        assert!(
+            rows.iter().all(|r| !r.contains("proyecto")),
+            "no word of origin on the rows (REQ-800)"
+        );
         type_in(&mut ui, &conv, "de");
         let some: Vec<&str> = ui.menu(&conv).iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
@@ -6908,6 +7003,149 @@ mod tests {
     }
 
     #[test]
+    fn the_list_is_in_sections_of_at_most_eight_lines_and_the_page_keys_jump_between_them() {
+        let mut conv = idle();
+        let cmd = |name: String, source, group: Option<&str>| ConvCommand {
+            name,
+            source,
+            kind: CommandKind::Prompt,
+            description: Some(format!("what {name_} does", name_ = "x")),
+            group: group.map(str::to_owned),
+        };
+        conv.commands = (0..3)
+            .map(|n| cmd(format!("/p{n}"), CommandSource::Skill, None))
+            .chain((0..2).map(|n| cmd(format!("/q{n}"), CommandSource::Project, None)))
+            .chain((0..10).map(|n| {
+                cmd(
+                    format!("/vercel:v{n}"),
+                    CommandSource::Plugin,
+                    Some("vercel"),
+                )
+            }))
+            .chain((0..2).map(|n| cmd(format!("/z{n}"), CommandSource::Claude, None)))
+            .collect();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "1 de 17");
+        row_of(&rows, "── Personales · 3");
+        row_of(&rows, "── Proyecto · 2");
+        let lines = |rows: &[String]| {
+            let top = row_of(rows, "╭─ comandos");
+            rows[top + 1..]
+                .iter()
+                .take_while(|r| !r.contains('╰'))
+                .count()
+        };
+        assert_eq!(lines(&rows), 8, "titles take lines of the eight (REQ-798)");
+        // the arrow after the last of a section lands on the first of the next
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.menu_at, 3);
+        row_of(&frame(&ui, &conv).1, "4 de 17");
+        // the page keys jump to the start of a section (REQ-799)
+        press(&mut ui, &conv, KeyCode::PageDown);
+        assert_eq!(ui.menu_at, 5, "the first of the plugin's");
+        press(&mut ui, &conv, KeyCode::PageDown);
+        assert_eq!(ui.menu_at, 15, "the first of Claude's");
+        press(&mut ui, &conv, KeyCode::PageUp);
+        assert_eq!(ui.menu_at, 5);
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::PageUp);
+        assert_eq!(ui.menu_at, 5, "the start of this one");
+        // far into a section the title on top says which it is, marked
+        for _ in 0..7 {
+            press(&mut ui, &conv, KeyCode::Down);
+        }
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "── vercel ↑ · 10");
+        assert_eq!(lines(&rows), 8);
+        // going up inside the window does not move it (the prototype's way, not the lit one pinned below)
+        let body = |rows: &[String]| {
+            let top = row_of(rows, "╭─ comandos");
+            rows[top + 1..top + 9].to_vec()
+        };
+        let before = body(&frame(&ui, &conv).1);
+        press(&mut ui, &conv, KeyCode::Up);
+        press(&mut ui, &conv, KeyCode::Up);
+        let after = body(&frame(&ui, &conv).1);
+        assert_eq!(before[0], after[0], "the same top line");
+        assert_eq!(
+            before[3..6],
+            after[3..6],
+            "the same rows, only the lit one changed"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        // a click on a title does nothing and the list stays; one on a command runs it
+        let y = row_of(&rows, "── vercel ↑");
+        assert_eq!(ui.click(&conv, INNER, 20, y), None);
+        assert!(!ui.menu(&conv).is_empty());
+        let y = row_of(&rows, "/vercel:v7");
+        assert!(matches!(
+            ui.click(&conv, INNER, 20, y),
+            Some(Act::Send { .. })
+        ));
+    }
+
+    #[test]
+    fn the_titles_are_in_the_colour_of_their_section_and_fit_under_64_columns() {
+        let mut conv = idle();
+        conv.commands = vec![
+            ConvCommand {
+                name: "/docs".into(),
+                source: CommandSource::Plugin,
+                kind: CommandKind::Prompt,
+                description: Some("a skill of claude.ai".into()),
+                group: Some("claude.ai".into()),
+            },
+            ConvCommand {
+                name: "/vercel:deploy".into(),
+                source: CommandSource::Plugin,
+                kind: CommandKind::Prompt,
+                description: None,
+                group: Some("vercel".into()),
+            },
+        ];
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/");
+        let (g, rows) = frame(&ui, &conv);
+        let fg_at = |text: &str| {
+            let y = row_of(&rows, text);
+            let x = rows[y][..rows[y].find(text).unwrap()].chars().count();
+            g.cells[y * g.cols + x].1.fg
+        };
+        assert_eq!(fg_at("── vercel"), Some(look::cyan()));
+        assert_eq!(fg_at("── claude.ai"), Some(look::red()), "REQ-800");
+        assert_eq!(fg_at("/docs"), Some(look::red()), "its commands too");
+        type_in(&mut ui, &conv, "docs");
+        // the first word of the line is in the colour of its section
+        let (g, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "❯ /docs");
+        let x = rows[y].find("/docs").unwrap();
+        let x = rows[y][..x].chars().count();
+        assert_eq!(g.cells[y * g.cols + x].1.fg, Some(look::red()));
+        // a terminal under 64 columns: the titles and the counts stay, clipped to the box
+        let mut g = Grid::new(60, 40);
+        let chips = [("…/proj".to_owned(), look::dim())];
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/");
+        ui.draw(
+            &mut g,
+            &conv,
+            (1, 1, 58, 38),
+            &chips,
+            true,
+            1_792_110_012_000,
+        );
+        let rows = g.rows_plain();
+        row_of(&rows, "── claude.ai · 1");
+        row_of(&rows, "── vercel · 1");
+        assert!(rows.iter().all(|r| r.chars().count() <= 60));
+    }
+
+    #[test]
     fn a_command_that_exists_is_written_in_the_colour_of_where_it_is_defined() {
         let conv = idle();
         let mut ui = Ui::default();
@@ -7107,10 +7345,25 @@ mod tests {
         row_of(&rows, "sonnet-5.5");
         row_of(&rows, "/work/app");
         let (mut ui, rows) = open("/skills");
+        for title in ["── Personales · 1", "── Proyecto · 1", "── vercel · 1"] {
+            row_of(&rows, title);
+        }
         row_of(&rows, "/deploy");
         row_of(&rows, "publicar la rama en staging");
+        type_in(&mut ui, &conv, "vercel");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "── vercel · 1");
+        assert!(
+            rows.iter().all(|r| !r.contains("Personales")),
+            "the title is matched as the word of origin was"
+        );
+        let (mut ui, _) = open("/skills");
         assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
-        assert_eq!(ui.editor.text(), "/deploy ", "a skill goes to the line");
+        assert_eq!(
+            ui.editor.text(),
+            "/jwn ",
+            "the first of the list goes to the line"
+        );
         let (_, rows) = open("/tasks");
         row_of(&rows, "cargo build --release");
         row_of(&rows, "en curso");
