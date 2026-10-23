@@ -79,6 +79,7 @@ mod tests {
     #[test]
     fn identity_parses_and_derives_names() {
         assert_eq!(env_var("SOCKET"), format!("{}_SOCKET", get().env_prefix));
+        assert_eq!(env_var("NAME"), format!("{}_NAME", get().env_prefix));
         match std::env::var_os(env_var("STATE_DIR")) {
             Some(dir) if !dir.is_empty() => assert_eq!(state_dir(), PathBuf::from(dir)),
             _ => assert!(state_dir().ends_with(&get().name)),

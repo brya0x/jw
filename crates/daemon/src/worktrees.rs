@@ -155,7 +155,8 @@ pub fn list(shared: &Shared, repo: &str) -> Done {
 }
 
 /// `open_worktree`: a workspace for a worktree `list_worktrees` lists, with no panel and with
-/// nothing made, copied or run (REQ-534, REQ-536). Its ports are given as any worktree's are.
+/// nothing made or run (REQ-534, REQ-536); the files of `copy` it lacks are copied once it is open
+/// (REQ-873). Its ports are given as any worktree's are.
 pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
     let (main, entries) = read(repo)?;
     let wanted = canon(Path::new(path));
@@ -196,7 +197,7 @@ pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
         Some(branch) => format!("{repo_name}: {branch}"),
         None => format!("{repo_name}: ({})", entry.head),
     };
-    added(
+    let reply = added(
         shared,
         Workspace {
             id: new_id(),
@@ -219,7 +220,13 @@ pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
             github: None,
             chat: None,
         },
-    )
+    )?;
+    // After the workspace is there: a refused open leaves the worktree as it was.
+    let copied = crate::provision::copy_files(&main, &dir, &project.copy);
+    Ok(reply.map(|mut r| {
+        copied.say(&mut r);
+        r
+    }))
 }
 
 #[cfg(test)]

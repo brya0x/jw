@@ -86,12 +86,11 @@ pub fn new_pane_then(
             from,
             core.events.clone(),
             core.shell.clone(),
-            // What the pane's workspace was given besides what every pane has (REQ-496).
+            // What the pane's workspace gives besides what every pane has (REQ-871).
             core.env
                 .iter()
                 .cloned()
-                .chain(ws.ports.iter().flat_map(crate::model::PortBlock::env))
-                .chain(workspace_dir(&ws.path))
+                .chain(ws.pane_env())
                 .collect::<Vec<_>>(),
             core.integration_for(&core.shell),
             core.agent_hooks(),
@@ -266,19 +265,14 @@ pub fn resize(shared: &Shared, pane: &Id, rows: u16, cols: u16) -> Done {
     Ok(None)
 }
 
-/// The variable that tells a pane's shell the folder of its workspace, which `cd @` goes to (REQ-645).
-fn workspace_dir(path: &str) -> Option<(String, String)> {
-    (!path.is_empty()).then(|| (identity::env_var("WORKSPACE_DIR"), path.to_owned()))
-}
-
-/// A pane a restored session remembers: its shell, the folder to start it in, what it ran and the
-/// folder of its workspace.
+/// A pane a restored session remembers: its shell, the folder to start it in, what it ran and what
+/// its workspace gives it (REQ-872).
 struct Wanted {
     id: Id,
     shell: String,
     cwd: String,
     resume: Option<Vec<String>>,
-    root: String,
+    env: Vec<(String, String)>,
     chat: bool,
 }
 
@@ -299,7 +293,7 @@ pub fn restore(shared: &Shared) {
                         shell: p.shell.clone(),
                         cwd,
                         resume: p.resume.clone(),
-                        root: w.path.clone(),
+                        env: w.pane_env(),
                         chat: w.chat.is_some(),
                     }
                 })
@@ -321,7 +315,7 @@ pub fn restore(shared: &Shared) {
         shell: saved_shell,
         cwd,
         resume,
-        root,
+        env: workspace_env,
         chat,
     } in wanted
     {
@@ -346,7 +340,7 @@ pub fn restore(shared: &Shared) {
             .or_else(|| chat.then(|| vec!["claude".to_owned()]));
         let setup = shared.lock().integration_for(&shell);
         let launched = with_agent_hooks(program.as_deref(), hooks.as_deref());
-        let pane_env: Vec<_> = env.iter().cloned().chain(workspace_dir(&root)).collect();
+        let pane_env: Vec<_> = env.iter().cloned().chain(workspace_env).collect();
         match pty::spawn(
             &id,
             &shell,
