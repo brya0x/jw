@@ -489,7 +489,7 @@ pub enum Key {
     /// `P`: take a conversation to a project (REQ-822).
     Promote,
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
-    Resize(SplitDir, bool),
+    Resize(split::Side),
     /// The phone link: its box.
     Phone,
     /// With a block selected: copy its command, copy its output, run it again.
@@ -2270,15 +2270,53 @@ impl View {
         }
     }
 
-    /// `<` `>` `{` `}`: ask to move the split around the focused panel by a twentieth.
-    fn resize_focused(&mut self, dir: SplitDir, bigger: bool) -> After {
-        let Some(pane) = self.shown().and_then(|d| leaf_id(d, self.focus)) else {
+    /// `⇧` and an arrow at the panel level move the border on that side of the focused panel by a
+    /// twentieth (REQ-860); everywhere else the arrow keeps its own meaning.
+    fn shift_arrow(&self, ev: &KeyEvent) -> Option<Key> {
+        if !ev.modifiers.contains(KeyModifiers::SHIFT)
+            || self.mode != Mode::Workspaces
+            || self.level() != Level::Panels
+        {
+            return None;
+        }
+        Some(Key::Resize(match ev.code {
+            KeyCode::Left => split::Side::Left,
+            KeyCode::Right => split::Side::Right,
+            KeyCode::Up => split::Side::Up,
+            KeyCode::Down => split::Side::Down,
+            _ => return None,
+        }))
+    }
+
+    /// Ask to move the border of the focused panel toward `side`. `grow_pane`'s `by` is relative to
+    /// the panel's own side (REQ-295), so it is negative when the panel is the one the border moves into.
+    fn resize_focused(&mut self, side: split::Side) -> After {
+        let (dir, forward) = match side {
+            split::Side::Left => (SplitDir::Row, false),
+            split::Side::Right => (SplitDir::Row, true),
+            split::Side::Up => (SplitDir::Col, false),
+            split::Side::Down => (SplitDir::Col, true),
+        };
+        let Some(doc) = self.shown() else {
+            return After::Continue;
+        };
+        let pane = leaf_id(doc, self.focus).map(str::to_owned);
+        let first = pane
+            .as_deref()
+            .zip(doc.layout.as_ref())
+            .and_then(|(p, l)| split::first_side(l, p, dir));
+        let (Some(pane), Some(first)) = (pane, first) else {
+            self.flash(no_split(dir));
             return After::Continue;
         };
         After::Grow {
-            pane: pane.to_owned(),
+            pane,
             dir,
-            by: if bigger { RESIZE_STEP } else { -RESIZE_STEP },
+            by: if first == forward {
+                RESIZE_STEP
+            } else {
+                -RESIZE_STEP
+            },
         }
     }
 
@@ -3605,7 +3643,8 @@ impl View {
             return self.tree_key(ev);
         }
         let Some(pane) = self.typing_pane() else {
-            return key_of(ev.code).map_or(After::Continue, |k| self.press(k));
+            let key = self.shift_arrow(&ev).or_else(|| key_of(ev.code));
+            return key.map_or(After::Continue, |k| self.press(k));
         };
         if is_leader(&ev) {
             self.typing = false;
@@ -3920,8 +3959,8 @@ impl View {
             (Mode::Workspaces, Key::Swap(side)) if level == Level::Panels => {
                 return self.swap_toward(side);
             }
-            (Mode::Workspaces, Key::Resize(dir, bigger)) if level == Level::Panels => {
-                return self.resize_focused(dir, bigger);
+            (Mode::Workspaces, Key::Resize(side)) if level == Level::Panels => {
+                return self.resize_focused(side);
             }
             (Mode::Workspaces, Key::Left) if level == Level::Panels => {
                 self.focus_toward(split::Side::Left)
@@ -7166,8 +7205,11 @@ const PANEL_KEYS: &[(&str, &str)] = &[
         "S",
         "intercambiar con el panel que lleve el número que sigue",
     ),
-    ("< >", "panel más estrecho · más ancho"),
-    ("{ }", "panel más bajo · más alto"),
+    ("⇧← ⇧→", "mover el borde del panel a un lado · al otro"),
+    (
+        "⇧↑ ⇧↓",
+        "mover el borde del panel hacia arriba · hacia abajo",
+    ),
     ("N", "panel nuevo con un programa (^␣ N)"),
     ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
@@ -7579,10 +7621,6 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('L') => Key::Swap(split::Side::Right),
         KeyCode::Char('K') => Key::Swap(split::Side::Up),
         KeyCode::Char('J') => Key::Swap(split::Side::Down),
-        KeyCode::Char('>') => Key::Resize(SplitDir::Row, true),
-        KeyCode::Char('<') => Key::Resize(SplitDir::Row, false),
-        KeyCode::Char('}') => Key::Resize(SplitDir::Col, true),
-        KeyCode::Char('{') => Key::Resize(SplitDir::Col, false),
         KeyCode::Char('|') => Key::SplitRow,
         KeyCode::Char('-') => Key::SplitCol,
         KeyCode::Enter => Key::Enter,
@@ -7663,6 +7701,14 @@ fn commits(n: u64) -> String {
 
 /// How much of a split one press of `<` `>` `{` `}` moves, in thousandths.
 const RESIZE_STEP: i16 = 50;
+
+/// What is said when a panel has no split to move that way.
+fn no_split(dir: SplitDir) -> &'static str {
+    match dir {
+        SplitDir::Row => "no hay división en horizontal para este panel",
+        SplitDir::Col => "no hay división en vertical para este panel",
+    }
+}
 
 /// The least a panel is, in columns and rows: a split that would leave less is not made (REQ-736).
 const MIN_PANEL: (usize, usize) = (14, 5);
@@ -8163,10 +8209,7 @@ fn do_after(
         }
         After::Grow { pane, dir, by } => {
             if let Ok(Err(_)) = client.cmd(Cmd::GrowPane { pane, dir, by }) {
-                view.flash(match dir {
-                    SplitDir::Row => "no hay división en horizontal para este panel",
-                    SplitDir::Col => "no hay división en vertical para este panel",
-                });
+                view.flash(no_split(dir));
             }
         }
         After::NewPane(workspace, place) => {
@@ -13219,41 +13262,85 @@ mod tests {
         );
     }
 
+    fn shift_arrow(code: KeyCode) -> KeyEvent {
+        key(code, KeyModifiers::SHIFT)
+    }
+
     #[test]
-    fn the_four_size_keys_ask_to_move_a_split_by_a_twentieth_toward_or_away_from_the_panel() {
-        let (mut v, [a, ..]) = three_panels();
-        let grow = |dir, by| After::Grow {
-            pane: a.clone(),
+    fn shift_and_an_arrow_move_the_border_toward_the_arrow_whichever_side_the_panel_is_on() {
+        let (mut v, [a, b, c]) = three_panels();
+        let grow = |pane: &String, dir, by| After::Grow {
+            pane: pane.clone(),
             dir,
             by,
         };
+        let (left, right, up, down) = (KeyCode::Left, KeyCode::Right, KeyCode::Up, KeyCode::Down);
+        // `a` is the first side of the row split: the border goes right when it grows.
+        assert_eq!(v.press_key(shift_arrow(right)), grow(&a, SplitDir::Row, 50));
+        assert_eq!(v.press_key(shift_arrow(left)), grow(&a, SplitDir::Row, -50));
+        // `b` is its second side, and the first of the column split.
+        v.focus = 1;
         assert_eq!(
-            v.press_key(plain(KeyCode::Char('>'))),
-            grow(SplitDir::Row, 50)
+            v.press_key(shift_arrow(right)),
+            grow(&b, SplitDir::Row, -50)
         );
-        assert_eq!(
-            v.press_key(plain(KeyCode::Char('<'))),
-            grow(SplitDir::Row, -50)
+        assert_eq!(v.press_key(shift_arrow(left)), grow(&b, SplitDir::Row, 50));
+        assert_eq!(v.press_key(shift_arrow(down)), grow(&b, SplitDir::Col, 50));
+        assert_eq!(v.press_key(shift_arrow(up)), grow(&b, SplitDir::Col, -50));
+        // `c` is the second side of the column split.
+        v.focus = 2;
+        assert_eq!(v.press_key(shift_arrow(down)), grow(&c, SplitDir::Col, -50));
+        assert_eq!(v.press_key(shift_arrow(up)), grow(&c, SplitDir::Col, 50));
+    }
+
+    #[test]
+    fn a_panel_with_no_split_that_way_says_so_and_sends_nothing() {
+        let (mut v, _) = three_panels();
+        assert_eq!(v.press_key(shift_arrow(KeyCode::Down)), After::Continue);
+        assert!(
+            v.plain(120, 30)
+                .contains("no hay división en vertical para este panel")
         );
-        assert_eq!(
-            v.press_key(plain(KeyCode::Char('}'))),
-            grow(SplitDir::Col, 50)
+        v.focus = 1;
+        let id = v.opened.clone().unwrap();
+        v.workspaces.get_mut(&id).unwrap().layout = None;
+        assert_eq!(v.press_key(shift_arrow(KeyCode::Right)), After::Continue);
+        assert!(
+            v.plain(120, 30)
+                .contains("no hay división en horizontal para este panel")
         );
-        assert_eq!(
-            v.press_key(plain(KeyCode::Char('{'))),
-            grow(SplitDir::Col, -50)
-        );
+    }
+
+    #[test]
+    fn the_old_size_keys_do_nothing_and_the_arrows_alone_still_move_the_focus() {
+        let (mut v, _) = three_panels();
+        for ch in ['>', '<', '}', '{'] {
+            assert_eq!(v.press_key(plain(KeyCode::Char(ch))), After::Continue);
+        }
+        assert_eq!(v.focus, 0);
+        v.press_key(plain(KeyCode::Right));
+        assert_eq!(v.focus, 1);
+        v.press_key(plain(KeyCode::Down));
+        assert_eq!(v.focus, 2);
     }
 
     #[test]
     fn swapping_and_resizing_are_for_the_panel_level_only() {
         let mut v = fixture_view();
-        for ch in ['H', '>', '{'] {
-            assert_eq!(
-                v.press_key(key(KeyCode::Char(ch), KeyModifiers::SHIFT)),
-                After::Continue
-            );
-        }
+        assert_eq!(
+            v.press_key(key(KeyCode::Char('H'), KeyModifiers::SHIFT)),
+            After::Continue
+        );
+        // Out of the panel level `⇧` and an arrow are the arrow.
+        let (mut shifted, mut alone) = (fixture_view(), fixture_view());
+        let before = alone.selected_id();
+        assert_eq!(
+            shifted.press_key(shift_arrow(KeyCode::Down)),
+            After::Continue
+        );
+        alone.press_key(plain(KeyCode::Down));
+        assert_ne!(alone.selected_id(), before, "the arrow moved the row");
+        assert_eq!(shifted.selected_id(), alone.selected_id());
     }
 
     #[test]
