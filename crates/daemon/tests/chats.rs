@@ -495,6 +495,16 @@ fn deleting_removes_the_folder_and_the_chat_and_only_inside_the_chats() {
         workspace: id.clone(),
     });
     r.until_summary("archived", &id, |w| w["chat"]["archived"] == true);
+    // an archived chat takes no panel: `resume_chat` is what opens one
+    assert_eq!(
+        code(r.cmd(Cmd::NewPane {
+            workspace: id.clone(),
+            program: None,
+            beside: None,
+            dir: None,
+        })),
+        ErrorCode::BadRequest
+    );
     let dir = r.chats_dir().join(&id);
     std::fs::write(dir.join("notes.txt"), "x").unwrap();
     r.ok(Cmd::DeleteChat {

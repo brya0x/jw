@@ -61,6 +61,22 @@ fn bad(why: &str) -> ErrorBody {
 /// The commands that make no sense for a chat answer `bad_request` (REQ-796): a chat is closed
 /// with `archive_chat` and removed with `delete_chat`, so no folder or session id is left behind.
 pub fn refuse(shared: &Shared, cmd: &Cmd) -> Result<(), ErrorBody> {
+    // An archived chat has no panel and `resume_chat` is what opens one: a shell put in it would
+    // make it a live chat with a terminal that is no conversation.
+    if let Cmd::NewPane { workspace, .. } = cmd {
+        let archived = shared
+            .lock()
+            .model
+            .workspaces
+            .iter()
+            .any(|w| w.id == *workspace && w.chat.as_ref().is_some_and(|c| c.archived));
+        if archived {
+            return Err(bad(
+                "an archived conversation has no panel: resume_chat opens one",
+            ));
+        }
+        return Ok(());
+    }
     // Only these commands are looked at, and only they lock: every keystroke is a command too.
     let (id, path) = match cmd {
         Cmd::OpenDiff { workspace, .. }

@@ -520,6 +520,17 @@ mod tests {
                 .is_none()
         );
         assert!(refused_control(r#"{"t":"open","node":"mobile_x"}"#).is_none());
+        // the commands of a conversation of its own are a phone's like any other workspace's (REQ-819)
+        for cmd in [
+            r#"{"cmd":"chat_new"}"#,
+            r#"{"cmd":"archive_chat","workspace":"w"}"#,
+            r#"{"cmd":"resume_chat","workspace":"w"}"#,
+            r#"{"cmd":"delete_chat","workspace":"w"}"#,
+            r#"{"cmd":"promote_chat","workspace":"w","to":"x"}"#,
+        ] {
+            let line = format!(r#"{{"t":"cmd","id":"c1","cmd":{cmd}}}"#);
+            assert!(refused_control(&line).is_none(), "{cmd}");
+        }
         assert!(refused_control("not json").is_none());
     }
 }
