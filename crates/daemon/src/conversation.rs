@@ -2362,8 +2362,8 @@ impl State {
             self.after_end(&mut out, now);
             return out;
         }
-        // The reload is done: the list the engine gives now is the new one, and asked before the
-        // message that waits goes out, nothing runs when it is (REQ-756).
+        // The reload is done, so the list the engine gives now is the new one; the request goes
+        // before the message that waits (REQ-756).
         if inflight.is_some() && std::mem::take(&mut self.reloading) {
             out.push(initialize());
         }

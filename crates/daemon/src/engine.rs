@@ -484,7 +484,7 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
         }
         drop(core);
         // A turn that ended is on disk at once: a daemon stopped by a signal has no last save.
-        // The commands of a reload come after its `result`: they are kept as they arrive (REQ-758).
+        // So is the answer to a reload's `initialize`, which comes after its `result` (REQ-758).
         if msg["type"] == "result" || msg["type"] == "control_response" {
             save_due(shared, true);
         }
