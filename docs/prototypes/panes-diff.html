@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · el diff y el visor como paneles del layout</title>
+<!-- Prototipo para aprobar ANTES del spec (no hay spec ni código de esto). Un solo archivo, sin dependencias.
+     Para abrirlo en Chrome sirve la carpeta en loopback (file:// está bloqueado):  python3 -m http.server 8765 --bind 127.0.0.1  -->
+<style>
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:20px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.row{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none;overflow:auto}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-chip{background:var(--blue);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}.c-chipm{background:var(--magenta);color:var(--bg);font-weight:700}.c-chipg{background:var(--green);color:var(--bg);font-weight:700}.c-chipc{background:var(--cyan);color:var(--bg);font-weight:700}
+.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.ctl{display:flex;flex-wrap:wrap;gap:8px 14px;margin:8px 0;align-items:flex-end}
+.ctl .grp{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--mut)}
+.ctl .grp b{font:600 10.5px var(--mono);color:var(--dim);letter-spacing:.03em}
+select,button{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 8px;cursor:pointer}
+button:hover,select:hover{border-color:var(--blue)}
+.note{max-width:900px}
+.state{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font:12px/1.35 var(--mono);color:var(--fg);margin:0;max-width:430px;white-space:pre-wrap}
+.state b{color:var(--dim);font-weight:600}
+/* the phone: 390 px frame, tokens of mobile.html */
+.phone{position:relative;width:390px;height:760px;background:var(--bg);border:1px solid var(--line);border-radius:36px;overflow:hidden;display:flex;flex-direction:column;font:13.5px/1.4 var(--mono);color:var(--fg)}
+.sb{display:flex;justify-content:space-between;padding:10px 22px 4px;color:var(--dim);font-size:11px}
+.hd{display:flex;align-items:center;gap:10px;padding:6px 14px}
+.hd b{font-size:15px;color:#e6e9ef}.hd .sub{color:var(--dim);font-size:11px}.hd .sp1{flex:1}
+.ib{background:#222630;border:1px solid var(--line);border-radius:8px;color:var(--fg);font:inherit;font-size:12px;padding:4px 8px;min-height:32px}
+.ptabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--line);flex:none}
+.ptab{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 12px;background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--dim);font:inherit;white-space:nowrap;cursor:pointer}
+.ptab[aria-selected=true]{color:#e6e9ef;font-weight:700;border-bottom-color:var(--blue)}
+.ptab .x{color:var(--dim);padding:0 2px}.ptab .at{color:var(--yellow)}
+.pbody{flex:1;overflow:auto;padding:8px 0;min-height:0}
+.ln{padding:1px 14px;white-space:pre;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.ln.add{color:var(--green)}.ln.del{color:var(--red)}.ln.hk{color:var(--cyan)}
+.frow{display:flex;gap:8px;align-items:center;width:100%;min-height:46px;padding:6px 14px;background:none;border:0;border-bottom:1px solid #2d323c;border-radius:0;color:var(--fg);font:inherit;text-align:left}
+.frow .p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg{display:flex;gap:6px;padding:4px 14px 8px}
+.seg button{flex:1;min-height:36px;border-radius:10px;font-size:12px}
+.seg button[aria-pressed=true]{border-color:var(--blue);background:var(--sel);color:#e6e9ef}
+.pstatus{height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--sel);font-size:11.5px;color:var(--dim);flex:none}
+.pstatus .chip{background:var(--blue);color:var(--bg);font-weight:700;padding:0 6px;border-radius:3px}
+.pback{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none}.pback.on{display:block}
+.psheet{position:absolute;left:0;right:0;bottom:0;max-height:82%;background:var(--panel);border-radius:14px 14px 0 0;padding:8px 0 16px;border-top:1px solid var(--line);overflow:auto}
+.psheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 8px}
+.act{display:block;width:calc(100% - 28px);min-height:46px;margin:6px 14px;background:#2a2f3a;border:1px solid var(--line);border-radius:10px;color:var(--fg);font:inherit;text-align:left;padding:0 14px}
+.empty{color:var(--dim);padding:22px 14px;font-size:12.5px}
+</style></head><body>
+<h1>jw · el diff y el visor como paneles del layout</h1>
+<p class="note">Prototipo para aprobar antes del spec. Hoy el diff flota (una columna de 3/5 del ancho, o la pantalla entera) y el visor de archivos se dibuja encima de los paneles: ninguno de los dos es una hoja del árbol <code>Layout</code>. Aquí los dos son <b>un panel más</b>: nacen dividiendo el layout, tienen el mismo borde, foco, tamaño, zoom y cierre que una shell, y se pueden <b>intercambiar</b> con cualquier otro. El visor sigue siendo de solo lectura (no hay editor). Lo que no está cerrado son los selectores de arriba; la lista final está en «Para decidir».</p>
+
+<div class="ctl" id="ctl">
+  <div class="grp"><b>WORKSPACE</b><select id="o-ws"><option value="0">jw · feat/panes (con cambios)</option><option value="1">sales-assist (sin cambios)</option></select></div>
+  <div class="grp"><b>ANCHO DEL TERMINAL</b><select id="o-W"><option value="110">110 columnas</option><option value="72">72 (estrecho)</option><option value="46">46 (muy estrecho)</option></select></div>
+  <div class="grp"><b>A · DÓNDE NACE EL DIFF</b><select id="o-A"><option value="edge">borde derecho del workspace</option><option value="focused">divide el panel enfocado</option></select></div>
+  <div class="grp"><b>B · VISOR</b><select id="o-B"><option value="tabs">un visor con pestañas</option><option value="each">un panel por archivo</option></select></div>
+  <div class="grp"><b>C · DIFFS A LA VEZ</b><select id="o-C"><option value="one">uno, con vistas 1 2 3</option><option value="many">uno por vista</option></select></div>
+  <div class="grp"><b>D · AL CERRAR Y ABRIR</b><select id="o-D"><option value="remember">recuerda su lugar</option><option value="forget">nace de nuevo</option></select></div>
+  <div class="grp"><b>E · SIN CAMBIOS</b><select id="o-E"><option value="open">abre igual</option><option value="refuse">avisa y no abre</option></select></div>
+  <div class="grp"><b>F · TELÉFONO</b><select id="o-F"><option value="tabs">pestañas</option><option value="screen">pantalla aparte (hoy)</option></select></div>
+</div>
+<div class="ctl">
+  <button id="b-change">simular: llega un cambio</button>
+  <button id="b-commit">simular: commit de todo</button>
+  <button id="b-lead">^␣ (volver al cliente)</button>
+  <button id="b-reset">reiniciar</button>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p class="note" style="max-width:760px">Haz clic en el terminal y usa el teclado (en modo cliente, como hoy): <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> foco · <kbd>Tab</kbd> siguiente · <kbd>H</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> swap con el vecino · <kbd>S</kbd> swap eligiendo número <i>(nuevo)</i> · <kbd>f</kbd> zoom · <kbd>&lt;</kbd><kbd>&gt;</kbd> <kbd>{</kbd><kbd>}</kbd> tamaño · <kbd>|</kbd><kbd>-</kbd> dividir con una shell · <kbd>n</kbd> shell nueva · <kbd>x</kbd> cerrar · <kbd>d</kbd> diff · <kbd>t</kbd> árbol de archivos · <kbd>↵</kbd> escribir en el panel · <kbd>^␣</kbd> volver al cliente. Dentro del diff: <kbd>j</kbd><kbd>k</kbd> archivo · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> vistas · <kbd>↵</kbd> o <kbd>o</kbd> abre el archivo en un visor <i>(nuevo)</i> · <kbd>Tab</kbd> árbol/cuerpo. Dentro del visor: <kbd>j</kbd><kbd>k</kbd> · <kbd>Tab</kbd> pestaña · <kbd>w</kbd> cierra la pestaña. Ninguna usa Alt.</p>
+  </div>
+  <div>
+    <pre class="state" id="state"></pre>
+    <h2 style="margin-top:12px">Teléfono (el mismo estado)</h2>
+    <div class="phone" id="phone">
+      <div class="sb"><span>9:41</span><span>LTE · 92%</span></div>
+      <div id="pscreen" style="flex:1;display:flex;flex-direction:column;min-height:0"></div>
+      <div class="pback" id="pback"><div class="psheet" id="psheet"></div></div>
+    </div>
+  </div>
+</div>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>El diff y el visor son hojas del árbol</b> (<code>Layout::Pane</code> con otro tipo de contenido), no overlays. El borde, el foco, el zoom, el tamaño y el cierre son los de cualquier panel; ya no hay <code>side_room</code>, <code>diff_w</code> ni <code>overlay_area</code>.</li>
+  <li><b>Etiqueta de cada tipo</b> (en el borde superior): <code>shell</code>, <code>claude · título</code> (color de acento, con su aviso a la derecha), <code>± diff · sin commitear · contra main</code> con <code>● en vivo</code>, <code>▤ archivo · README.md</code> con el <code>% leído</code>. La barra de estado de abajo cambia sus atajos según el tipo del panel enfocado.</li>
+  <li><b>Modo cliente / modo panel, como hoy.</b> Con el foco en un panel, <kbd>↵</kbd> le da el teclado (el borde se pone verde y el chip de abajo dice DIFF, VISOR, SHELL…); <kbd>^␣</kbd> lo devuelve al cliente. En el diff y en el visor también vale <kbd>esc</kbd>, porque no hay shell debajo que lo necesite. Hoy <kbd>j</kbd><kbd>k</kbd> dentro del diff son del diff y fuera mueven el foco: igual.</li>
+  <li><b><kbd>d</kbd> alterna:</b> si no hay diff lo abre y lo enfoca; si hay uno sin foco lo enfoca; si ya lo tiene, lo cierra. No pide confirmación (cerrar un diff o un visor no pierde nada); shell y claude sí, como hoy.</li>
+  <li><b>Dónde nace el diff (A).</b> Por defecto en el <b>borde derecho del workspace</b>, con la mitad del ancho: un diff quiere ancho y así shell y claude no pierden su forma relativa. Alternativa: dividir el panel enfocado (a la derecha si mide ≥ 80 columnas; si no, debajo). Nace con 50 %, no 3/5; <kbd>&gt;</kbd> <kbd>&lt;</kbd> lo ajustan como a los demás.</li>
+  <li><b>Dónde nace el visor.</b> Divide el panel desde el que se abrió (el diff, o el enfocado si viene del árbol <kbd>t</kbd>): a la derecha si mide ≥ 80 columnas, si no debajo. Un archivo ya abierto se enfoca en vez de duplicarse. Con «un visor con pestañas» (como hoy <code>FileTabs</code>) los siguientes archivos son pestañas del mismo panel.</li>
+  <li><b>El diff abre archivos</b> (hoy no puede: <kbd>↵</kbd> solo salta dentro del diff). <kbd>↵</kbd>/<kbd>o</kbd> sobre un archivo lo abre en un visor y le da el foco; <kbd>^␣</kbd> <kbd>h</kbd> vuelve al diff. Un archivo borrado se abre vacío con su motivo.</li>
+  <li><b>Swap.</b> <kbd>H</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> ya intercambian con el vecino de ese lado; con el diff y el visor funcionan sin cambios. Los dos paneles se intercambian de lugar, <b>el tamaño se queda en el lugar</b> (un diff que pasa a un hueco ancho se ve ancho) y el foco se queda con el panel que moviste. Nuevo: <kbd>S</kbd> muestra un número en cada panel y la tecla del número intercambia con ese, para paneles que no son vecinos. Mover un panel a otro sitio sigue siendo cerrar + <kbd>|</kbd>/<kbd>-</kbd> (con D = «recuerda su lugar», el diff vuelve a donde estaba).</li>
+  <li><b>Zoom con <kbd>f</kbd></b> (la tecla de hoy; <kbd>z</kbd> hoy solo existe dentro del review diff, y esa se retira): el panel ocupa todo y los demás se esconden; abrir un panel nuevo, cambiar de workspace o <kbd>esc</kbd> en el árbol quita el zoom, como hoy.</li>
+  <li><b>Cerrar.</b> <kbd>x</kbd> cierra el panel y su hermano ocupa el lugar. Es el último panel: no se cierra. Con D = «recuerda», el workspace guarda <i>junto a quién, de qué lado y con qué tamaño</i> estaba el diff (y el visor); al abrirlo vuelve ahí si ese vecino sigue, si no, donde manda A. Con «nace de nuevo», siempre por la regla A.</li>
+  <li><b>Sin cambios.</b> El panel del diff muestra «sin cambios sin commitear» y sigue vivo: cuando llega un cambio, aparece (el <code>● en vivo</code> de hoy). Con E = «avisa y no abre», <kbd>d</kbd> solo dice «sin cambios» en la barra. Un diff abierto nunca se cierra solo porque quede vacío.</li>
+  <li><b>El workspace.</b> El layout es de cada workspace, y el diff es de su workspace: al cambiar, se ve el layout del otro (con su propio diff, o sin él). No «sigue» al workspace mostrado. Quitar un worktree se lleva sus paneles.</li>
+  <li><b>Pantalla estrecha.</b> Un panel necesita ≥ 14 columnas y ≥ 5 filas: si al dividir alguno queda menor, no se divide y la barra dice «no cabe: f zoom o cierra un panel». Dentro del diff el árbol de archivos solo se dibuja si el panel mide ≥ 84 columnas (como hoy); debajo, el cuerpo ocupa todo y <kbd>Tab</kbd> alterna con el árbol. Bajo 64 columnas el terminal enseña <b>un panel a la vez</b> (el enfocado, a pantalla completa) con una tira de títulos arriba; <kbd>h</kbd><kbd>l</kbd>/<kbd>Tab</kbd> cambian de panel. Es lo mismo que hace el teléfono.</li>
+  <li><b>Varios diffs (C).</b> Por defecto uno, con las vistas 1 sin commitear, 2 commits, 3 general dentro (como hoy). La alternativa es uno por vista: <kbd>2</kbd> abre (o enfoca) otro panel con los commits, debajo del primero; es útil para comparar, cuesta pantalla.</li>
+  <li><b>Teléfono (F).</b> Los paneles de un workspace son las <b>pestañas</b> de <code>PaneTabs</code>, en el orden de las hojas del layout: con el diff y el visor abiertos aparecen <code>± diff</code> y <code>▤ README.md</code> (con ✕). Tocar un archivo del diff abre su visor en otra pestaña. Zoom, tamaño y swap no existen en el teléfono; un swap en el PC solo reordena las pestañas. Con «pantalla aparte (hoy)» el diff sigue siendo una pantalla con ← y el visor una hoja encima. El estado de un panel (vista, archivo elegido, scroll) es de cada cliente; que el panel exista y su sitio, del daemon.</li>
+</ul>
+
+<h2>Para decidir</h2>
+<ol class="note" id="decide">
+  <li><b>A · Dónde nace el diff.</b> Recomiendo <b>borde derecho del workspace, 50 %</b>. Dividir el panel enfocado deja un diff de ~28 columnas cuando se abre desde un panel de una fila de dos, y un diff es lo que más ancho pide.</li>
+  <li><b>B · Visor.</b> Recomiendo <b>un visor con pestañas</b>: es lo que hace hoy (<code>FileTabs</code>) y evita llenar el layout al leer cinco archivos. «Un panel por archivo» sirve para leer dos a la vez: se puede pedir después con <kbd>|</kbd> sobre el visor (abrir otro visor), sin cambiar la regla.</li>
+  <li><b>C · Diffs a la vez.</b> Recomiendo <b>uno</b>, con las vistas dentro: la pantalla es poca y los tres alcances son lo mismo mirado de otro modo. El diseño de arriba no impide pasar a uno por vista más tarde (el tipo de panel ya lleva su vista).</li>
+  <li><b>D · Recordar el lugar.</b> Recomiendo <b>recordarlo</b> (vecino, lado y tamaño, por workspace, en memoria del daemon mientras viva la sesión; no se guarda en disco). Si no, cada <kbd>d</kbd> deshace el reparto que ajustaste.</li>
+  <li><b>E · Sin cambios.</b> Recomiendo <b>abrir igual</b>: el panel se llena solo cuando llegan cambios, y «no pasa nada al pulsar d» se lee como un fallo.</li>
+  <li><b>F · Teléfono.</b> Recomiendo <b>pestañas</b>: las pestañas ya son los paneles, y el diff y el visor dejan de tener su propia navegación (<code>Screen.Changes</code>, el diálogo del visor). Pregunta pendiente: los paneles que abre el teléfono aparecen en el layout del PC (recomiendo que sí: es el mismo nodo, se cierra con ✕ o <kbd>x</kbd>; la alternativa, paneles solo del teléfono, es otro tipo de estado).</li>
+  <li><b>Swap con <kbd>S</kbd> + número.</b> Recomiendo añadirlo: <kbd>H</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> solo llegan al vecino y con cuatro paneles ya hay pares inalcanzables. No usa Alt; <kbd>S</kbd> no está en uso (<kbd>s</kbd> es Sync).</li>
+  <li><b>Zoom.</b> Recomiendo <kbd>f</kbd> para todos los paneles y retirar el <kbd>z</kbd> del review diff, para que haya una sola tecla de zoom.</li>
+  <li><b>Al cambiar de workspace</b> recomiendo que el diff sea del workspace (lo de arriba). La alternativa («un único diff que sigue al workspace mostrado», como el review de hoy) obligaría a que un workspace sin diff abierto mostrara uno, y rompe «un panel es una hoja de su layout».</li>
+  <li><b>Al abrir un archivo desde el diff</b> el foco va al visor y el teclado también (para leer con <kbd>j</kbd><kbd>k</kbd> de inmediato). Alternativa: solo el foco. Recomiendo teclado en el visor.</li>
+</ol>
+
+<script>
+/* ================= model: a layout tree per workspace ================= */
+const $=id=>document.getElementById(id);
+let COLS=110;const ROWS=30,MINW=14,MINH=5,SINGLE_BELOW=64,TREE_FROM=84,TREE_W=30;
+const opt={A:'edge',B:'tabs',C:'one',D:'remember',E:'open',F:'tabs',W:110};
+let uid=1;
+const leaf=(kind,x)=>Object.assign({t:'leaf',id:uid++,kind},x||{});
+const split=(dir,a,b,r)=>({t:'split',dir,a,b,r:r==null?.5:r});
+const HUNKS={
+ 'crates/jw/src/tui.rs':[['@','@@ fn layout(&self) -> Vec<Rect> @@'],[' ','    let area = self.panes_area();'],['-','    let diff_w = self.diff_w();'],['-','    let side = self.side_room(area);'],['+','    // the diff is a leaf of the tree, like the shell'],['+','    let rects = self.layout.rects(area);'],[' ','    for (leaf, rect) in rects {'],['-','        self.draw_overlay(rect);'],['+','        self.draw_leaf(leaf, rect);'],[' ','    }']],
+ 'crates/jw/src/tui/changes.rs':[['@','@@ pub fn overlay_area(r: Rect) -> Rect @@'],['-','    Rect::new(r.x + r.w * 2 / 5, r.y, r.w * 3 / 5, r.h)'],['+','    r // a leaf already has its rect'],['@','@@ impl Changes @@'],[' ','    pub fn draw(&self, f: &mut Frame, r: Rect) {'],['+','        let title = self.title_for_pane();']],
+ 'docs/spec.md':[['@','@@ REQ-660 @@'],['+','- REQ-661: the diff is a leaf of the layout.'],['+','- REQ-662: the viewer is a leaf of the layout.'],['+','- REQ-663: swap works between any two leaves.']],
+ 'docs/prototypes/panes-diff.html':[['@','@@ new file @@'],['+','<!doctype html>'],['+','<title>the diff and the viewer as panes</title>'],['+','…']],
+ 'src/new.rs':[['@','@@ new file @@'],['+','pub fn arrived() -> bool { true }']],
+ 'README.md':[['@','@@ # jw @@'],['-','A terminal for agents.'],['+','A terminal for working with coding agents in parallel.']],
+};
+const VIEW={
+ 'README.md':['# jw','','A terminal for working with coding agents in parallel.','','## Panes','','A pane is a terminal first: always the user\'s $SHELL.','The diff and the viewer are panes too.','','## Build','','    just ci'],
+ 'AGENTS.md':['# jw — a terminal for working with coding agents','','## Rules','- Identity lives in identity.toml only.','- The JSON documents are the contract.','- A pane is a terminal first.','- Spec before code.','- Never bind a key with Alt.'],
+ 'docs/spec.md':['# Spec','','## Contract','REQ-659: avisos has the tabs alertas and trabajos.','REQ-660: the bell has the jobs\' own mark.','REQ-661: the row of a removed workspace spins.'],
+ 'crates/jw/src/tui.rs':['use std::io;','','pub struct View { /* … */ }','','impl View {','    pub fn layout(&self) -> Vec<Rect> {','        let area = self.panes_area();','        // …','    }','}'],
+ 'justfile':['ci:','    cargo fmt --check','    cargo clippy --workspace','    cargo test --workspace'],
+};
+const TREE_FILES=Object.keys(VIEW);
+function mkWs(name,branch,dirty){
+  const sh=leaf('shell'),cl=leaf('claude');
+  return {name,branch,layout:split('row',sh,cl,.5),focus:cl.id,full:false,typing:false,mode:null,ask:null,pick:null,tree:{sel:0},mem:{},flash:'',flashCls:'',
+    changes:dirty?['crates/jw/src/tui.rs','crates/jw/src/tui/changes.rs','docs/spec.md','docs/prototypes/panes-diff.html']:[],
+    commits:dirty?[['74f22e8','fix(jobs): a removal that is over…'],['b7f990d','feat(android): jobs on the phone'],['bdbad6a','feat(tui): jobs in the terminal client']]:[],
+    general:dirty?['crates/jw/src/tui.rs','crates/jw/src/tui/changes.rs','docs/spec.md','docs/prototypes/panes-diff.html','README.md']:[]};
+}
+let WS,cw,ph;
+function reset(){
+  uid=1;WS=[mkWs('jw','feat/panes',true),mkWs('sales-assist','main',false)];cw=0;
+  ph={cur:null,scope:1,file:null,screen:'ws',sheet:null,plus:false,viewer:null};
+  render();
+}
+const cur=()=>WS[cw];
+/* tree helpers */
+const leaves=n=>n.t==='leaf'?[n]:[...leaves(n.a),...leaves(n.b)];
+const firstLeaf=n=>n.t==='leaf'?n:firstLeaf(n.a);
+const contains=(r,n)=>r===n||(r.t==='split'&&(contains(r.a,n)||contains(r.b,n)));
+function parentOf(r,n){if(r.t!=='split')return null;if(r.a===n)return{p:r,k:'a'};if(r.b===n)return{p:r,k:'b'};return parentOf(r.a,n)||parentOf(r.b,n)}
+function replaceNode(ws,old,nw){if(ws.layout===old){ws.layout=nw;return}const f=parentOf(ws.layout,old);f.p[f.k]=nw}
+function insertBeside(ws,anchor,nl,side,share){
+  const dir=(side==='right'||side==='left')?'row':'col';
+  const afterAnchor=side==='right'||side==='below';
+  const first=afterAnchor?anchor:nl,second=afterAnchor?nl:anchor;
+  replaceNode(ws,anchor,split(dir,first,second,afterAnchor?1-share:share));
+}
+function insertEdge(ws,nl,share){ws.layout=split('row',ws.layout,nl,1-share)}
+function removeLeaf(ws,l){
+  const f=parentOf(ws.layout,l);if(!f)return null;
+  const sib=f.k==='a'?f.p.b:f.p.a;
+  const side=f.p.dir==='row'?(f.k==='a'?'left':'right'):(f.k==='a'?'above':'below');
+  const share=f.k==='a'?f.p.r:1-f.p.r;
+  replaceNode(ws,f.p,sib);
+  return {anchor:sib,side,share};
+}
+function walk(n,x,y,w,h,out){
+  if(n.t==='leaf'){out.push({leaf:n,x,y,w,h});return out}
+  if(n.dir==='row'){const wa=Math.max(1,Math.min(w-1,Math.round(w*n.r)));walk(n.a,x,y,wa,h,out);walk(n.b,x+wa,y,w-wa,h,out)}
+  else{const ha=Math.max(1,Math.min(h-1,Math.round(h*n.r)));walk(n.a,x,y,w,ha,out);walk(n.b,x,y+ha,w,h-ha,out)}
+  return out;
+}
+const single=()=>COLS<SINGLE_BELOW;
+const area=()=>single()?{x:0,y:1,w:COLS,h:ROWS-2}:{x:0,y:0,w:COLS,h:ROWS-1};
+const allRects=ws=>{const a=area();return walk(ws.layout,a.x,a.y,a.w,a.h,[])};
+function rects(ws){
+  const a=area();
+  if(single()||ws.full){const l=leaves(ws.layout).find(x=>x.id===ws.focus)||firstLeaf(ws.layout);return[{leaf:l,x:a.x,y:a.y,w:a.w,h:a.h}]}
+  return allRects(ws);
+}
+const fits=ws=>single()||allRects(ws).every(r=>r.w>=MINW&&r.h>=MINH);
+const byId=(ws,id)=>leaves(ws.layout).find(l=>l.id===id);
+const rectOf=(ws,l)=>allRects(ws).find(r=>r.leaf===l);
+const autoSide=r=>r.w>=80?'right':'below';
+function neighbour(ws,l,dir){
+  const rs=allRects(ws),me=rs.find(r=>r.leaf===l);let best=null,bo=0;
+  for(const r of rs){if(r===me)continue;let adj,ov;
+    if(dir==='left'){adj=r.x+r.w===me.x;ov=Math.min(r.y+r.h,me.y+me.h)-Math.max(r.y,me.y)}
+    else if(dir==='right'){adj=r.x===me.x+me.w;ov=Math.min(r.y+r.h,me.y+me.h)-Math.max(r.y,me.y)}
+    else if(dir==='up'){adj=r.y+r.h===me.y;ov=Math.min(r.x+r.w,me.x+me.w)-Math.max(r.x,me.x)}
+    else{adj=r.y===me.y+me.h;ov=Math.min(r.x+r.w,me.x+me.w)-Math.max(r.x,me.x)}
+    if(adj&&ov>bo){bo=ov;best=r.leaf}}
+  return best;
+}
+function say(ws,t,cls){ws.flash=t;ws.flashCls=cls||'c-yellow'}
+const NOFIT='no cabe: f zoom o cierra un panel';
+/* opening and closing */
+const memKey=l=>l.kind==='diff'?'diff'+(opt.C==='many'?l.scope:''):'viewer';
+function place(ws,nl,kind,anchorLeaf,fallback){
+  const m=opt.D==='remember'?ws.mem[kind]:null;
+  if(m){const a=contains(ws.layout,m.anchor)?m.anchor:anchorLeaf;insertBeside(ws,a,nl,m.anchor===a?m.side:fallback(a.t==='leaf'?a:firstLeaf(a)),m.share);return}
+  if(kind.startsWith('diff')&&opt.C==='many'){const other=leaves(ws.layout).find(l=>l.kind==='diff');if(other){insertBeside(ws,other,nl,'below',.5);return}}
+  if(kind.startsWith('diff')&&opt.A==='edge'){insertEdge(ws,nl,.5);return}
+  insertBeside(ws,anchorLeaf,nl,fallback(anchorLeaf),.5);
+}
+const sideOf=(ws,l)=>{const r=rectOf(ws,l);return r?autoSide(r):'below'};
+function addLeaf(ws,nl,kind,anchorLeaf,focus){
+  ws.full=false;
+  place(ws,nl,kind,anchorLeaf,a=>sideOf(ws,a));
+  if(!fits(ws)){removeLeaf(ws,nl);say(ws,NOFIT);return false}
+  if(focus!==false){ws.focus=nl.id}
+  return true;
+}
+function openDiff(ws,o){
+  o=o||{};const scope=o.scope||1;
+  const have=leaves(ws.layout).find(l=>l.kind==='diff'&&(opt.C==='one'||l.scope===scope));
+  if(have){if(o.focus!==false){ws.focus=have.id;ws.full=false}if(have.scope!==scope&&opt.C==='one')have.scope=scope;return have}
+  if(opt.E==='refuse'&&!ws.changes.length&&scope===1){say(ws,'sin cambios: no abro el diff');return null}
+  const nl=leaf('diff',{scope,sel:0,tree:false});
+  const anchor=byId(ws,ws.focus)||firstLeaf(ws.layout);
+  if(!addLeaf(ws,nl,memKey(nl),anchor,o.focus))return null;
+  return nl;
+}
+function openFile(ws,path,o){
+  o=o||{};const op=o.opener||byId(ws,ws.focus);
+  let v=leaves(ws.layout).find(l=>l.kind==='viewer'&&(opt.B==='tabs'||l.tabs[0]===path));
+  if(v){const i=v.tabs.indexOf(path);if(i<0){v.tabs.push(path);v.cur=v.tabs.length-1}else v.cur=i;v.scroll=0;ws.full=false;if(o.focus!==false)ws.focus=v.id;return v}
+  v=leaf('viewer',{tabs:[path],cur:0,scroll:0});
+  if(!addLeaf(ws,v,'viewer',op,o.focus))return null;
+  return v;
+}
+function closeLeaf(ws,l){
+  if(leaves(ws.layout).length<2){say(ws,'es el último panel: no se cierra');return false}
+  const info=removeLeaf(ws,l);
+  if(l.kind==='diff'||l.kind==='viewer')ws.mem[memKey(l)]=info;
+  if(ws.focus===l.id)ws.focus=firstLeaf(info.anchor).id;
+  ws.typing=false;ws.full=false;
+  if(ph.cur===l.id)ph.cur=null;
+  return true;
+}
+function swapLeaves(ws,a,b){const t={t:'leaf',id:-1};replaceNode(ws,a,t);replaceNode(ws,b,a);replaceNode(ws,t,b)}
+function resize(ws,l,dir,d){
+  let n=l;for(;;){const f=parentOf(ws.layout,n);if(!f)return false;if(f.p.dir===dir){f.p.r=Math.max(.1,Math.min(.9,f.p.r+d));return true}n=f.p}
+}
+const files=(ws,scope)=>scope===1?ws.changes:scope===3?ws.general:[];
+/* ================= keys ================= */
+const ARROW={ArrowLeft:'h',ArrowDown:'j',ArrowUp:'k',ArrowRight:'l'};
+function focusStep(ws,k){
+  const l=byId(ws,ws.focus),ls=leaves(ws.layout);
+  if(single()){const i=ls.indexOf(l);ws.focus=ls[(i+((k==='h'||k==='k')?ls.length-1:1))%ls.length].id;return}
+  const dir={h:'left',j:'down',k:'up',l:'right'}[k];const n=neighbour(ws,l,dir);if(n)ws.focus=n.id;
+}
+function press(k){
+  const ws=cur();k=ARROW[k]||k;ws.flash='';
+  if(ws.mode==='ask'){
+    if(k==='y'){const l=byId(ws,ws.ask);ws.mode=null;if(l)closeLeaf(ws,l)}else if(k==='n'||k==='Escape')ws.mode=null;
+    return render();
+  }
+  if(ws.mode==='pick'){
+    ws.mode=null;const ls=leaves(ws.layout),n=parseInt(k,10);
+    if(n>=1&&n<=ls.length){const a=byId(ws,ws.focus),b=ls[n-1];if(a!==b){swapLeaves(ws,a,b)}}
+    return render();
+  }
+  if(ws.mode==='tree'){
+    if(k==='Escape'||k==='t'){ws.mode=null;ws.full=false}
+    else if(k==='j')ws.tree.sel=Math.min(TREE_FILES.length-1,ws.tree.sel+1);
+    else if(k==='k')ws.tree.sel=Math.max(0,ws.tree.sel-1);
+    else if(k==='Enter'){ws.mode=null;openFile(ws,TREE_FILES[ws.tree.sel],{opener:byId(ws,ws.focus)});ws.typing=ws.focus&&byId(ws,ws.focus).kind==='viewer'}
+    return render();
+  }
+  if(k==='^␣'){ws.typing=false;return render()}
+  if(ws.typing)return typingKey(ws,k);
+  const l=byId(ws,ws.focus);
+  if('hjkl'.includes(k)&&k.length===1)focusStep(ws,k);
+  else if(k==='Tab'){const ls=leaves(ws.layout);ws.focus=ls[(ls.indexOf(l)+1)%ls.length].id}
+  else if('HJKL'.includes(k)&&k.length===1){const n=neighbour(ws,l,{H:'left',J:'down',K:'up',L:'right'}[k]);if(n)swapLeaves(ws,l,n);else say(ws,'no hay vecino a ese lado')}
+  else if(k==='S'){if(leaves(ws.layout).length<2)say(ws,'solo hay un panel');else ws.mode='pick'}
+  else if(k==='f'){ws.full=!ws.full}
+  else if(k==='>'||k==='<'){if(!resize(ws,l,'row',k==='>'?.05:-.05))say(ws,'no hay división vertical')}
+  else if(k==='}'||k==='{'){if(!resize(ws,l,'col',k==='}'?.05:-.05))say(ws,'no hay división horizontal')}
+  else if(k==='|'||k==='-'||k==='n'){
+    const nl=leaf('shell');ws.full=false;
+    insertBeside(ws,l,nl,k==='|'?'right':k==='-'?'below':sideOf(ws,l),.5);
+    if(!fits(ws)){removeLeaf(ws,nl);say(ws,NOFIT)}else ws.focus=nl.id;
+  }
+  else if(k==='x'){if(l.kind==='shell'||l.kind==='claude'){if(leaves(ws.layout).length<2)say(ws,'es el último panel: no se cierra');else{ws.mode='ask';ws.ask=l.id}}else closeLeaf(ws,l)}
+  else if(k==='d'){
+    if(l.kind==='diff')closeLeaf(ws,l);
+    else openDiff(ws,{scope:1});
+  }
+  else if(k==='t'){ws.mode='tree';ws.full=false}
+  else if(k==='Enter'){ws.typing=true}
+  render();
+}
+function typingKey(ws,k){
+  const l=byId(ws,ws.focus);
+  if(l.kind==='shell'||l.kind==='claude'){say(ws,'las teclas van a '+l.kind+' (aquí no hacen nada) · ^␣ vuelve al cliente','c-dim');return render()}
+  if(k==='Escape'){ws.typing=false;return render()}
+  if(l.kind==='diff'){
+    const list=files(ws,l.scope);
+    if(k==='j')l.sel=Math.min(Math.max(0,(l.scope===2?cur().commits.length:list.length)-1),l.sel+1);
+    else if(k==='k')l.sel=Math.max(0,l.sel-1);
+    else if(k==='1'||k==='2'||k==='3'){const s=+k;
+      if(opt.C==='one'){l.scope=s;l.sel=0}
+      else if(s!==l.scope){const o=openDiff(ws,{scope:s});if(o)ws.typing=true}}
+    else if(k==='Tab')l.tree=!l.tree;
+    else if(k==='Enter'||k==='o'){const p=l.scope===2?null:list[l.sel];if(p){l.tree=false;const v=openFile(ws,p,{opener:l});if(v)ws.typing=true}}
+  }else if(l.kind==='viewer'){
+    if(k==='j')l.scroll++;else if(k==='k')l.scroll=Math.max(0,l.scroll-1);
+    else if(k==='Tab'&&l.tabs.length>1){l.cur=(l.cur+1)%l.tabs.length;l.scroll=0}
+    else if(k==='w'){l.tabs.splice(l.cur,1);if(!l.tabs.length){closeLeaf(ws,l)}else l.cur=Math.min(l.cur,l.tabs.length-1)}
+  }
+  render();
+}
+/* ================= drawing ================= */
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+let G;
+const grid=()=>{G=Array.from({length:ROWS},()=>Array.from({length:COLS},()=>[' ','']))};
+function put(r,c,t,cls){for(const ch of [...String(t)]){if(r<0||r>=ROWS)return;if(c>=0&&c<COLS)G[r][c]=[ch,cls||''];c++;if(c>=COLS)return}}
+function fill(r,c,w,cls){for(let i=0;i<w;i++)if(c+i>=0&&c+i<COLS&&r>=0&&r<ROWS)G[r][c+i]=[' ',cls||'']}
+function clip(t,w){t=String(t);return [...t].length>w?[...t].slice(0,Math.max(0,w-1)).join('')+'…':t}
+function paint(){
+  $('scr').innerHTML=G.map(row=>{let s='',cl=null,b='';
+    const fl=()=>{if(b)s+=cl?`<span class="${cl}">${esc(b)}</span>`:esc(b);b=''};
+    for(const [ch,c] of row){if(c!==cl){fl();cl=c}b+=ch}fl();return s}).join('\n');
+}
+function box(r,focused,typing,title,tcls,badge,bcls){
+  const bc=focused?(typing?'c-green':'c-blue'):'c-dim';
+  put(r.y,r.x,'╭'+'─'.repeat(r.w-2)+'╮',bc);
+  for(let i=1;i<r.h-1;i++){put(r.y+i,r.x,'│',bc);put(r.y+i,r.x+r.w-1,'│',bc)}
+  put(r.y+r.h-1,r.x,'╰'+'─'.repeat(r.w-2)+'╯',bc);
+  let room=r.w-6,bt=badge?' '+badge+' ':'';
+  if(bt&&[...bt].length+8>room)bt='';
+  put(r.y,r.x+2,clip(' '+title+' ',room-[...bt].length),tcls);
+  if(bt)put(r.y,r.x+r.w-1-[...bt].length-1,bt,bcls);
+}
+function titleOf(ws,l){
+  if(l.kind==='shell')return {t:'shell',b:'',bc:''};
+  if(l.kind==='claude')return {t:'claude · panes del diff',b:'! permiso',bc:'c-yellow c-bold',accent:true};
+  if(l.kind==='diff'){const nm={1:'sin commitear',2:'commits',3:'general'}[l.scope];
+    return {t:'± diff · '+nm+(l.scope===1?' · contra main':' · contra origin/main'),b:l.scope===1&&ws.changes.length?'● en vivo':'',bc:'c-green'}}
+  const f=l.tabs[l.cur];return {t:'▤ archivo · '+f,b:Math.min(100,30+l.scroll*12)+'%',bc:'c-dim'};
+}
+function drawPane(ws,r){
+  const l=r.leaf,foc=l.id===ws.focus,t=titleOf(ws,l);
+  box(r,foc,foc&&ws.typing,(ws.full&&!single()?'⤢ ':'')+t.t,t.accent?'c-mag c-bold':foc?'c-blue c-bold':'c-bold',t.b,t.bc);
+  const ix=r.x+1,iy=r.y+1,iw=r.w-2,ih=r.h-2;
+  if(iw<4||ih<1)return;
+  if(l.kind==='shell'){
+    const L=['~/ws/jw $ git status','On branch feat/panes','Changes not staged for commit:','  modified: crates/jw/src/tui.rs','','~/ws/jw $ '];
+    L.forEach((s,i)=>put(iy+i,ix,clip(s,iw),i%5===0&&s?'c-green':'c-dim'));
+    if(foc&&ws.typing)put(iy+5,ix+11,'█','c-blue');
+  }else if(l.kind==='claude'){
+    const L=[['c-bold','› pasa el diff a un panel'],['','Voy a leer tui.rs y changes.rs'],['c-dim','  ● Read crates/jw/src/tui.rs'],['c-dim','  ● Read crates/jw/src/tui/changes.rs'],['','El diff ya no necesita su rect propio:'],['','es una hoja del árbol.'],['c-yellow','! permiso: cargo test --workspace'],['c-dim','  y sí · n no']];
+    L.forEach(([c,s],i)=>{if(i<ih)put(iy+i,ix,clip(s,iw),c)});
+  }else if(l.kind==='diff')drawDiff(ws,l,ix,iy,iw,ih,foc);
+  else drawViewer(ws,l,ix,iy,iw,ih);
+  if(ws.mode==='pick'){const n=leaves(ws.layout).indexOf(l)+1;const cx=r.x+Math.floor(r.w/2)-1,cy=r.y+Math.floor(r.h/2);
+    put(cy,cx-1,' '+n+' ',foc?'c-chip':'c-chipm')}
+}
+function drawDiff(ws,l,x,y,w,h,foc){
+  const names={1:'1 Sin commitear',2:'2 Commits',3:'3 General'};
+  const cnt={1:ws.changes.length,2:ws.commits.length,3:ws.general.length};
+  let c=x;
+  for(const s of [1,2,3]){const t=' '+(w<46&&s!==l.scope?s:names[s])+' '+cnt[s]+' ';put(y,c,t,s===l.scope?'c-chip':'c-dim');c+=[...t].length+1}
+  if(opt.C==='many'&&w>=46)put(y,Math.max(c,x+w-12),'↗ otra vista',  'c-dim');
+  const by=y+1,bh=h-1;
+  const list=files(ws,l.scope);
+  if(l.scope===2){
+    if(!ws.commits.length)return put(by+1,x+1,'sin commits en la rama','c-dim');
+    ws.commits.forEach((cm,i)=>{if(i<bh){const s=i===l.sel;if(s)fill(by+i,x,w,'c-sel');put(by+i,x+1,cm[0],'c-yellow'+(s?' c-sel':''));put(by+i,x+9,clip(cm[1],w-10),s?'c-sel c-bold':'')}});
+    return;
+  }
+  if(!list.length){put(by+1,x+1,clip(l.scope===1?'sin cambios sin commitear':'nada commiteado contra el origen',w-2),'c-dim');put(by+2,x+1,clip('se actualiza en vivo',w-2),'c-dim');return}
+  if(l.sel>=list.length)l.sel=0;
+  const wide=w>=TREE_FROM;let bx=x,bw=w;
+  const treeRows=(tx,tw)=>list.forEach((p,i)=>{if(i<bh){const s=i===l.sel;if(s)fill(by+i,tx,tw,foc?'c-sel':'c-sel');put(by+i,tx+1,clip(p,tw-2),(s?'c-bold c-sel':''))}});
+  if(wide){treeRows(x,TREE_W);for(let i=0;i<bh;i++)put(by+i,x+TREE_W,'│','c-dim');bx=x+TREE_W+1;bw=w-TREE_W-1}
+  else if(l.tree){treeRows(x,w);put(by+Math.min(bh-1,list.length+1),x+1,clip('↵ abrir archivo · tab cuerpo',w-2),'c-dim');return}
+  const p=list[l.sel];
+  put(by,bx,clip('◂ '+p+'  '+(l.sel+1)+'/'+list.length+' ▸',bw),'c-blue c-bold');
+  const hk=HUNKS[p]||[['@','@@ …']];
+  hk.forEach(([t,s],i)=>{if(i+1<bh){put(by+1+i,bx,clip((t==='@'?'':t+' ')+s,bw),t==='+'?'c-green':t==='-'?'c-red':t==='@'?'c-cyan':'')}});
+  if(!wide&&bh>hk.length+2)put(by+bh-1,bx,clip('tab árbol · ↵ abrir archivo',bw),'c-dim');
+}
+function drawViewer(ws,l,x,y,w,h){
+  let top=y;
+  if(l.tabs.length>1){let c=x;l.tabs.forEach((p,i)=>{const t=' '+p.split('/').pop()+' ';put(y,c,t,i===l.cur?'c-chip':'c-dim');c+=[...t].length+1});top=y+1}
+  const f=l.tabs[l.cur],L=VIEW[f]||['(vacío)'];
+  const sc=Math.min(l.scroll,Math.max(0,L.length-1));
+  for(let i=0;i<h-(top-y);i++){const s=L[sc+i];if(s==null)break;
+    put(top+i,x,String(sc+i+1).padStart(3),'c-dim');put(top+i,x+4,clip(s,w-4),s.startsWith('#')?'c-bold c-blue':'')}
+}
+function drawStatus(ws){
+  const r=ROWS-1;fill(r,0,COLS,'c-sel');
+  const l=byId(ws,ws.focus)||firstLeaf(ws.layout);
+  let chip,cc;
+  if(ws.mode==='ask'){chip=' CERRAR ';cc='c-chipy'}else if(ws.mode==='pick'){chip=' SWAP ';cc='c-chipm'}else if(ws.mode==='tree'){chip=' ÁRBOL ';cc='c-chipc'}
+  else if(ws.typing){chip=' '+({diff:'DIFF',viewer:'VISOR',shell:'SHELL',claude:'CLAUDE'}[l.kind])+' ';cc='c-chipg'}else{chip=' PANELES ';cc='c-chip'}
+  put(r,0,chip,cc);
+  let hint;
+  if(ws.mode==='ask')hint='¿cerrar el panel '+l.kind+'? y sí · n no';
+  else if(ws.mode==='pick')hint='número del panel con el que intercambiar · esc cancela';
+  else if(ws.mode==='tree')hint='j k mover · ↵ abrir en un visor · esc cerrar';
+  else if(ws.typing)hint=l.kind==='diff'?'j k archivo · 1 2 3 vistas · ↵ abrir · tab árbol · ^␣ volver':l.kind==='viewer'?'j k mover · tab pestaña · w cerrar pestaña · ^␣ volver':'^␣ volver al cliente';
+  else hint=(single()?'h l panel · ':'hjkl foco · HJKL swap · S número · ')+'f zoom · &lt; &gt; tamaño · d diff · t archivos · x cerrar · ↵ '+(l.kind==='diff'||l.kind==='viewer'?'entrar':'escribir');
+  hint=hint.replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  const right=ws.name+' · '+ws.branch+(ws.full?' · ⤢ zoom':'');
+  const room=COLS-chip.length-3-right.length;
+  if(ws.flash)put(r,chip.length+1,clip(ws.flash,room),ws.flashCls+' c-sel');else put(r,chip.length+1,clip(hint,room),'c-dim c-sel');
+  put(r,COLS-right.length-1,right,'c-dim c-sel');
+}
+function drawTree(ws){
+  const w=Math.min(34,COLS-4),h=TREE_FILES.length+4,x=1,y=1;
+  for(let i=0;i<h;i++)fill(y+i,x,w,'c-box');
+  put(y,x+1,'archivos del workspace','c-bold c-box');
+  TREE_FILES.forEach((p,i)=>{const s=i===ws.tree.sel;fill(y+2+i,x,w,s?'c-sel':'c-box');put(y+2+i,x+1,clip(p,w-2),(s?'c-bold c-sel':'c-box'))});
+}
+function render(){
+  $('o-ws').value=cw;
+  grid();const ws=cur();
+  if(single()){
+    const ls=leaves(ws.layout);let c=0;
+    fill(0,0,COLS,'c-sel');
+    ls.forEach(l=>{const t=' '+(l.kind==='viewer'?'▤ '+l.tabs[l.cur].split('/').pop():l.kind==='diff'?'± diff':l.kind)+' ';put(0,c,t,l.id===ws.focus?'c-chip':'c-dim c-sel');c+=[...t].length});
+  }
+  for(const r of rects(ws))drawPane(ws,r);
+  if(ws.mode==='tree')drawTree(ws);
+  drawStatus(ws);paint();
+  $('state').innerHTML=stateText(ws);
+  renderPhone();
+}
+function stateText(ws){
+  const lines=[];
+  const rec=(n,pre,last,top)=>{
+    const br=top?'':(last?'└ ':'├ '),nx=top?'':(pre+(last?'  ':'│ '));
+    if(n.t==='leaf'){const i=leaves(ws.layout).indexOf(n)+1;lines.push(pre+br+'['+i+'] '+n.kind+(n.kind==='diff'?' · vista '+n.scope:n.kind==='viewer'?' · '+n.tabs.join(', '):'')+(n.id===ws.focus?'  ◂ foco':''))}
+    else{lines.push(pre+br+(n.dir==='row'?'fila':'columna')+' '+Math.round(n.r*100)+'%');rec(n.a,nx,false,false);rec(n.b,nx,true,false)}
+  };
+  rec(ws.layout,'',true,true);
+  const mem=Object.entries(ws.mem).map(([k,m])=>k+' → '+(m.side)+' de '+(m.anchor.t==='leaf'?m.anchor.kind:'el resto')+' ('+Math.round(m.share*100)+'%)');
+  return '<b>ÁRBOL DEL LAYOUT · '+esc(ws.name)+'</b>\n'+esc(lines.join('\n'))+'\n<b>LUGAR RECORDADO</b>\n'+(mem.length?esc(mem.join('\n')):'(nada: D = '+(opt.D==='remember'?'recuerda, aún no se ha cerrado ninguno':'nace de nuevo')+')');
+}
+/* ================= phone ================= */
+function phTabs(ws){return leaves(ws.layout).filter(l=>opt.F==='tabs'||l.kind==='shell'||l.kind==='claude')}
+function phCurLeaf(ws){const t=phTabs(ws);return t.find(l=>l.id===ph.cur)||t[0]}
+function renderPhone(){
+  const ws=cur(),el=$('pscreen');let h='';
+  const total=ws.changes.length;
+  if(opt.F==='screen'&&ph.screen==='diff'){
+    h+=`<div class="hd"><button class="ib" data-a="back">←</button><b>cambios</b><span class="sub">${esc(ws.name)}</span></div>`;
+    h+=phDiffBody(ws);
+  }else{
+    h+=`<div class="hd"><b>${esc(ws.name)}</b><span class="sub">${esc(ws.branch)}</span><span class="sp1"></span>${opt.F==='screen'?`<button class="ib" data-a="diffscreen">± ${total}</button>`:''}</div>`;
+    h+='<div class="ptabs">';
+    for(const l of phTabs(ws)){const sel=l===phCurLeaf(ws);
+      const lab=l.kind==='viewer'?'▤ '+l.tabs[l.cur].split('/').pop():l.kind==='diff'?'± diff':l.kind;
+      h+=`<button class="ptab" aria-selected="${sel}" data-a="tab" data-id="${l.id}">${esc(lab)}${l.kind==='claude'?' <span class="at">●</span>':''}${l.kind==='diff'||l.kind==='viewer'?' <span class="x" data-a="close" data-id="'+l.id+'">✕</span>':''}</button>`}
+    h+='<button class="ptab" data-a="plus">＋</button></div>';
+    const l=phCurLeaf(ws)||{kind:'none'};
+    h+='<div class="pbody">';
+    if(l.kind==='shell')h+=['~/ws/jw $ git status','On branch feat/panes','  modified: crates/jw/src/tui.rs','~/ws/jw $ █'].map(s=>`<div class="ln">${esc(s)}</div>`).join('');
+    else if(l.kind==='claude')h+=['› pasa el diff a un panel','Voy a leer tui.rs…','  ● Read tui.rs','El diff ya es una hoja del árbol.','! permiso: cargo test --workspace'].map(s=>`<div class="ln">${esc(s)}</div>`).join('');
+    else if(l.kind==='diff')h+=phDiffBody(ws);
+    else if(l.kind==='viewer')h+=phViewerBody(l.tabs[l.cur]);
+    else h+='<div class="empty">sin paneles de terminal</div>';
+    h+='</div>';
+  }
+  const l=phCurLeaf(ws)||{kind:'—'};
+  h+=`<div class="pstatus"><span class="chip">${opt.F==='tabs'?esc(l.kind):'jw'}</span><span>${opt.F==='tabs'?phTabs(ws).length+' paneles':'paneles: '+phTabs(ws).length}</span></div>`;
+  el.innerHTML=h;
+  const sh=$('psheet'),bk=$('pback');
+  if(ph.sheet==='plus'){bk.classList.add('on');sh.innerHTML=`<div class="grab"></div><button class="act" data-a="newshell">shell</button><button class="act" data-a="opendiff"${opt.F==='screen'?' disabled':''}>± diff${opt.F==='screen'?' (hoy: desde la barra de arriba)':''}</button><button class="act" data-a="cancel">cancelar</button>`}
+  else if(ph.sheet==='viewer'&&opt.F==='screen'){bk.classList.add('on');sh.innerHTML=`<div class="grab"></div><div class="hd"><b>▤ ${esc(ph.viewer)}</b><span class="sp1"></span><button class="ib" data-a="cancel">✕</button></div>${phViewerBody(ph.viewer)}`}
+  else{bk.classList.remove('on');sh.innerHTML=''}
+}
+function phViewerBody(f){return (VIEW[f]||['(vacío)']).map((s,i)=>`<div class="ln"><span class="c-dim">${String(i+1).padStart(2)}</span> ${esc(s)}</div>`).join('')}
+function phDiffBody(ws){
+  const scopes={1:'sin commitear',2:'commits',3:'general'};
+  let h='<div class="seg">'+[1,2,3].map(s=>`<button data-a="scope" data-s="${s}" aria-pressed="${ph.scope===s}">${scopes[s]}</button>`).join('')+'</div>';
+  if(ph.scope===2)return h+(ws.commits.length?ws.commits.map(c=>`<div class="frow"><span class="c-yellow">${c[0]}</span><span class="p">${esc(c[1])}</span></div>`).join(''):'<div class="empty">sin commits en la rama</div>');
+  const list=files(ws,ph.scope);
+  if(!list.length)return h+'<div class="empty">sin cambios sin commitear<br>se actualiza en vivo</div>';
+  if(ph.file!=null&&list[ph.file]){const p=list[ph.file];
+    h+=`<div class="frow"><button class="ib" data-a="backfile">◂</button><span class="p c-blue">${esc(p)}</span><button class="ib" data-a="openfile" data-p="${esc(p)}">▤ abrir</button></div>`;
+    h+=(HUNKS[p]||[]).map(([t,s])=>`<div class="ln ${t==='+'?'add':t==='-'?'del':t==='@'?'hk':''}">${esc((t==='@'?'':t+' ')+s)}</div>`).join('');
+    return h;
+  }
+  return h+list.map((p,i)=>`<button class="frow" data-a="file" data-i="${i}"><span class="p">${esc(p)}</span><span class="c-green">+${HUNKS[p]?HUNKS[p].filter(x=>x[0]==='+').length:1}</span></button>`).join('');
+}
+function phAction(a,d){
+  const ws=cur();
+  if(a==='tab'){ph.cur=+d.id;}
+  else if(a==='close'){const l=byId(ws,+d.id);if(l){if(l.kind==='viewer'&&l.tabs.length>1){l.tabs.splice(l.cur,1);l.cur=0}else closeLeaf(ws,l)}}
+  else if(a==='plus')ph.sheet='plus';
+  else if(a==='cancel')ph.sheet=null;
+  else if(a==='newshell'){const nl=leaf('shell');insertBeside(ws,firstLeaf(ws.layout),nl,'below',.5);if(!fits(ws))removeLeaf(ws,nl);else ph.cur=nl.id;ph.sheet=null}
+  else if(a==='opendiff'){const dl=openDiff(ws,{scope:1,focus:false});if(dl)ph.cur=dl.id;ph.sheet=null}
+  else if(a==='diffscreen')ph.screen='diff';
+  else if(a==='back')ph.screen='ws';
+  else if(a==='scope'){ph.scope=+d.s;ph.file=null}
+  else if(a==='file')ph.file=+d.i;
+  else if(a==='backfile')ph.file=null;
+  else if(a==='openfile'){
+    if(opt.F==='tabs'){const v=openFile(ws,d.p,{focus:false,opener:leaves(ws.layout).find(l=>l.kind==='diff')||byId(ws,ws.focus)});if(v)ph.cur=v.id}
+    else{ph.viewer=d.p;ph.sheet='viewer'}
+  }
+  render();
+}
+/* ================= wiring ================= */
+if(typeof document!=='undefined'&&document.getElementById&&typeof window!=='undefined'&&!window.__node){
+  const $q=id=>document.getElementById(id);
+  for(const k of ['A','B','C','D','E','F','W'])$q('o-'+k).addEventListener('change',e=>{opt[k]=k==='W'?+e.target.value:e.target.value;if(k==='W')COLS=opt.W;ph.cur=null;render()});
+  $q('o-ws').addEventListener('change',e=>{cw=+e.target.value;cur().full=false;ph.cur=null;ph.file=null;render()});
+  $q('b-change').addEventListener('click',()=>{const w=cur();if(!w.changes.includes('src/new.rs'))w.changes.push('src/new.rs');if(!w.general.includes('src/new.rs'))w.general.push('src/new.rs');render()});
+  $q('b-commit').addEventListener('click',()=>{const w=cur();if(w.changes.length)w.commits.unshift(['a1b2c3d','chore: everything']);w.changes=[];leaves(w.layout).forEach(l=>{if(l.kind==='diff')l.sel=0});render()});
+  $q('b-lead').addEventListener('click',()=>{press('^␣');$q('term').focus()});
+  $q('b-reset').addEventListener('click',()=>{for(const k of ['A','B','C','D','E','F'])$q('o-'+k).value=opt[k]=({A:'edge',B:'tabs',C:'one',D:'remember',E:'open',F:'tabs'})[k];COLS=opt.W=110;$q('o-W').value='110';reset();$q('term').focus()});
+  $q('term').addEventListener('keydown',e=>{
+    if(e.metaKey||e.altKey)return;
+    let k=e.key;if(e.ctrlKey&&(e.code==='Space'||k===' '||k==='@'))k='^␣';else if(e.ctrlKey)return;
+    if(k==='Shift')return;
+    e.preventDefault();press(k);
+  });
+  $q('phone').addEventListener('click',e=>{const t=e.target.closest('[data-a]');if(!t)return;e.stopPropagation();phAction(t.dataset.a,t.dataset)});
+  reset();$q('term').focus();
+}
+</script></body></html>

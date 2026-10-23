@@ -102,6 +102,8 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            views: Vec::new(),
+            places: Default::default(),
             adopted: false,
             ports: None,
             review: None,
@@ -204,6 +206,8 @@ pub fn create_worktree(
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            views: Vec::new(),
+            places: Default::default(),
             adopted: false,
             ports: (!project.ports.is_empty()).then(|| crate::model::PortBlock {
                 slot: 0,

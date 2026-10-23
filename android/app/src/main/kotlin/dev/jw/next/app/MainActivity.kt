@@ -174,7 +174,6 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
-            is Screen.Changes -> ChangesScreen(source, state, screen, nav) { state = it }
             is Screen.Folders -> FoldersScreen(source, state, nav) { state = it }
             is Screen.Files -> FilesScreen(source, state, screen, nav) { state = it }
             is Screen.Settings -> {

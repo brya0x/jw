@@ -277,6 +277,20 @@ sealed interface Cmd {
     @Serializable @SerialName("close_pane")
     data class ClosePane(val pane: Id) : Cmd
 
+    /** Open the diff or the viewer of a workspace as a leaf of its layout; replies `{view}`. */
+    @Serializable @SerialName("open_view")
+    data class OpenView(
+        val workspace: Id,
+        val kind: ViewKind,
+        val path: String? = null,
+        val beside: Id? = null,
+        val dir: SplitDir? = null,
+    ) : Cmd
+
+    /** Close a view, or with [path] one tab of a viewer (the last tab closes it). */
+    @Serializable @SerialName("close_view")
+    data class CloseView(val view: Id, val path: String? = null) : Cmd
+
     @Serializable @SerialName("write")
     data class Write(val pane: Id, val data: String) : Cmd
 
@@ -666,6 +680,22 @@ sealed interface Layout {
 @Serializable
 data class PaneSummary(val id: Id, val title: String, val attention: List<Attention>)
 
+@Serializable
+enum class ViewKind {
+    @SerialName("diff") Diff,
+    @SerialName("viewer") Viewer,
+}
+
+/** A leaf of a workspace's layout that is not a terminal: the diff, or a viewer with its tabs. */
+@Serializable
+data class ViewSummary(
+    val id: Id,
+    val kind: ViewKind,
+    val title: String,
+    /** A viewer's tabs: paths relative to the workspace, at most 8, the oldest first. */
+    val files: List<String> = emptyList(),
+)
+
 /** The line the shell is holding: its text, and the cursor's place in it in characters. */
 @Serializable
 data class PaneInput(val text: String, val cursor: Int)
@@ -734,6 +764,8 @@ sealed interface Node {
         val branch: String? = null,
         val panes: List<PaneSummary>,
         val layout: Layout? = null,
+        /** The diff and the viewer that are leaves of [layout] beside the panes. */
+        val views: List<ViewSummary> = emptyList(),
         /** The workspace reviews a pull request. */
         val review: Review? = null,
         /** A worktree is being removed: nothing can be done with the workspace. */

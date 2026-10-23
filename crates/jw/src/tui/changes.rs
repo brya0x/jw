@@ -157,6 +157,8 @@ pub enum Outcome {
     /// Lines were picked and `↵` asked for where they are, as `@file#L10-14`: the client puts it
     /// in the agent's field (REQ-592).
     Reference(String),
+    /// `↵` or `o` on a file: open it in a viewer, as a tab of the workspace's viewer (REQ-731).
+    Open(String),
 }
 
 /// The lines picked with `V`: where it began and where the cursor is, as places in the body.
@@ -189,9 +191,9 @@ struct Geom {
     split: bool,
 }
 
-/// The area the viewer has when it is a screen of its own: right of the sidebar, between the
-/// header and the status bar.
-fn overlay_area((cols, rows): (usize, usize)) -> Rect {
+/// The area the viewer has until a panel places it (it always is, but the tests): right of the
+/// sidebar, between the header and the status bar.
+fn default_area((cols, rows): (usize, usize)) -> Rect {
     let x = SIDEBAR + 1;
     (x, 1, cols.saturating_sub(x), rows.saturating_sub(2))
 }
@@ -271,7 +273,7 @@ impl Changes {
     }
 
     fn geom_of(&self, size: (usize, usize)) -> Geom {
-        geom(self.area.unwrap_or_else(|| overlay_area(size)), self.split)
+        geom(self.area.unwrap_or_else(|| default_area(size)), self.split)
     }
 
     pub fn workspace(&self) -> &str {
@@ -707,10 +709,28 @@ impl Changes {
             self.start_pick(docs);
             return Outcome::Stay;
         }
+        if self.tab != Tab::Commits
+            && (code == KeyCode::Char('o') || (code == KeyCode::Enter && self.focus == Focus::Body))
+        {
+            return self.file_under(docs).map_or(Outcome::Stay, Outcome::Open);
+        }
         match self.tree_or_body(code, docs, g) {
             Some(outcome) => outcome,
             None => self.global(code, docs),
         }
+    }
+
+    /// The file `↵` and `o` open: the one the tree's row names while the tree has the keys, else
+    /// the one the body is on.
+    fn file_under(&self, docs: &Docs) -> Option<String> {
+        let d = self.diff(docs)?;
+        let cache = self.cache_for(d)?;
+        let pos = match (self.focus, self.items(docs).get(self.row)) {
+            (Focus::Tree, Some(Item::Tree(TreeRow::File { pos, .. }))) => *pos,
+            (Focus::Tree, _) => return None,
+            _ => self.cur,
+        };
+        d.files.get(*cache.order.get(pos)?).map(|f| f.path.clone())
     }
 
     /// Keys of the focused column; `None` for one that is not theirs.
@@ -962,12 +982,12 @@ impl Changes {
         let hint = if !self.msg.is_empty() {
             self.msg.clone()
         } else if self.focus == Focus::Tree {
-            "j/k mover · h/l plegar · ↵ ir · tab cuerpo · esc cerrar".into()
+            "j/k mover · h/l plegar · ↵ ir · tab cuerpo · esc volver · q cerrar".into()
         } else if self.tab == Tab::Commits && self.commit.is_some() {
-            "j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc cerrar"
+            "j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc volver · q cerrar"
                 .into()
         } else {
-            "j/k archivo · ]/[ hunk · v visto · V elegir líneas · 1 2 3 vistas · s lado a lado · w ajuste · tab árbol · esc cerrar".into()
+            "j/k archivo · ]/[ hunk · v visto · V elegir líneas · 1 2 3 vistas · s lado a lado · w ajuste · tab árbol · esc volver · q cerrar".into()
         };
         let seen = self.diff(docs).filter(|d| !d.too_large).map(|d| {
             (
@@ -978,7 +998,8 @@ impl Changes {
         (hint, seen)
     }
 
-    /// Draw the viewer over the panes' area.
+    /// Draw the viewer in the area it has (tests place none and get the default).
+    #[cfg(test)]
     pub fn draw(&self, g: &mut Grid, docs: &Docs, label: &str, now_ms: u64) {
         self.draw_focused(g, docs, label, now_ms, true);
     }
@@ -1617,6 +1638,37 @@ mod tests {
         assert!(r.changes.cache.as_ref().unwrap().lines.len() < rows_wrapped);
         r.key(KeyCode::Char('w'));
         assert!(r.text().contains('↪'), "w again wraps");
+    }
+
+    /// REQ-731: `o`, and `↵` in the body, open the file the diff is on in a viewer; `↵` in the tree
+    /// still goes to the file, and the list of commits has none.
+    #[test]
+    fn o_and_enter_in_the_body_open_the_file_the_diff_is_on() {
+        let mut r = rig((140, 40));
+        let cache = r.changes.cache.as_ref().unwrap();
+        let first = r.diffs.values().next().unwrap().files[cache.order[r.changes.cur]]
+            .path
+            .clone();
+        assert_eq!(r.changes.focus, Focus::Body);
+        assert_eq!(r.key(KeyCode::Char('o')), Outcome::Open(first.clone()));
+        assert_eq!(r.key(KeyCode::Enter), Outcome::Open(first.clone()));
+        // in the tree `↵` goes to the file and `o` opens the row's
+        r.key(KeyCode::Tab);
+        assert_eq!(r.changes.focus, Focus::Tree);
+        assert_eq!(
+            r.key(KeyCode::Enter),
+            Outcome::Stay,
+            "↵ in the tree is not an open"
+        );
+        let mut opened = false;
+        for _ in 0..8 {
+            if matches!(r.key(KeyCode::Char('o')), Outcome::Open(_)) {
+                opened = true;
+                break;
+            }
+            r.key(KeyCode::Char('j'));
+        }
+        assert!(opened, "o opens the row of a file");
     }
 
     /// REQ-592: `V` picks lines, `j` and `k` move the end of the pick inside the file, `esc` lets
