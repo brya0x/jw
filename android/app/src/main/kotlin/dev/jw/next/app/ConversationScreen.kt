@@ -601,7 +601,7 @@ private fun CommandList(menu: List<ConvCommand>, run: (ConvCommand) -> Unit) {
         LazyColumn(Modifier.heightIn(max = 280.dp)) {
             commandSections(menu, BuildConfig.PRODUCT).forEach { section ->
                 val colour = section.head.tint.colour()
-                stickyHeader(key = "head:${section.head.title}") {
+                stickyHeader(key = "head:${section.head.tint}:${section.head.title}") {
                     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
                         Row(Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                             Mono(section.head.title, colour, 11, bold = true)

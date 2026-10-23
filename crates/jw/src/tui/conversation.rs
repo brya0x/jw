@@ -3601,7 +3601,12 @@ impl Ui {
             let rows = visible(l);
             let at = l.at.min(rows.len().saturating_sub(1));
             let capacity = h.saturating_sub(3);
-            let plan = list_plan(&rows, at, capacity);
+            // A box under 5 lines is not drawn (draw_list), so it has no lines to click.
+            let plan = if h >= 5 {
+                list_plan(&rows, at, capacity)
+            } else {
+                Vec::new()
+            };
             if h >= 5 && y >= top + 2 && y < top + 2 + capacity && y - top - 2 < plan.len() {
                 // A title is no row: a click on it does nothing and the list stays.
                 if let Entry::Item(n) = plan[y - top - 2] {

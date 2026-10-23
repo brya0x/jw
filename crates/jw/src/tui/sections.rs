@@ -106,7 +106,8 @@ pub fn lines(heads: &[Head], at: usize, shown: usize, first: usize) -> (Vec<Entr
     let top = if all.len() <= shown {
         0
     } else {
-        first.clamp((lit + 1).saturating_sub(shown), lit.saturating_sub(1))
+        let low = (lit + 1).saturating_sub(shown);
+        first.clamp(low, lit.saturating_sub(1).max(low))
     };
     let mut out: Vec<Entry> = all.into_iter().skip(top).take(shown).collect();
     if let Some(&Entry::Item(first)) = out.first() {
@@ -244,6 +245,10 @@ mod tests {
             "{w:?}"
         );
         assert!(lines(&[], 0, 8, 0).0.is_empty());
+        // a window of one or no line is not a panic: the lit one is what is left
+        for shown in [0, 1] {
+            assert!(lines(&h, 15, shown, 3).0.len() <= shown);
+        }
     }
 
     #[test]

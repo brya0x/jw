@@ -184,6 +184,8 @@ class ConversationTest {
             listOf(Tint.Jwn, Tint.Personal, Tint.Project, Tint.Plugin, Tint.Plugin, Tint.Plugin, Tint.ClaudeAi, Tint.Claude),
             sections.map { it.head.tint },
         )
+        // a plugin whose group is named as another section is a section of its own (its sticky title is keyed by the section)
+        assertEquals(2, commandSections(slashMenu(listOf(cmd("/a", CommandSource.Project), cmd("/b", CommandSource.Plugin, "Proyecto")), "/"), "jw").size)
         // typing keeps the commands that hold the letters in every section, and a section with none is not drawn
         assertEquals(listOf("Proyecto"), commandSections(slashMenu(all, "/pro"), "jw").map { it.head.title })
         assertEquals(listOf("claude.ai"), commandSections(slashMenu(all, "/docs"), "jw").map { it.head.title })

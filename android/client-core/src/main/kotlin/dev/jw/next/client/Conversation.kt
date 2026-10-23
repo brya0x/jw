@@ -186,15 +186,8 @@ private fun sectionOrder(typed: String): Comparator<ConvCommand> = compareBy(
 )
 
 /** [commands], which are in the order of [slashMenu], as the sections they fall in; a title for each, none for an empty one (REQ-796). [product] is jw's section's title. */
-fun commandSections(commands: List<ConvCommand>, product: String): List<CommandSection> {
-    val out = mutableListOf<CommandSection>()
-    for (c in commands) {
-        val head = c.head(product)
-        if (out.lastOrNull()?.head == head) out[out.lastIndex] = out.last().copy(commands = out.last().commands + c)
-        else out += CommandSection(head, listOf(c))
-    }
-    return out
-}
+fun commandSections(commands: List<ConvCommand>, product: String): List<CommandSection> =
+    commands.groupBy { it.head(product) }.map { (head, cs) -> CommandSection(head, cs) }
 
 /** The `/word` the cursor ends: where it begins in the line and the letters after its slash (REQ-596). */
 data class SlashAt(val start: Int, val typed: String)
