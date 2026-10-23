@@ -6890,6 +6890,7 @@ mod tests {
                 source: CommandSource::Skill,
                 kind: CommandKind::Prompt,
                 description: None,
+                group: None,
             })
             .collect();
         let mut ui = Ui::default();
