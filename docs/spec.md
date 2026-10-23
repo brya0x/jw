@@ -1764,7 +1764,7 @@ REQ-790 by N171a and N171b: a test that a published text with a marker does not 
 | N171 | artifacts on the phone: an agent publishes, the phone shows and the person approves or asks for changes; spec + prototype `phone-artifacts.html` (version 0.0.40) | 759-791 | `docs/spec.md`, `docs/prototypes/phone-artifacts.html` |
 | N171a ✓ `1bbefc2` | contract (five commands, node `artifacts`, kind `artifact`), the store, versions, the node and the attention, the TUI mark, conformance fixtures | 759-768, 788, 790, 791 | `crates/contract`, `contract/`, `crates/daemon/src/artifacts.rs`, `crates/jw/src/tui.rs`, `android/contract` |
 | N171b ✓ `791fa5f` | the verdict to the pane, `jw artifact`, the skill | 769-773, 787, 790 | `crates/daemon/src/artifacts.rs`, `crates/jw/src/agent.rs`, `crates/jw/skill/SKILL.md` |
-| N171c | the bridge refuses publish and rm | 774 | `crates/web/src/bridge.rs` |
+| N171c ✓ `876ac8b` | the bridge refuses publish and rm | 774 | `crates/web/src/bridge.rs` |
 | N171d | the phone: the `⋮` menu, the list, the isolated view, the bar, the cache | 775-786, 789 | `android/app`, `android/client-core`, `android/contract` |
 | N169 ✓ `0a2d631` | the engine starts with `--resume` when the session's transcript is on disk, whatever `has_transcript` says, and with `--session-id` only when it is not; a note when the flag said it was there and it is not; version 0.0.37 | 754, 755 | `crates/daemon/src/engine.rs`, `crates/daemon/tests/{conversation.rs,fake-claude.py}`, `docs/spec.md` |
 | N168 | a question offers «Otra…», a free answer beside its options; spec + prototype `ask-other.html` (version 0.0.36) | 743-753 | `docs/spec.md`, `docs/prototypes/ask-other.html` |
