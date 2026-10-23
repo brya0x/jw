@@ -633,11 +633,10 @@ fn a_shell_without_the_integration_has_no_blocks() {
     d.stop();
 }
 
-#[test]
-fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
-    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
-        return;
-    };
+/// A pane started with `program` in a daemon of its own, with an empty home so the user's rc files
+/// stay out of it; `None` where neither bash nor zsh is installed.
+fn pane_with_program(program: &[&str]) -> Option<(Sandbox, Daemon, Client, String)> {
+    let shell = find("bash").or_else(|| find("zsh"))?;
     let sb = Sandbox::new();
     let home = sb.dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -665,7 +664,7 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
     let pane = c
         .cmd(Cmd::NewPane {
             workspace: ws,
-            program: Some(vec!["echo".into(), "from the wrapper".into()]),
+            program: Some(program.iter().map(|w| (*w).to_owned()).collect()),
             beside: None,
             dir: None,
         })
@@ -676,6 +675,14 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
         .unwrap()
         .to_owned();
     c.open(&pane).unwrap();
+    Some((sb, d, c, pane))
+}
+
+#[test]
+fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
+    let Some((_sb, d, mut c, pane)) = pane_with_program(&["echo", "from the wrapper"]) else {
+        return;
+    };
     // After the program, `exec $SHELL -i` brings the integration back: a prompt is reported.
     assert!(
         c.wait_until(Duration::from_secs(10), |c| c
@@ -693,51 +700,11 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
 /// blocks node, which would be an empty list); the shell that takes over brings the blocks.
 #[test]
 fn a_pane_started_with_a_program_is_its_screen_until_the_shell_reaches_its_prompt() {
-    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+    let Some((_sb, d, mut c, pane)) =
+        pane_with_program(&["sh", "-c", "echo on-the-screen; sleep 4"])
+    else {
         return;
     };
-    let sb = Sandbox::new();
-    let home = sb.dir.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let mut config = sb.config();
-    config.shell = Some(shell);
-    config.env = vec![
-        ("HOME".into(), home.to_string_lossy().into()),
-        ("ZDOTDIR".into(), home.to_string_lossy().into()),
-        ("skip_global_compinit".into(), "1".into()),
-    ];
-    let d = Daemon::start(config.clone()).unwrap();
-    let dir = std::fs::canonicalize(&sb.dir).unwrap().join("proj");
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut c = Client::connect(&config.socket, "test").unwrap();
-    let ws = c
-        .cmd(Cmd::OpenFolder {
-            path: dir.to_string_lossy().into(),
-        })
-        .unwrap()
-        .unwrap()
-        .unwrap()["workspace"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let pane = c
-        .cmd(Cmd::NewPane {
-            workspace: ws,
-            program: Some(vec![
-                "sh".into(),
-                "-c".into(),
-                "echo on-the-screen; sleep 4".into(),
-            ]),
-            beside: None,
-            dir: None,
-        })
-        .unwrap()
-        .unwrap()
-        .unwrap()["pane"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    c.open(&pane).unwrap();
     let on_screen = |c: &Client| {
         c.nodes.get(&pane).is_some_and(|n| {
             n["screen"]["lines"].as_array().is_some_and(|l| {
