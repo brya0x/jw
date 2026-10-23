@@ -119,6 +119,15 @@ const SUBCOMMANDS: [&str; 9] = [
 /// The id of the `initialize` request every engine is sent when it starts.
 pub const INIT_REQUEST: &str = "jwn-init";
 
+/// The request that asks an engine what it can do: when it starts and when a reload ends.
+fn initialize() -> Effect {
+    Effect::Write(json!({
+        "type": "control_request",
+        "request_id": INIT_REQUEST,
+        "request": {"subtype": "initialize"},
+    }))
+}
+
 /// Commands of Claude's that need its own screen: they are not sent, and the client points at
 /// `command claude` (REQ-423).
 pub const SCREEN: [&str; 12] = [
@@ -512,6 +521,10 @@ pub struct State {
     pub todos: Vec<Todo>,
     pub artifacts: Vec<Artifact>,
     pub commands: Vec<ConvCommand>,
+    /// When the engine last said `commands`: the freshest list is the one `commands.json` keeps (REQ-758).
+    pub commands_at: u64,
+    /// The turn that runs is `/reload-plugins` or `/reload-skills`: when it ends the engine is asked again (REQ-756).
+    reloading: bool,
     /// What the engine runs with when asked (`--model`): its name for the model, until its own answer says which one that is.
     wanted_model: Option<String>,
     /// The names the engine's `init` calls skills: they tell a skill from a project's command.
@@ -723,6 +736,8 @@ impl State {
             todos: Vec::new(),
             artifacts: Vec::new(),
             commands: own_commands(),
+            commands_at: 0,
+            reloading: false,
             wanted_model: None,
             skills: None,
             limits: None,
@@ -1182,6 +1197,11 @@ impl State {
         };
         self.begin_turn(now);
         self.inflight = Some(Inflight::Turn);
+        // Typed, queued or sent by an agent, it comes through here: the reload runs while it does.
+        self.reloading = matches!(
+            text.split_whitespace().next(),
+            Some("/reload-plugins" | "/reload-skills")
+        );
         vec![Effect::Write(user_line(&body, &images))]
     }
 
@@ -2361,6 +2381,11 @@ impl State {
             self.after_end(&mut out, now);
             return out;
         }
+        // The reload is done, so the list the engine gives now is the new one; the request goes
+        // before the message that waits (REQ-756).
+        if inflight.is_some() && std::mem::take(&mut self.reloading) {
+            out.push(initialize());
+        }
         self.auto = false;
         self.cost += turn_cost;
         self.finish_live();
@@ -2502,24 +2527,25 @@ impl State {
         // What waits is the engine's own from now on, not what another `claude` queued (REQ-549).
         self.followed_queue.clear();
         self.wanted_model = wanted.map(str::to_owned);
+        self.reloading = false;
         if self.status == ConvStatus::Resuming || self.status == ConvStatus::Dead {
             self.status = ConvStatus::Idle;
         }
-        vec![Effect::Write(json!({
-            "type": "control_request",
-            "request_id": INIT_REQUEST,
-            "request": {"subtype": "initialize"},
-        }))]
+        vec![initialize()]
     }
 
     /// The engine's answer to `initialize`: the commands, and the model it runs with when no turn
     /// has said it yet.
     fn initialized(&mut self, resp: &Value) {
-        let skills: Option<Vec<&str>> = self
-            .skills
-            .as_ref()
-            .map(|s| s.iter().map(String::as_str).collect());
-        self.commands = classify_commands(&resp["commands"], skills.as_deref());
+        // An answer with no list would leave only jwn's own: the list it had is better (REQ-757).
+        if resp["commands"].is_array() {
+            let skills: Option<Vec<&str>> = self
+                .skills
+                .as_ref()
+                .map(|s| s.iter().map(String::as_str).collect());
+            self.commands = classify_commands(&resp["commands"], skills.as_deref());
+            self.commands_at = stamp();
+        }
         // Still the placeholder, or the name it was asked with (`opus`): the engine says which model that is.
         if self.model == "claude" || self.wanted_model.as_deref() == Some(self.model.as_str()) {
             let models = resp["models"].as_array().map(Vec::as_slice).unwrap_or(&[]);
@@ -4148,6 +4174,84 @@ mod tests {
         s.engine_started(None);
         s.apply(&answer("claude-opus-5-5"), 1);
         assert_eq!(s.model, "haiku-5.5");
+    }
+
+    fn answer_of(names: &[&str]) -> Value {
+        let commands: Vec<Value> = names.iter().map(|n| json!({"name": n})).collect();
+        json!({"type": "control_response", "response": {"subtype": "success", "request_id": INIT_REQUEST,
+            "response": {"commands": commands}}})
+    }
+
+    fn asks(e: &[Effect]) -> usize {
+        writes(e)
+            .iter()
+            .filter(|w| w["request"]["subtype"] == "initialize")
+            .count()
+    }
+
+    /// REQ-756: the engine is asked again when the turn of a reload ends, once, before what waits.
+    #[test]
+    fn the_engine_is_asked_again_when_a_reload_ends_and_before_the_message_that_waits() {
+        for line in ["/reload-plugins", "/reload-skills", "  /reload-plugins now"] {
+            let mut s = st();
+            s.engine_started(None);
+            s.apply(&answer_of(&["deploy"]), 1);
+            let sent = s.send(line, vec![], 10);
+            assert_eq!(
+                asks(&sent),
+                0,
+                "{line}: with the line the answer is the old list"
+            );
+            assert!(s.send("y ahora esto", vec![], 11).is_empty());
+            let e = s.apply(&result(0.0), 20);
+            let w = writes(&e);
+            assert_eq!(asks(&e), 1, "{line}");
+            assert_eq!(
+                w[0]["request"]["subtype"], "initialize",
+                "before the message that waits"
+            );
+            assert_eq!(w[0]["request_id"], INIT_REQUEST);
+            assert_eq!(w[1]["message"]["content"], "y ahora esto");
+            // and the list is the new one when it comes, with the model and the turn untouched
+            s.apply(&answer_of(&["deploy", "ponytail:ponytail"]), 21);
+            assert!(s.commands.iter().any(|c| c.name == "/ponytail:ponytail"));
+            assert_eq!(s.status, ConvStatus::Thinking);
+            // the next turn that ends asks nothing
+            assert_eq!(asks(&s.apply(&result(0.0), 30)), 0, "{line}");
+        }
+    }
+
+    #[test]
+    fn no_other_line_and_no_new_engine_asks_again() {
+        let mut s = st();
+        s.engine_started(None);
+        for line in ["hola", "/reload", "/context", "no es /reload-plugins"] {
+            s.send(line, vec![], 10);
+            assert_eq!(asks(&s.apply(&result(0.0), 20)), 0, "{line}");
+        }
+        // a reload that was running when the engine went away is not asked of the next one twice
+        s.send("/reload-plugins", vec![], 30);
+        assert_eq!(asks(&s.engine_started(None)), 1);
+        assert_eq!(asks(&s.apply(&result(0.0), 40)), 0);
+    }
+
+    /// REQ-757: an error, or an answer with no list, leaves the list the conversation had.
+    #[test]
+    fn an_answer_that_fails_or_has_no_list_leaves_the_commands_and_says_nothing() {
+        let mut s = st();
+        s.engine_started(None);
+        s.apply(&answer_of(&["deploy"]), 1);
+        let (before, at) = (s.commands.clone(), s.commands_at);
+        let no_list = json!({"type": "control_response", "response": {"subtype": "success",
+            "request_id": INIT_REQUEST, "response": {}}});
+        let failed = json!({"type": "control_response", "response": {"subtype": "error",
+            "request_id": INIT_REQUEST, "error": "boom"}});
+        for msg in [no_list, failed] {
+            assert!(s.apply(&msg, 2).is_empty());
+            assert_eq!(s.commands, before);
+            assert_eq!(s.commands_at, at);
+            assert!(s.items.is_empty(), "no note, no notice");
+        }
     }
 
     #[test]
