@@ -47,6 +47,16 @@ pub struct Row {
     pub note: bool,
 }
 
+impl Row {
+    /// The path as `@` writes it: a folder's ends in `/` (REQ-837).
+    pub fn mention(&self) -> String {
+        match self.kind {
+            FileKind::Dir => format!("{}/", self.path),
+            _ => self.path.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Tree {
     /// The row the keys are on, and the first row shown.
@@ -58,6 +68,8 @@ pub struct Tree {
     /// The text of the search being typed, when there is one, and what it found.
     pub filter: Option<String>,
     pub found: Option<Found>,
+    /// What `space` marked for `@`, in the order it was marked, as `@` writes each (REQ-839).
+    pub marks: Vec<String>,
     dirs: HashMap<String, Dir>,
 }
 
@@ -84,6 +96,16 @@ impl Tree {
 
     pub fn listed(&mut self, path: &str, dir: Dir) {
         self.dirs.insert(path.to_owned(), dir);
+    }
+
+    /// Mark a path for `@`, or unmark it.
+    pub fn mark(&mut self, mention: String) {
+        match self.marks.iter().position(|m| *m == mention) {
+            Some(i) => {
+                self.marks.remove(i);
+            }
+            None => self.marks.push(mention),
+        }
     }
 
     /// Forget everything listed, to ask again for what is open.
@@ -363,6 +385,19 @@ mod tests {
         assert_eq!((t.sel, t.scroll), (2, 2));
         t.clamp(0, 4);
         assert_eq!((t.sel, t.scroll), (0, 0));
+    }
+
+    #[test]
+    fn a_folder_is_mentioned_with_a_slash_and_marks_keep_the_order_they_were_made_in() {
+        let mut t = loaded();
+        let rows = t.rows();
+        assert_eq!(rows[0].mention(), "src/");
+        assert_eq!(rows[2].mention(), "Cargo.toml");
+        t.mark(rows[2].mention());
+        t.mark(rows[0].mention());
+        assert_eq!(t.marks, ["Cargo.toml", "src/"]);
+        t.mark("Cargo.toml".into());
+        assert_eq!(t.marks, ["src/"], "a second space unmarks");
     }
 
     #[test]

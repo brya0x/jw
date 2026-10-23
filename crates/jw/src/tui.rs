@@ -1269,6 +1269,44 @@ impl View {
         after
     }
 
+    /// Paths picked in the file tree (`@`): written in the field of the agent as the `@` picker writes
+    /// them, a folder's ending in `/`, and the keys go to the field with the tree still shown; with no
+    /// agent they are copied (REQ-837, REQ-838).
+    fn mention_paths(&mut self, workspace: &str, paths: Vec<String>) -> After {
+        if paths.is_empty() {
+            return After::Continue;
+        }
+        let Some((at, node)) = self.agent() else {
+            self.flash = "no hay un agente aquí: la referencia quedó copiada".into();
+            return After::Copy(paths.iter().map(|p| format!("@{p} ")).collect());
+        };
+        let from_its_folder = self.written_from_the_conversations_folder(
+            workspace,
+            &node,
+            paths
+                .iter()
+                .map(|p| p.trim_end_matches('/').to_owned())
+                .collect(),
+        );
+        let text: String = from_its_folder
+            .iter()
+            .zip(&paths)
+            .map(|(p, picked)| {
+                let slash = if picked.ends_with('/') && !p.ends_with('/') {
+                    "/"
+                } else {
+                    ""
+                };
+                format!("@{p}{slash} ")
+            })
+            .collect();
+        // The tree can be shown for a workspace that is only highlighted: the field takes the keys
+        // only in the one that is open.
+        self.open(workspace, at);
+        self.tree_focus = false;
+        self.write_reference(at, node, &text)
+    }
+
     pub fn set_status(&mut self, status: &str) {
         self.status = status.to_owned();
     }
@@ -3555,6 +3593,12 @@ impl View {
         self.flash.clear();
         self.selection = None;
         self.unlight_conversations();
+        let here = self.selected_id();
+        for (ws, t) in &mut self.trees {
+            if Some(ws) != here.as_ref() {
+                t.marks.clear();
+            }
+        }
         if self.help {
             self.help = false;
             return After::Continue;
@@ -5068,6 +5112,9 @@ impl View {
         if self.tree_on && self.tree_focus {
             self.tree_on = false;
             self.tree_focus = false;
+            if let Some((_, t)) = self.tree_mut() {
+                t.marks.clear();
+            }
         } else {
             self.tree_on = true;
             self.tree_focus = true;
@@ -5311,6 +5358,25 @@ impl View {
         let mut ask_find: Option<String> = None;
         let mut reread = false;
         let mut flash = None;
+        // `@` and `space` act on the row, or the hit, the keys are on, searching or not (REQ-840).
+        match ev.code {
+            KeyCode::Char('@') => {
+                let marked = std::mem::take(&mut t.marks);
+                let paths = if marked.is_empty() {
+                    at.iter().map(tree::Row::mention).collect()
+                } else {
+                    marked
+                };
+                return self.mention_paths(&workspace, paths);
+            }
+            KeyCode::Char(' ') => {
+                if let Some(r) = &at {
+                    t.mark(r.mention());
+                }
+                return After::Continue;
+            }
+            _ => {}
+        }
         if let Some(text) = t.filter.clone() {
             match ev.code {
                 KeyCode::Esc => {
@@ -5385,6 +5451,7 @@ impl View {
                 }
                 KeyCode::Char('r') => reread = true,
                 KeyCode::Char('t') => {
+                    t.marks.clear();
                     self.tree_on = false;
                     self.tree_focus = false;
                     return After::Continue;
@@ -5488,6 +5555,9 @@ impl View {
                 FileKind::File => ("·", dim),
             };
             g.put_over(lead, y, glyph, glyph_style);
+            if !t.marks.is_empty() && t.marks.contains(&r.mention()) {
+                g.put_over(x0 + 1, y, "●", Style::fg(look::yellow()).bold());
+            }
             let mut style = if r.ignored {
                 dim
             } else {
@@ -6403,7 +6473,7 @@ impl View {
                 _ if self.tree_on && self.tree_focus => (
                     " ARCHIVOS ",
                     look::cyan(),
-                    "j/k mover · ↵ abrir · h cerrar · / buscar · . ocultos · y ruta · r leer · esc volver · t cerrar",
+                    "j/k mover · ↵ abrir · h cerrar · / buscar · . ocultos · y ruta · @ al agente · espacio marca · r leer · esc volver · t cerrar",
                 ),
                 (_, Level::Panels) if self.blk.is_some() => (
                     " BLOQUE ",
@@ -10636,6 +10706,220 @@ mod tests {
         assert!(v.tree_focus, "t gives the keys back");
         v.press_key(plain(KeyCode::Char('t')));
         assert!(!v.tree_on, "and closes it from inside");
+    }
+
+    /// The tree shown with the first pane an agent: its field is `conv_ui["conv-1"]`.
+    fn tree_view_with_agent() -> (View, String) {
+        let (mut v, ws) = tree_view();
+        v.panes
+            .get_mut("00000000-0000-4000-8000-0000000000c1")
+            .unwrap()
+            .conversation = Some("conv-1".into());
+        (v, ws)
+    }
+
+    fn field(v: &View) -> String {
+        v.conv_ui
+            .get("conv-1")
+            .map_or(String::new(), |u| u.editor.text().to_owned())
+    }
+
+    /// REQ-837: `@` writes the row's path in the agent's field, gives it the keyboard, sends nothing
+    /// and leaves the tree shown; a folder's path ends in `/`.
+    #[test]
+    fn at_writes_the_path_of_the_row_in_the_agents_field_and_gives_it_the_keyboard() {
+        let (mut v, _) = tree_view_with_agent();
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.press_key(plain(KeyCode::Char('@'))), After::Continue);
+        assert_eq!(field(&v), "@Cargo.toml ");
+        assert!(
+            v.typing && !v.tree_focus && v.tree_on,
+            "the field has the keys, the tree stays"
+        );
+        assert!(
+            v.typing_pane().is_some(),
+            "also when the workspace was only highlighted"
+        );
+        assert!(v.flash.contains("nada se mandó"), "{}", v.flash);
+        assert_eq!(v.trees.values().next().unwrap().sel, 2, "the row stays");
+        let (mut v, _) = tree_view_with_agent();
+        v.press_key(plain(KeyCode::Char('@')));
+        assert_eq!(field(&v), "@src/ ", "a folder ends in a slash");
+    }
+
+    /// REQ-839: `space` marks and unmarks with `●`, the cursor stays, and `@` writes the marked in the
+    /// order they were marked and lets the marks go.
+    #[test]
+    fn space_marks_rows_and_at_writes_them_in_the_order_marked_and_lets_the_marks_go() {
+        let (mut v, _) = tree_view_with_agent();
+        let dots = |v: &View| v.plain(120, 30).matches('●').count();
+        let base = dots(&v);
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press_key(plain(KeyCode::Char('k')));
+        v.press_key(plain(KeyCode::Char('k')));
+        v.press_key(plain(KeyCode::Char(' ')));
+        assert_eq!(
+            v.trees.values().next().unwrap().sel,
+            0,
+            "the cursor stays on the row"
+        );
+        assert_eq!(dots(&v), base + 2, "a ● on each marked row");
+        v.press_key(plain(KeyCode::Char(' ')));
+        assert_eq!(
+            v.trees.values().next().unwrap().marks,
+            ["Cargo.toml"],
+            "a second space unmarks"
+        );
+        v.press_key(plain(KeyCode::Char(' ')));
+        assert_eq!(v.press_key(plain(KeyCode::Char('@'))), After::Continue);
+        assert_eq!(
+            field(&v),
+            "@Cargo.toml @src/ ",
+            "in the order marked, not the tree's"
+        );
+        assert!(v.trees.values().all(|t| t.marks.is_empty()));
+        assert_eq!(dots(&v), base, "no mark is left");
+    }
+
+    /// REQ-839: the marks go when the tree is closed, or the workspace changes.
+    #[test]
+    fn the_marks_go_when_the_tree_is_closed_or_the_workspace_changes() {
+        let (mut v, _) = tree_view_with_agent();
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press_key(plain(KeyCode::Char('t')));
+        assert!(
+            v.trees.values().all(|t| t.marks.is_empty()),
+            "closed from inside"
+        );
+        v.press(Key::Tree);
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press(Key::Tree);
+        assert!(!v.tree_on);
+        assert!(
+            v.trees.values().all(|t| t.marks.is_empty()),
+            "closed from outside"
+        );
+        let (mut v, _) = tree_view_with_agent();
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press_key(plain(KeyCode::Esc));
+        v.press(Key::Back);
+        v.press(Key::Down);
+        v.press_key(plain(KeyCode::Esc));
+        assert!(
+            v.trees.values().all(|t| t.marks.is_empty()),
+            "another workspace"
+        );
+    }
+
+    /// REQ-840: in a search `@` and `space` act on the hit, the rest types as before; a note row is
+    /// not marked or written.
+    #[test]
+    fn in_a_search_at_and_space_act_on_the_hit_and_a_note_row_is_not_picked() {
+        let (mut v, ws) = tree_view_with_agent();
+        v.press_key(plain(KeyCode::Char('/')));
+        v.press_key(plain(KeyCode::Char('t')));
+        v.files_replied(FilesReply {
+            ask: FileAsk::Find {
+                workspace: ws.clone(),
+                query: "t".into(),
+            },
+            reply: Ok(Ok(Some(
+                serde_json::to_value(FoundFiles {
+                    paths: vec!["src/auth/token.rs".into(), "src/lib.rs".into()],
+                    cut: false,
+                })
+                .unwrap(),
+            ))),
+        });
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press_key(plain(KeyCode::Down));
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press_key(plain(KeyCode::Char('@')));
+        assert_eq!(field(&v), "@src/auth/token.rs @src/lib.rs ");
+        assert_eq!(
+            v.trees.values().next().unwrap().filter.as_deref(),
+            Some("t"),
+            "neither typed into the search"
+        );
+        let (mut v, ws) = tree_view_with_agent();
+        v.press_key(plain(KeyCode::Enter));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert!(
+            v.trees[&ws].rows()[v.trees[&ws].sel].note,
+            "the cursor is on «leyendo…»"
+        );
+        v.press_key(plain(KeyCode::Char(' ')));
+        assert!(v.trees[&ws].marks.is_empty());
+        assert_eq!(v.press_key(plain(KeyCode::Char('@'))), After::Continue);
+        assert_eq!(field(&v), "");
+        assert!(v.tree_focus, "nothing was written, the keys stay");
+    }
+
+    /// REQ-838: with no agent the text is copied and the tree keeps the keys.
+    #[test]
+    fn with_no_agent_at_copies_what_it_would_write_and_the_tree_keeps_the_keys() {
+        let (mut v, _) = tree_view();
+        v.press_key(plain(KeyCode::Char(' ')));
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char(' ')));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('@'))),
+            After::Copy("@src/ @target/ ".into())
+        );
+        assert!(v.flash.contains("no hay un agente"), "{}", v.flash);
+        assert!(v.tree_focus && v.tree_on && !v.typing);
+    }
+
+    /// The tree shown over a conversation that has the keyboard: the leader, then `t`.
+    fn tree_over_conversation() -> (View, String) {
+        let mut v = conv_view(true);
+        let ws = v.selected_id().unwrap();
+        v.press_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        v.press(Key::Tree);
+        v.files_replied(listing(
+            &ws,
+            "",
+            vec![file("src", FileKind::Dir, None, false)],
+        ));
+        (v, ws)
+    }
+
+    /// REQ-837, REQ-631: the path is written from the folder the conversation runs in.
+    #[test]
+    fn the_path_is_written_from_the_folder_the_conversation_runs_in() {
+        let (mut v, _) = tree_over_conversation();
+        let root = v.session.as_ref().unwrap().workspaces[0].path.clone();
+        v.convs.get_mut(CONV).unwrap().cwd = Some(format!("{root}/src"));
+        v.press_key(plain(KeyCode::Char('@')));
+        assert_eq!(
+            v.conv_ui[CONV].editor.text(),
+            "@./ ",
+            "the folder the agent is in"
+        );
+    }
+
+    /// REQ-842, RISK-124: after the leader the tree is shown without the keys, and `t` gives them
+    /// back; only with them does `t` close it.
+    #[test]
+    fn t_after_the_leader_gives_the_keys_to_a_shown_tree_and_closes_it_only_when_it_has_them() {
+        let (mut v, _) = tree_over_conversation();
+        v.press_key(plain(KeyCode::Char('@')));
+        assert!(v.typing_pane().is_some() && !v.tree_focus && v.tree_on);
+        v.press_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        assert!(
+            v.typing_pane().is_none(),
+            "the leader gives the keyboard back to the client"
+        );
+        v.press(Key::Tree);
+        assert!(
+            v.tree_on && v.tree_focus,
+            "t gives the keys, it does not close"
+        );
+        v.press_key(plain(KeyCode::Char('t')));
+        assert!(!v.tree_on, "with the keys, t closes it");
     }
 
     #[test]
