@@ -1525,7 +1525,11 @@ mod tests {
         let Some(Err(Fail::Waiting(text))) = turn_end(&c, 0, "x") else {
             panic!("a question waits");
         };
-        assert_eq!(text, "? pregunta: ¿Cuál?\n  1) uno\n  2) dos");
+        // the last row is the person's own words (REQ-753)
+        assert_eq!(
+            text,
+            "? pregunta: ¿Cuál?\n  1) uno\n  2) dos\n  3) Otra… (escribe tu respuesta)"
+        );
         let c = conversation(
             "idle",
             0,

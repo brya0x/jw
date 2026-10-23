@@ -735,6 +735,45 @@ fn the_questions_claude_asks_come_one_at_a_time_and_the_engine_gets_all_the_answ
 }
 
 #[test]
+fn a_question_is_answered_with_the_persons_own_words_alone_or_beside_the_marked_options() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "una pregunta");
+    let v = r.until(&node, "the first question", |v| v["status"] == "asking");
+    let first = v["ask"]["id"].as_str().unwrap().to_owned();
+    // nothing at all, only blanks, and an option that is none: refused, and the question stays (REQ-750)
+    assert!(r.answer(&node, &first, "", None).is_err());
+    assert!(r.answer(&node, &first, "", Some("   ")).is_err());
+    assert!(r.answer(&node, &first, "7", Some("Zig")).is_err());
+    // the marked options and the own words, in a choice of several
+    r.answer(&node, &first, "0,2", Some("  Zig ")).unwrap();
+    let v = r.until(&node, "the second question", |v| {
+        v["ask"]["title"] == "¿Qué framework?"
+    });
+    let second = v["ask"]["id"].as_str().unwrap().to_owned();
+    // in a choice of one, an option or the words, not both
+    assert!(r.answer(&node, &second, "0", Some("mi framework")).is_err());
+    r.answer(&node, &second, "", Some("mi framework")).unwrap();
+    let v = r.idle_after(&node, 1);
+    let tool = items(&v, "tool")[0];
+    assert_eq!(
+        tool["summary"], "Respondida: Rust, Go, «Zig» · «mi framework»",
+        "REQ-751"
+    );
+    assert_eq!(tool["by"], "el móvil");
+    wait_for("the engine to have the answers", || {
+        log_lines(&r.log).iter().any(|l| {
+            l.strip_prefix("answers ")
+                .and_then(|j| serde_json::from_str::<Value>(j).ok())
+                .is_some_and(|a| {
+                    a == serde_json::json!({"¿Qué lenguajes?": "Rust, Go, Zig", "¿Qué framework?": "mi framework"})
+                })
+        })
+    });
+    r.stop();
+}
+
+#[test]
 fn the_plan_that_waits_is_read_whole_as_blocks_with_its_file_and_is_refused_once_answered() {
     let mut r = rig();
     let (node, _) = r.open();

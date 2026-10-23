@@ -1,0 +1,12 @@
+{
+  "t": "cmd",
+  "id": "c63",
+  "cmd": {
+    "cmd": "conversation_answer",
+    "node": "00000000-0000-4000-8000-0000000000e1",
+    "ask": "req-2:1",
+    "key": "0,2",
+    "text": "Zig",
+    "by": "el móvil"
+  }
+}

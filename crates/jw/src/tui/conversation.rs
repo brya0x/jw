@@ -729,6 +729,12 @@ pub struct Ui {
     /// «Seguir planeando» was chosen on the plan that waits (its id) and the instruction that goes
     /// with it is being written (REQ-595).
     refusing: Option<(String, Composer)>,
+    /// «Otra…» of a question (REQ-743): the words written, whether its field has the keys, whether
+    /// `↵` was pressed with nothing written, and the width its rows wrap to as last drawn.
+    other: Composer,
+    other_open: bool,
+    other_empty: bool,
+    other_w: Cell<usize>,
     pop: Option<Pop>,
     images: Vec<(u32, Image)>,
     /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
@@ -859,6 +865,9 @@ impl Ui {
             self.ask_at = 0;
             self.picks.clear();
             self.refusing = None;
+            self.other = Composer::default();
+            self.other_open = false;
+            self.other_empty = false;
         }
     }
 
@@ -886,7 +895,13 @@ impl Ui {
         }
         // The reason of a refusal is one line: a line break in it becomes a space.
         if let Some((_, editor)) = self.refusing.as_mut() {
-            editor.insert(&text.replace("\r\n", " ").replace(['\r', '\n'], " "));
+            editor.insert(&one_line(text));
+            return;
+        }
+        // The words of «Otra…» are one line too.
+        if self.other_open {
+            self.other_empty = false;
+            self.other.insert(&one_line(text));
             return;
         }
         self.menu_at = 0;
@@ -1662,7 +1677,7 @@ impl Ui {
         let band_rows = conv
             .ask
             .as_ref()
-            .map_or(field_rows, ask_rows)
+            .map_or(field_rows, |a| ask_rows(a) + self.other_extra(a))
             .min(ih.saturating_sub(2));
         let band_y = foot.saturating_sub(band_rows);
         let work =
@@ -1889,7 +1904,11 @@ impl Ui {
         let (tx, tw) = (ix + 2, iw.saturating_sub(4));
         // The options sit at the bottom, where `click` counts them from; what the box is about
         // takes the rows above them and is cut when the pane is too short.
-        let opts_at = (y + h).saturating_sub(2 + ask.options.len());
+        let other = has_other(ask);
+        let other_pre = other_prefix(ask, false, false).chars().count();
+        self.other_w.set(tw.saturating_sub(other_pre + 2).max(1));
+        let opts_at = (y + h)
+            .saturating_sub(2 + ask.options.len() + usize::from(other) + self.other_extra(ask));
         let mut row = y + 1;
         let mut text_row = |g: &mut Grid, text: &str, style: Style| {
             if row >= opts_at {
@@ -1974,12 +1993,119 @@ impl Ui {
                 );
             }
         }
+        if other {
+            self.draw_other(g, ask, (ix, iw, tw), opts_at + ask.options.len());
+        }
         g.put(
             tx,
             y + h - 2,
-            &clip(ask_hint(ask), tw),
+            &clip(&self.ask_hint(ask, tw), tw),
             Style::fg(look::dim()).on(ground),
         );
+    }
+
+    /// The row of «Otra…»: its label or what was written, and while it has the keys its field, up to
+    /// `OTHER_ROWS` rows with the cursor in view (REQ-743, REQ-745).
+    fn draw_other(&self, g: &mut Grid, ask: &Ask, (ix, iw, tw): (usize, usize, usize), at: usize) {
+        let ground = look::panel();
+        let lit = self.ask_at == ask.options.len() || self.other_open;
+        let bg = if lit { look::sel() } else { ground };
+        let said = self.other_said();
+        let n = other_prefix(ask, lit, said.is_some());
+        let tx = ix + 2;
+        let x = tx + n.chars().count();
+        let number = Style::fg(look::yellow()).bold().on(bg);
+        if !self.other_open {
+            g.paint_bg(ix + 1, at, iw - 2, bg);
+            g.put(tx, at, &n, number);
+            let (label, colour) = match said {
+                Some(t) => (format!("Otra: {t}"), look::fg()),
+                None => ("Otra…".to_owned(), look::dim()),
+            };
+            g.put(
+                x,
+                at,
+                &clip(&label, tw.saturating_sub(n.chars().count())),
+                Style::fg(colour).on(bg),
+            );
+            return;
+        }
+        let (rows, (cr, cc)) = self.other_wrap(self.other_w.get());
+        let from = rows
+            .len()
+            .saturating_sub(OTHER_ROWS)
+            .min(cr.saturating_sub(OTHER_ROWS - 1));
+        for (j, r) in rows.iter().skip(from).take(OTHER_ROWS).enumerate() {
+            let y = at + j;
+            g.paint_bg(ix + 1, y, iw - 2, bg);
+            if j == 0 {
+                g.put(tx, y, &n, number);
+            }
+            let lead = if j == 0 && from == 0 { "▸ " } else { "  " };
+            g.put(x, y, lead, Style::fg(look::yellow()).on(bg));
+            g.put(x + 2, y, r, Style::fg(look::fg()).on(bg));
+            if cr - from == j {
+                let under = r.chars().nth(cc).unwrap_or(' ');
+                g.put(
+                    x + 2 + cc,
+                    y,
+                    &under.to_string(),
+                    Style::fg(bg).on(look::fg()),
+                );
+                if j == 0 && self.other_empty {
+                    let from_x = x + 2 + r.chars().count().max(cc + 1) + 1;
+                    g.put(
+                        from_x,
+                        y,
+                        &clip(
+                            "escribe algo, o esc vuelve",
+                            (ix + iw).saturating_sub(from_x + 1),
+                        ),
+                        Style::fg(look::red()).on(bg),
+                    );
+                }
+            }
+        }
+    }
+
+    /// What keys answer the box that asks, in what fits `w` columns.
+    fn ask_hint(&self, ask: &Ask, w: usize) -> String {
+        if !has_other(ask) {
+            return permission_hint(ask).to_owned();
+        }
+        let n = ask.options.len();
+        let nums = (1..=n).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+        let other = n + 1;
+        let options: Vec<String> = match (self.other_open, ask.multi) {
+            (true, true) => vec![
+                "↵ envía lo marcado y esto · esc vuelve · ^C interrumpe".into(),
+                "↵ envía lo marcado y esto · esc vuelve".into(),
+                "↵ envía · esc vuelve".into(),
+            ],
+            (true, false) => vec![
+                "↵ envía · esc vuelve · ^C interrumpe".into(),
+                "↵ envía · esc vuelve".into(),
+                "↵ envía".into(),
+            ],
+            (false, true) => vec![
+                format!("{nums} marcan · ↵ envía lo marcado · ↑↓ · {other} otra · esc interrumpe"),
+                format!("{nums} marcan · ↵ envía · ↑↓ · {other} otra"),
+                format!("{nums} · ↵ envía · {other} otra"),
+                format!("{nums} · ↵ envía"),
+            ],
+            (false, false) => vec![
+                format!("{nums} · ↑↓ ↵ · {other} otra · esc interrumpe"),
+                format!("{nums} · ↑↓ ↵ · {other} otra"),
+                format!("{nums} · ↵ · {other} otra"),
+                format!("{nums} · ↵"),
+            ],
+        };
+        options
+            .iter()
+            .find(|h| h.chars().count() <= w)
+            .or(options.last())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The checklist Claude keeps, over the conversation: how many lines are done, and the lines when it is open (REQ-434).
@@ -2512,6 +2638,87 @@ impl Ui {
         }
     }
 
+    /// The words of «Otra…» cut in rows of `w` columns, and the row and column the cursor is at.
+    fn other_wrap(&self, w: usize) -> (Vec<String>, (usize, usize)) {
+        let text: Vec<char> = self.other.text().chars().collect();
+        let cursor = self.other.cursor().min(text.len());
+        let w = w.max(1);
+        let mut rows = vec![String::new()];
+        let mut at = (0, 0);
+        for i in 0..=text.len() {
+            if rows.last().is_some_and(|r| r.chars().count() >= w) {
+                rows.push(String::new());
+            }
+            if i == cursor {
+                at = (rows.len() - 1, rows.last().map_or(0, |r| r.chars().count()));
+            }
+            if let (Some(c), Some(row)) = (text.get(i), rows.last_mut()) {
+                row.push(*c);
+            }
+        }
+        (rows, at)
+    }
+
+    /// The rows the field of «Otra…» takes beyond the one of the row, while it has the keys.
+    fn other_extra(&self, a: &Ask) -> usize {
+        let w = self.other_w.get();
+        if w == 0 || !(has_other(a) && self.other_open) {
+            return 0;
+        }
+        self.other_wrap(w).0.len().min(OTHER_ROWS).saturating_sub(1)
+    }
+
+    /// What was written in «Otra…», when it is something (REQ-722).
+    fn other_said(&self) -> Option<String> {
+        Some(self.other.text().trim().to_owned()).filter(|t| !t.is_empty())
+    }
+
+    /// The row of «Otra…» is lit and its field takes the keys (REQ-744).
+    fn open_other(&mut self, ask: &Ask) {
+        self.ask_at = ask.options.len();
+        self.other_open = true;
+        self.other_empty = false;
+    }
+
+    /// The keys while the words of «Otra…» are written (REQ-745, REQ-746): everything is written, `↵` sends, `esc`
+    /// goes back to the rows keeping what is written and `^C` stops what Claude does.
+    fn other_key(&mut self, node: &str, ask: &Ask, ev: &KeyEvent) -> Option<Act> {
+        if ev.code == KeyCode::Char('c') && ev.modifiers.contains(KeyModifiers::CONTROL) {
+            return Some(Act::Interrupt {
+                node: node.to_owned(),
+            });
+        }
+        self.other_empty = false;
+        match ev.code {
+            KeyCode::Esc => self.other_open = false,
+            KeyCode::Up => {
+                self.other_open = false;
+                self.ask_at = ask.options.len().saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                let Some(text) = self.other_said() else {
+                    self.other_empty = true;
+                    return None;
+                };
+                self.other_open = false;
+                return Some(Act::Answer {
+                    node: node.to_owned(),
+                    ask: ask.id.clone(),
+                    key: if ask.multi {
+                        self.pick_key()
+                    } else {
+                        String::new()
+                    },
+                    text: Some(text),
+                });
+            }
+            _ => {
+                self.other.edit(ev);
+            }
+        }
+        None
+    }
+
     fn toggle_pick(&mut self, i: usize) {
         match self.picks.iter().position(|p| *p == i) {
             Some(at) => {
@@ -2579,8 +2786,30 @@ impl Ui {
         if self.refusing.as_ref().is_some_and(|(id, _)| *id == ask.id) {
             return self.refusing_key(node, ask, ev);
         }
+        if has_other(ask) && self.other_open {
+            return self.other_key(node, ask, ev);
+        }
         let n = ask.options.len();
         let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
+        // The row of «Otra…» does not answer: its number, `↵` and space give it the keys.
+        if has_other(ask) {
+            let on_it = self.ask_at == n;
+            match ev.code {
+                KeyCode::Char(c @ '1'..='9') if c as usize - '1' as usize == n => {
+                    self.open_other(ask);
+                    return None;
+                }
+                KeyCode::Enter if on_it => {
+                    self.open_other(ask);
+                    return None;
+                }
+                KeyCode::Char(' ') if on_it => {
+                    self.open_other(ask);
+                    return None;
+                }
+                _ => {}
+            }
+        }
         // `esc` and `^C` stop what Claude was doing, the question that waits included: the daemon
         // refuses it first so that the engine is not left asking (REQ-603).
         if ev.code == KeyCode::Esc
@@ -2608,12 +2837,12 @@ impl Ui {
                     self.toggle_pick(self.ask_at.min(n.saturating_sub(1)));
                     return None;
                 }
-                KeyCode::Enter if !self.picks.is_empty() => {
+                KeyCode::Enter if !self.picks.is_empty() || self.other_said().is_some() => {
                     return Some(Act::Answer {
                         node: node.to_owned(),
                         ask: ask.id.clone(),
                         key: self.pick_key(),
-                        text: None,
+                        text: self.other_said(),
                     });
                 }
                 _ => {}
@@ -2631,7 +2860,8 @@ impl Ui {
                 None
             }
             KeyCode::Down => {
-                self.ask_at = (self.ask_at + 1).min(n.saturating_sub(1));
+                let last = n + usize::from(has_other(ask));
+                self.ask_at = (self.ask_at + 1).min(last.saturating_sub(1));
                 None
             }
             KeyCode::Enter if !ask.multi => Some(self.ask_at).filter(|i| *i < n),
@@ -3365,14 +3595,21 @@ impl Ui {
                 return None;
             }
             let n = ask.options.len();
-            let first = (geo.band.0 + geo.band.1).saturating_sub(2 + n);
-            if y >= first && y < first + n {
-                self.ask_at = y - first;
-                if ask.multi {
-                    self.toggle_pick(y - first);
+            let rows = n + usize::from(has_other(ask)) + self.other_extra(ask);
+            let first = (geo.band.0 + geo.band.1).saturating_sub(2 + rows);
+            if y >= first && y < first + rows {
+                let i = (y - first).min(n + usize::from(has_other(ask)) - 1);
+                if has_other(ask) && i == n {
+                    self.open_other(ask);
                     return None;
                 }
-                return self.choose(&node, ask, y - first);
+                self.other_open = false;
+                self.ask_at = i;
+                if ask.multi {
+                    self.toggle_pick(i);
+                    return None;
+                }
+                return self.choose(&node, ask, i);
             }
             // A click on what a plan says opens it whole.
             if ask.kind == AskKind::Plan && y > geo.band.0 && y < first {
@@ -3609,7 +3846,7 @@ fn keys_of(ask: &Ask) -> Vec<Option<char>> {
 }
 
 /// What keys answer the box that asks.
-fn ask_hint(ask: &Ask) -> &'static str {
+fn permission_hint(ask: &Ask) -> &'static str {
     match (ask.kind, ask.multi) {
         (AskKind::Plan, _) => "1 2 3 · v ver el plan · ↑↓ ↵ · esc interrumpe",
         (_, true) => "1 2 3 marcan · ↵ envía lo marcado · ↑↓ · esc interrumpe",
@@ -3624,8 +3861,36 @@ fn ask_rows(a: &Ask) -> usize {
         + a.plan.len().min(8)
         + a.diff.len().min(DIFF_SHOWN)
         + a.options.len()
+        + usize::from(has_other(a))
         + 1
 }
+
+/// A pasted text as one line: a line break in it becomes a space.
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
+/// A question has a last row, «Otra…», for the person's own words (REQ-743).
+fn has_other(a: &Ask) -> bool {
+    a.kind == AskKind::Question
+}
+
+/// What leads the row of «Otra…»: the lit mark, its number, and in a choice of several its box.
+fn other_prefix(ask: &Ask, lit: bool, said: bool) -> String {
+    let mark = match (ask.multi, said) {
+        (true, true) => "[x] ",
+        (true, false) => "[ ] ",
+        _ => "",
+    };
+    format!(
+        "{}{} {mark}",
+        if lit { "❯ " } else { "  " },
+        ask.options.len() + 1
+    )
+}
+
+/// The rows the words of «Otra…» show at most (REQ-745).
+const OTHER_ROWS: usize = 3;
 
 fn diff_lines(
     diff: &[DiffLine],
@@ -6975,6 +7240,195 @@ mod tests {
             vec![1],
             "the same question again keeps what is marked"
         );
+    }
+
+    fn answer_of(node: &str, key: &str, text: Option<&str>) -> Option<Act> {
+        Some(Act::Answer {
+            node: node.to_owned(),
+            ask: "req-9:0".into(),
+            key: key.into(),
+            text: text.map(str::to_owned),
+        })
+    }
+
+    #[test]
+    fn a_question_ends_with_the_row_otra_that_down_and_its_number_and_enter_reach_without_answering()
+     {
+        let one = asking(false);
+        let mut ui = Ui::default();
+        frame(&ui, &one);
+        let (_, rows) = frame(&ui, &one);
+        row_of(&rows, "4 Otra…");
+        row_of(&rows, "1 2 3 · ↑↓ ↵ · 4 otra · esc interrumpe");
+        for _ in 0..5 {
+            press(&mut ui, &one, KeyCode::Down);
+        }
+        assert_eq!(ui.ask_at, 3, "down reaches «Otra…» and stops there");
+        // enter on it, and its number, focus the field and answer nothing
+        assert_eq!(press(&mut ui, &one, KeyCode::Enter), None);
+        assert!(ui.other_open);
+        // space on it does the same, in a choice of one too (REQ-744)
+        let mut ui = Ui::default();
+        for _ in 0..3 {
+            press(&mut ui, &one, KeyCode::Down);
+        }
+        assert_eq!(press(&mut ui, &one, KeyCode::Char(' ')), None);
+        assert!(ui.other_open);
+        let mut ui = Ui::default();
+        assert_eq!(press(&mut ui, &one, KeyCode::Char('4')), None);
+        assert!(ui.other_open && ui.ask_at == 3);
+        // there is no fifth row
+        let mut ui = Ui::default();
+        assert_eq!(press(&mut ui, &one, KeyCode::Char('5')), None);
+        assert!(!ui.other_open);
+        // a permission has no such row
+        let mut perm = asking(false);
+        perm.ask.as_mut().unwrap().kind = AskKind::Permission;
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &perm);
+        assert!(rows.iter().all(|r| !r.contains("Otra")), "REQ-743");
+        press(&mut ui, &perm, KeyCode::Char('4'));
+        assert!(!ui.other_open);
+    }
+
+    #[test]
+    fn with_the_field_of_otra_open_every_key_is_written_enter_sends_and_an_empty_text_is_not_sent()
+    {
+        let node = fixture().head.id.clone();
+        let one = asking(false);
+        let mut ui = Ui::default();
+        frame(&ui, &one);
+        press(&mut ui, &one, KeyCode::Char('4'));
+        // digits, y, n and space are text here (REQ-745)
+        type_in(&mut ui, &one, "3 y n sqlite en memoria");
+        assert_eq!(ui.other.text(), "3 y n sqlite en memoria");
+        let (_, rows) = frame(&ui, &one);
+        row_of(&rows, "▸ 3 y n sqlite en memoria");
+        row_of(&rows, "↵ envía · esc vuelve · ^C interrumpe");
+        // an option's word with alt+backspace
+        ui.key(&one, &KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(ui.other.text(), "3 y n sqlite en ");
+        assert_eq!(
+            press(&mut ui, &one, KeyCode::Enter),
+            answer_of(&node, "", Some("3 y n sqlite en"))
+        );
+        // nothing written, or blanks: nothing is sent and the row says so (REQ-746)
+        let mut ui = Ui::default();
+        frame(&ui, &one);
+        press(&mut ui, &one, KeyCode::Char('4'));
+        assert_eq!(press(&mut ui, &one, KeyCode::Enter), None);
+        type_in(&mut ui, &one, "  ");
+        assert_eq!(press(&mut ui, &one, KeyCode::Enter), None);
+        let (_, rows) = frame(&ui, &one);
+        row_of(&rows, "escribe algo, o esc vuelve");
+        // esc goes back to the rows keeping what is written; esc again stops Claude; ^C does at once
+        type_in(&mut ui, &one, "hola");
+        assert_eq!(press(&mut ui, &one, KeyCode::Esc), None);
+        assert!(!ui.other_open);
+        let (_, rows) = frame(&ui, &one);
+        row_of(&rows, "4 Otra: hola");
+        assert_eq!(
+            press(&mut ui, &one, KeyCode::Esc),
+            Some(Act::Interrupt { node: node.clone() })
+        );
+        press(&mut ui, &one, KeyCode::Enter);
+        assert!(
+            ui.other_open,
+            "the row is lit still, enter gives it the keys back"
+        );
+        assert_eq!(
+            ui.key(
+                &one,
+                &KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            Some(Act::Interrupt { node })
+        );
+    }
+
+    #[test]
+    fn in_a_choice_of_several_the_words_go_with_what_is_marked() {
+        let node = fixture().head.id.clone();
+        let many = asking(true);
+        let mut ui = Ui::default();
+        frame(&ui, &many);
+        row_of(&frame(&ui, &many).1, "4 [ ] Otra…");
+        press(&mut ui, &many, KeyCode::Char('1'));
+        press(&mut ui, &many, KeyCode::Char('3'));
+        press(&mut ui, &many, KeyCode::Char('4'));
+        row_of(&frame(&ui, &many).1, "4 [ ] ▸ ");
+        type_in(&mut ui, &many, "Zig");
+        row_of(&frame(&ui, &many).1, "4 [x] ▸ Zig");
+        assert_eq!(
+            press(&mut ui, &many, KeyCode::Enter),
+            answer_of(&node, "0,2", Some("Zig"))
+        );
+        // the words stay when esc goes back, and enter on another row sends them with the marks
+        let mut ui = Ui::default();
+        press(&mut ui, &many, KeyCode::Char('2'));
+        press(&mut ui, &many, KeyCode::Char('4'));
+        type_in(&mut ui, &many, "Zig");
+        press(&mut ui, &many, KeyCode::Esc);
+        row_of(&frame(&ui, &many).1, "4 [x] Otra: Zig");
+        assert_eq!(
+            press(&mut ui, &many, KeyCode::Enter),
+            None,
+            "on its row: the field"
+        );
+        press(&mut ui, &many, KeyCode::Esc);
+        press(&mut ui, &many, KeyCode::Up);
+        assert_eq!(
+            press(&mut ui, &many, KeyCode::Enter),
+            answer_of(&node, "1", Some("Zig"))
+        );
+        // only the words
+        let mut ui = Ui::default();
+        press(&mut ui, &many, KeyCode::Char('4'));
+        type_in(&mut ui, &many, "solo");
+        assert_eq!(
+            press(&mut ui, &many, KeyCode::Enter),
+            answer_of(&node, "", Some("solo"))
+        );
+        // nothing marked and nothing written: nothing is sent
+        let mut ui = Ui::default();
+        assert_eq!(press(&mut ui, &many, KeyCode::Enter), None);
+    }
+
+    #[test]
+    fn the_next_question_starts_without_the_words_and_a_long_text_takes_three_rows_at_most() {
+        let one = asking(false);
+        let mut ui = Ui::default();
+        ui.sync(&one);
+        frame(&ui, &one);
+        press(&mut ui, &one, KeyCode::Char('4'));
+        type_in(&mut ui, &one, &"palabra ".repeat(40));
+        frame(&ui, &one);
+        let (_, rows) = frame(&ui, &one);
+        row_of(&rows, "↵ envía · esc vuelve");
+        let (first, hint) = (row_of(&rows, "❯ 4"), row_of(&rows, "↵ envía · esc vuelve"));
+        assert_eq!(
+            hint - first,
+            3,
+            "three rows of the field:\n{}",
+            rows.join("\n")
+        );
+        let mut next = asking(false);
+        next.ask.as_mut().unwrap().id = "req-9:1".into();
+        ui.sync(&next);
+        assert!(!ui.other_open);
+        assert_eq!(ui.other.text(), "");
+    }
+
+    #[test]
+    fn the_hint_of_a_question_gives_up_words_in_a_narrow_pane() {
+        let one = asking(false).ask.unwrap();
+        let ui = Ui::default();
+        assert_eq!(
+            ui.ask_hint(&one, 80),
+            "1 2 3 · ↑↓ ↵ · 4 otra · esc interrumpe"
+        );
+        for w in [30, 22, 12] {
+            assert!(ui.ask_hint(&one, w).chars().count() <= w.max(7), "{w}");
+        }
     }
 
     #[test]
