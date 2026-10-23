@@ -377,8 +377,9 @@ class Navigator(private val source: NodeSource) {
     /** A tap on the line of an attention in a Home row, or on an Avisos item: open the pane it names (REQ-34). */
     fun go(s: ClientState, a: Attention): ClientState {
         val route = routeOf(source.session(), a) ?: return s
-        // What waits is an artifact: its list opens, not a pane (REQ-782).
-        if (a.kind == AttentionKind.Artifact) return artifacts(openWorkspace(s, route.workspace), route.workspace)
+        // What waits is an artifact: its list opens, not a pane (REQ-782). The workspace is not opened, which would
+        // mark its pane seen for every client and end a question the person never saw; leaving the list does open it.
+        if (a.kind == AttentionKind.Artifact) return artifacts(s, route.workspace)
         return openWorkspace(s, route.workspace, route.pane)
     }
 

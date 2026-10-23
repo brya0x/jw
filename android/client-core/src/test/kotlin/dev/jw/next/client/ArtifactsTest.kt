@@ -103,9 +103,12 @@ class ArtifactsTest {
     private val withArtifact = session.copy(workspaces = listOf(ws.copy(attention = ws.attention + waiting)) + session.workspaces.drop(1))
 
     private class Fixed(private val session: Node.Session) : NodeSource {
+        /** What this phone told the daemon it had seen: ending an attention for every client is not to be done by a tap that does not look. */
+        val told = mutableListOf<Pair<String, Long>>()
         override val epoch = session.epoch
         override fun session() = session
         override fun node(id: String): Node? = null
+        override fun markSeen(id: String, rev: Long) { told += id to rev }
     }
 
     @Test
@@ -120,14 +123,18 @@ class ArtifactsTest {
 
     @Test
     fun aTapOnTheAttentionOpensTheListAndBackWalksFromTheArtifactToTheListToTheWorkspace() {
-        val nav = Navigator(Fixed(withArtifact))
+        val source = Fixed(withArtifact)
+        val nav = Navigator(source)
         val list = nav.go(ClientState(), waiting)
         assertEquals(Screen.Artifacts(ws.id), list.screen)
         assertFalse(list.seen.isSeen(waiting), "and it is still there after the tap")
+        assertEquals(emptyList(), source.told, "the tap did not look at the workspace, so it ends nothing for any client")
+        assertEquals(ws.id, list.last)
         val one = nav.artifact(list, ws.id, "a1")
         assertEquals(Screen.Artifact(ws.id, "a1"), one.screen)
         assertEquals(Screen.Artifacts(ws.id), nav.leaveArtifacts(one).screen)
         assertIs<Screen.Workspace>(nav.leaveArtifacts(nav.leaveArtifacts(one)).screen)
+        assertTrue(source.told.isNotEmpty(), "arriving at the workspace is looking at it")
         assertEquals(Screen.Home, nav.leaveArtifacts(ClientState()).screen, "anywhere else it is back")
     }
 
