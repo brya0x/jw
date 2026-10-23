@@ -633,11 +633,10 @@ fn a_shell_without_the_integration_has_no_blocks() {
     d.stop();
 }
 
-#[test]
-fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
-    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
-        return;
-    };
+/// A pane started with `program` in a daemon of its own, with an empty home so the user's rc files
+/// stay out of it; `None` where neither bash nor zsh is installed.
+fn pane_with_program(program: &[&str]) -> Option<(Sandbox, Daemon, Client, String)> {
+    let shell = find("bash").or_else(|| find("zsh"))?;
     let sb = Sandbox::new();
     let home = sb.dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -665,7 +664,7 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
     let pane = c
         .cmd(Cmd::NewPane {
             workspace: ws,
-            program: Some(vec!["echo".into(), "from the wrapper".into()]),
+            program: Some(program.iter().map(|w| (*w).to_owned()).collect()),
             beside: None,
             dir: None,
         })
@@ -676,6 +675,14 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
         .unwrap()
         .to_owned();
     c.open(&pane).unwrap();
+    Some((sb, d, c, pane))
+}
+
+#[test]
+fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
+    let Some((_sb, d, mut c, pane)) = pane_with_program(&["echo", "from the wrapper"]) else {
+        return;
+    };
     // After the program, `exec $SHELL -i` brings the integration back: a prompt is reported.
     assert!(
         c.wait_until(Duration::from_secs(10), |c| c
@@ -684,6 +691,44 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
             .is_some_and(|n| n.get("blocks").is_some()))
             .unwrap(),
         "{:?}",
+        c.nodes.get(&pane)
+    );
+    d.stop();
+}
+
+/// REQ-844: a program started with `-c` marks nothing, so while it runs the pane is its screen (no
+/// blocks node, which would be an empty list); the shell that takes over brings the blocks.
+#[test]
+fn a_pane_started_with_a_program_is_its_screen_until_the_shell_reaches_its_prompt() {
+    let Some((_sb, d, mut c, pane)) =
+        pane_with_program(&["sh", "-c", "echo on-the-screen; sleep 4"])
+    else {
+        return;
+    };
+    let on_screen = |c: &Client| {
+        c.nodes.get(&pane).is_some_and(|n| {
+            n["screen"]["lines"].as_array().is_some_and(|l| {
+                l.iter()
+                    .any(|l| l.as_str().unwrap().contains("on-the-screen"))
+            })
+        })
+    };
+    assert!(
+        c.wait_until(Duration::from_secs(10), on_screen).unwrap(),
+        "{:?}",
+        c.nodes.get(&pane)
+    );
+    assert!(
+        c.nodes[&pane].get("blocks").is_none(),
+        "the program runs: the pane is its screen, not an empty list of blocks"
+    );
+    assert!(
+        c.wait_until(Duration::from_secs(15), |c| c
+            .nodes
+            .get(&pane)
+            .is_some_and(|n| n.get("blocks").is_some()))
+            .unwrap(),
+        "the program ended and the shell that took over did not bring the blocks: {:?}",
         c.nodes.get(&pane)
     );
     d.stop();

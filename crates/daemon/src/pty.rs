@@ -85,7 +85,8 @@ pub fn spawn(
         .map_err(|e| format!("cannot open a pty: {e}"))?;
     let mut cmd = CommandBuilder::new(shell);
     cmd.args(&integration.args);
-    if let Some(argv) = program.argv.filter(|a| !a.is_empty()) {
+    let started = program.argv.filter(|a| !a.is_empty());
+    if let Some(argv) = started {
         cmd.args([
             "-i",
             "-c",
@@ -114,7 +115,9 @@ pub fn spawn(
         killer: Mutex::new(child.clone_killer()),
         shell_pid: child.process_id(),
     });
-    if !integration.args.is_empty() || !integration.env.is_empty() {
+    // A program started with `-c` has no prompt to mark it, so the blocks would be an empty list
+    // while it runs: the first mark of the shell that takes over integrates the store instead (REQ-844).
+    if started.is_none() && (!integration.args.is_empty() || !integration.env.is_empty()) {
         lock(&term.blocks).integrate();
     }
 
