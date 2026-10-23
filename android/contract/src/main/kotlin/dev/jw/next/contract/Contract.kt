@@ -331,7 +331,7 @@ sealed interface Cmd {
     @Serializable @SerialName("open_artifacts")
     data class OpenArtifacts(val workspace: Id) : Cmd
 
-    /** One version of an artifact, the latest by default. The result is an `ArtifactDoc`: Kotlin reads it as JSON until the phone draws it (N171d). */
+    /** One version of an artifact, the latest by default. The result is an [ArtifactDoc]. */
     @Serializable @SerialName("artifact_read")
     data class ArtifactRead(val id: Id, val n: Int? = null) : Cmd
 
@@ -1069,6 +1069,19 @@ data class ArtifactVersion(
     /** The pane that published, where the verdict goes. */
     val publisher: Id? = null,
     val verdict: ArtifactVerdict? = null,
+)
+
+/** The result of `artifact_read` (N171): `html` for an `html` artifact, `doc` for a `md` one. */
+@Serializable
+data class ArtifactDoc(
+    val id: Id,
+    val n: Int,
+    val hash: String,
+    val title: String,
+    val kind: ArtifactKind,
+    val format: ArtifactFormat,
+    val html: String? = null,
+    val doc: MarkdownDoc? = null,
 )
 
 /** One artifact of a workspace, its versions oldest first. Its status is its latest version's verdict. */

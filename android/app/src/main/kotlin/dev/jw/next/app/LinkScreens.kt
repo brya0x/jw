@@ -135,13 +135,14 @@ fun LinkFailScreen(fail: LinkFail, scan: () -> Unit, paste: () -> Unit, back: ()
 
 /** The last PC does not answer: say so, keep trying, and let the person pick another (REQ-90). */
 @Composable
-fun OfflineScreen(name: String?, retry: () -> Unit, pcs: () -> Unit) {
+fun OfflineScreen(name: String?, retry: () -> Unit, saved: Int, showSaved: () -> Unit, pcs: () -> Unit) {
     val pc = name ?: "tu PC"
     Column(Modifier.fillMaxSize()) {
         Header("jwn", "sin respuesta de $pc", action = { PcButton(pcs) })
         Box(Modifier.weight(1f)) {
             Hero("No encuentro «$pc»", "Está apagado o fuera de tu red. Sigo intentando cada pocos segundos; en cuanto conteste, entras solo.") {
                 Button("reintentar ahora", true, retry)
+                if (saved > 0) Button("artefactos guardados ($saved)", false, showSaved)
                 Button("ver mis PCs", false, pcs)
             }
         }
