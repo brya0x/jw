@@ -306,7 +306,17 @@ internal fun PanelSheet(view: PanelView?, now: Long, dismiss: () -> Unit, choose
             view == null -> Mono("cargando…", Palette.dim, 12)
             view.rows.isEmpty() -> Mono(view.empty.ifEmpty { "Nada que ver." }, Palette.dim, 12, lines = 3)
             else -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                view.rows.forEach { r -> PanelRowView(r, now) { choose(r.act) } }
+                view.rows.forEachIndexed { i, r ->
+                    // A list with sections (REQ-803) says each at its first row.
+                    val group = r.group
+                    if (group != null && group != view.rows.getOrNull(i - 1)?.group) {
+                        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp, start = 4.dp, end = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Mono(group.title, group.tint.colour(), 11, bold = true)
+                            Mono("${view.rows.count { it.group == group }}", Palette.dim, 11)
+                        }
+                    }
+                    PanelRowView(r, now) { choose(r.act) }
+                }
             }
         }
     }

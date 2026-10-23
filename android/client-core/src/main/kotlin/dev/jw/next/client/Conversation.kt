@@ -153,21 +153,47 @@ fun turnText(items: List<ConvItem>, index: Int): String {
 
 // ---- the `/` list (REQ-446) ----
 
-private fun CommandSource.rank(): Int = when (this) {
-    CommandSource.Jwn -> 0
-    CommandSource.Claude -> 1
-    CommandSource.Project -> 2
-    CommandSource.Skill -> 3
-    CommandSource.Plugin -> 4
+/** What a section is written in; the app maps each to a colour of its theme (REQ-800). Declared in the order of the sections (REQ-795). */
+enum class Tint { Jwn, Personal, Project, Plugin, ClaudeAi, Claude }
+
+/** A section of the `/` list and of the list of skills: its title and what it is written in. */
+data class Head(val title: String, val tint: Tint)
+
+/** The commands of one section, in the order they are listed. */
+data class CommandSection(val head: Head, val commands: List<ConvCommand>)
+
+private const val CLAUDE_AI = "claude.ai"
+
+/** What a command is written in, by where it is defined (REQ-800). */
+fun ConvCommand.tint(): Tint = head("").tint
+
+/** Where a command is listed (REQ-795): a plugin's by its `group`, or by the text before its `:` for a daemon that sent none; [product] is jw's own section's title, `identity.toml`'s name. */
+fun ConvCommand.head(product: String): Head = when (source) {
+    CommandSource.Jwn -> Head(product, Tint.Jwn)
+    CommandSource.Skill -> Head("Personales", Tint.Personal)
+    CommandSource.Project -> Head("Proyecto", Tint.Project)
+    CommandSource.Plugin -> (group ?: name.removePrefix("/").substringBefore(':', "").ifEmpty { "plugin" })
+        .let { Head(it, if (it == CLAUDE_AI) Tint.ClaudeAi else Tint.Plugin) }
+    CommandSource.Claude -> Head("Claude", Tint.Claude)
 }
 
-/** The word that says where a command is defined. */
-fun CommandSource.word(): String = when (this) {
-    CommandSource.Jwn -> "jwn"
-    CommandSource.Claude -> "claude"
-    CommandSource.Project -> "proyecto"
-    CommandSource.Skill -> "skill"
-    CommandSource.Plugin -> "plugin"
+/** The sections in order, plugins by name case aside, then what begins with [typed] first, then the name. */
+private fun sectionOrder(typed: String): Comparator<ConvCommand> = compareBy(
+    { it.tint().ordinal },
+    { it.head("").title.lowercase() },
+    { !it.name.removePrefix("/").lowercase().startsWith(typed) },
+    { it.name },
+)
+
+/** [commands], which are in the order of [slashMenu], as the sections they fall in; a title for each, none for an empty one (REQ-796). [product] is jw's section's title. */
+fun commandSections(commands: List<ConvCommand>, product: String): List<CommandSection> {
+    val out = mutableListOf<CommandSection>()
+    for (c in commands) {
+        val head = c.head(product)
+        if (out.lastOrNull()?.head == head) out[out.lastIndex] = out.last().copy(commands = out.last().commands + c)
+        else out += CommandSection(head, listOf(c))
+    }
+    return out
 }
 
 /** The `/word` the cursor ends: where it begins in the line and the letters after its slash (REQ-596). */
@@ -182,12 +208,12 @@ fun slashAt(line: String, cursor: Int = line.length): SlashAt? {
     return SlashAt(start, word.drop(1))
 }
 
-/** The commands whose names hold the letters after the `/` being written, the ones that begin with them first (REQ-446, REQ-596). */
+/** The commands whose names hold the letters after the `/` being written, by section and the ones that begin with them first (REQ-446, REQ-596, REQ-795). */
 fun slashMenu(commands: List<ConvCommand>, line: String, cursor: Int = line.length): List<ConvCommand> {
     val typed = slashAt(line, cursor)?.typed?.lowercase() ?: return emptyList()
     return commands
         .filter { it.name.removePrefix("/").lowercase().contains(typed) }
-        .sortedWith(compareBy({ !it.name.removePrefix("/").lowercase().startsWith(typed) }, { it.source.rank() }, { it.name }))
+        .sortedWith(sectionOrder(typed))
 }
 
 /** Whether the `/word` being written is the whole line: only then does choosing a command run it; anywhere else it is written in place (REQ-596). */
@@ -200,16 +226,16 @@ fun takeCommand(line: String, cursor: Int, command: ConvCommand): Pair<String, I
     return text to at.start + command.name.length + 1
 }
 
-/** The words of [line] that are a command that exists, anywhere in it: from, to and where it is defined (REQ-596). */
-fun commandWords(commands: List<ConvCommand>, line: String): List<Triple<Int, Int, CommandSource>> {
-    val bySource = commands.associate { it.name to it.source }
-    val out = mutableListOf<Triple<Int, Int, CommandSource>>()
+/** The words of [line] that are a command that exists, anywhere in it: from, to and what it is written in (REQ-596, REQ-800). */
+fun commandWords(commands: List<ConvCommand>, line: String): List<Triple<Int, Int, Tint>> {
+    val byTint = commands.associate { it.name to it.tint() }
+    val out = mutableListOf<Triple<Int, Int, Tint>>()
     var i = 0
     while (i < line.length) {
         if (line[i].isWhitespace()) { i++; continue }
         val end = (i until line.length).firstOrNull { line[it].isWhitespace() } ?: line.length
-        val source = if (line[i] == '/') bySource[line.substring(i, end)] else null
-        if (source != null) out += Triple(i, end, source)
+        val tint = if (line[i] == '/') byTint[line.substring(i, end)] else null
+        if (tint != null) out += Triple(i, end, tint)
         i = end
     }
     return out
@@ -270,6 +296,8 @@ data class PanelRow(
     /** When it happened, in milliseconds since the epoch: written as how long ago. */
     val at: Long? = null,
     val act: RowAct = RowAct.Nothing,
+    /** The section it is listed in, when the list has sections (REQ-803). */
+    val group: Head? = null,
 )
 
 data class PanelView(val title: String, val rows: List<PanelRow>, val empty: String)
@@ -313,7 +341,8 @@ fun statusPanel(conv: Node.Conversation, cwd: String): PanelView {
 fun skillsPanel(conv: Node.Conversation) = PanelView(
     "skills y comandos",
     conv.commands.filter { it.source == CommandSource.Skill || it.source == CommandSource.Project || it.source == CommandSource.Plugin }
-        .map { PanelRow(it.name, it.description.orEmpty(), it.source.word(), Tone.Dim, act = RowAct.Insert("${it.name} ")) },
+        .sortedWith(sectionOrder(""))
+        .map { PanelRow(it.name, it.description.orEmpty(), act = RowAct.Insert("${it.name} "), group = it.head("")) },
     "Nada de tu proyecto, tus skills o tus plugins.",
 )
 
