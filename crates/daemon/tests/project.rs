@@ -1336,13 +1336,12 @@ fn an_edit_of_the_personal_file_makes_it_private_and_says_when_the_repositorys_h
     d.stop();
 }
 
-/// What a pane says of its environment: `N=<name> P=<project> B=<port base> W=<web port>`.
+/// What a pane says of its environment: `N=<name> B=<port base> W=<web port>`.
 fn type_probe(c: &mut Client, pane: &str) {
     let var = |n: &str| format!("${}", identity::env_var(n));
     let line = format!(
-        "echo N={} P={} B={} W={}\r",
+        "echo N={} B={} W={}\r",
         var("NAME"),
-        var("PROJECT"),
         var("PORT_BASE"),
         var("PORT_WEB")
     );
@@ -1364,16 +1363,16 @@ fn pane_says(c: &mut Client, pane: &str, said: &str) {
 }
 
 /// N177 (REQ-870 to REQ-872): the panel of the layout, a pane opened by `new_pane` (which is what
-/// `pane open` sends) and a pane restored with the daemon all start with the same names and ports.
+/// `pane open` sends) and a pane restored with the daemon all start with the same name and ports.
 #[test]
-fn every_pane_starts_with_its_name_project_and_ports_whoever_starts_it_and_a_restored_one_too() {
+fn every_pane_starts_with_its_name_and_ports_whoever_starts_it_and_a_restored_one_too() {
     let sb = Sandbox::new();
     let d = sb.start();
     let app = repo(&sb, Some("ports = { web = 0 }\n"));
     let mut c = sb.client();
     let made = worktree(&mut c, &app, "ws-1").unwrap();
     let ws = made["workspace"].as_str().unwrap().to_owned();
-    let said = "N=ws-1 P=app B=20000 W=20000";
+    let said = "N=ws-1 B=20000 W=20000";
 
     let started = ok(
         &mut c,
@@ -1407,10 +1406,10 @@ fn every_pane_starts_with_its_name_project_and_ports_whoever_starts_it_and_a_res
     d.stop();
 }
 
-/// REQ-870: the name is the folder's, whatever the branch, and a repository's own checkout and a
-/// folder that is no repository say their own names as the project.
+/// REQ-870: the name is the folder's, whatever the branch, for a repository's own checkout and for
+/// a folder that is no repository.
 #[test]
-fn the_name_is_the_folder_and_the_project_is_the_repository_or_the_folder() {
+fn the_name_is_the_folder_of_the_workspace_whatever_it_holds() {
     let sb = Sandbox::new();
     let d = sb.start();
     let app = repo(&sb, None);
@@ -1418,11 +1417,8 @@ fn the_name_is_the_folder_and_the_project_is_the_repository_or_the_folder() {
     std::fs::create_dir_all(&plain).unwrap();
     let mut c = sb.client();
     for (folder, said) in [
-        (&app, "N=app P=app B= W="),
-        (
-            &std::fs::canonicalize(plain).unwrap(),
-            "N=plain P=plain B= W=",
-        ),
+        (&app, "N=app B= W="),
+        (&std::fs::canonicalize(plain).unwrap(), "N=plain B= W="),
     ] {
         let ws = open_folder(&mut c, folder);
         let pane = ok(

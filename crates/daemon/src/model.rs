@@ -123,7 +123,7 @@ impl Workspace {
     }
 
     /// What the workspace gives every one of its panes, however it starts: its ports (REQ-496),
-    /// its folder (`cd @` goes to it, REQ-645), and its name and project (REQ-870). The one place that builds it (REQ-871).
+    /// its folder (`cd @` goes to it, REQ-645) and its name (REQ-870). The one place that builds it (REQ-871).
     pub fn pane_env(&self) -> Vec<(String, String)> {
         let last = |p: &str| {
             Path::new(p)
@@ -132,18 +132,12 @@ impl Workspace {
                 .filter(|n| !n.is_empty())
         };
         let folder = last(&self.path).unwrap_or_else(|| self.name.clone());
-        let project = self.project_path().and_then(|p| last(&p));
         let mut env: Vec<_> = self.ports.iter().flat_map(PortBlock::env).collect();
         if !self.path.is_empty() {
             env.push((identity::env_var("WORKSPACE_DIR"), self.path.clone()));
         }
-        for (key, value) in [
-            ("NAME", folder.clone()),
-            ("PROJECT", project.unwrap_or(folder)),
-        ] {
-            if !value.is_empty() {
-                env.push((identity::env_var(key), value));
-            }
+        if !folder.is_empty() {
+            env.push((identity::env_var("NAME"), folder));
         }
         env
     }
