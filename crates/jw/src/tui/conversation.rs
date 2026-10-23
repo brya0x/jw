@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::agents;
 use super::erase;
-use super::field::{self, Field, Look, Mark, Window};
+use super::field::{self, Field, Look, Mark, Peek, Window};
 use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
@@ -714,7 +714,7 @@ pub struct Ui {
     offset: Cell<usize>,
     /// Where the wheel put the window while the cursor stayed (REQ-707), with the length of the text
     /// and the cursor it was put over: the peek is over when either changes, and with any key.
-    peek: Cell<Option<(usize, usize, usize)>>,
+    peek: Cell<Option<Peek>>,
     /// What a drag of the mouse covers in the list, and the drag while the button is down
     /// (REQ-461).
     sel: Option<select::Selection>,
@@ -1698,14 +1698,14 @@ impl Ui {
         }
     }
 
+    /// What a peek is put over: the length of the text and the cursor in it.
+    fn stamp(&self) -> (usize, usize) {
+        (self.editor.chars.len(), self.editor.cursor)
+    }
+
     /// The row the window was put at with the wheel, while it still holds (REQ-707).
     fn peeked(&self) -> Option<usize> {
-        self.peek
-            .get()
-            .filter(|&(_, len, cursor)| {
-                (len, cursor) == (self.editor.chars.len(), self.editor.cursor)
-            })
-            .map(|(row, ..)| row)
+        self.peek.get().and_then(|p| p.row(self.stamp()))
     }
 
     fn field(&self, conv: &Conversation, (iw, ih): (usize, usize)) -> Field {
@@ -1720,8 +1720,7 @@ impl Ui {
             iw,
             Window {
                 limit: field::limit(ih),
-                offset: Some(self.offset.get()),
-                bar: true,
+                offset: self.offset.get(),
                 pin: self.peeked(),
             },
             self.editor.folds(),
@@ -3027,21 +3026,11 @@ impl Ui {
             return false;
         }
         let field = self.field(conv, (iw, ih));
-        let shown = field.shown_rows();
-        if field.total_rows() <= shown {
-            return false;
-        }
         let first = self.geo(conv, (iy, ih), field.band_rows()).band.0 + Field::FIRST_TEXT;
-        if !(first..first + shown).contains(&y) {
+        let Some(row) = field.wheeled(first, y, up) else {
             return false;
-        }
-        let row = if up {
-            field.first_row().saturating_sub(1)
-        } else {
-            (field.first_row() + 1).min(field.total_rows() - shown)
         };
-        let ed = &self.editor;
-        self.peek.set(Some((row, ed.chars.len(), ed.cursor)));
+        self.peek.set(Some(Peek::new(row, self.stamp())));
         true
     }
 
@@ -4273,14 +4262,13 @@ mod tests {
     /// REQ-707, RISK-85: a double click after the wheel moved the window picks the word that is drawn.
     #[test]
     fn a_double_click_after_the_wheel_picks_the_word_that_is_drawn() {
-        let (ui, conv) = fourteen_lines();
+        let (mut ui, conv) = fourteen_lines();
         for _ in 0..4 {
             ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, true);
         }
         let rows = frame_in(&ui, &conv, SMALL);
         let y = row_of(&rows, "l04");
         let x = rows[y].chars().position(|c| c == 'l').unwrap();
-        let mut ui = ui;
         assert!(ui.select_word_in_field(&conv, SMALL, x + 1, y));
         let (from, to) = ui.editor.selection().expect("a word is selected");
         assert_eq!(&ui.editor.text()[from..to], "l04");
@@ -4289,10 +4277,7 @@ mod tests {
     /// REQ-703: the limit does not change when a turn starts, so the band does not jump.
     #[test]
     fn the_band_has_the_same_rows_whether_or_not_a_turn_runs() {
-        let mut ui = Ui::default();
-        let text: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
-        ui.editor.set(&text.join("\n"));
-        let idle = idle();
+        let (ui, idle) = fourteen_lines();
         let mut working = idle.clone();
         working.status = ConvStatus::Streaming;
         let band = |c: &Conversation| {
