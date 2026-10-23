@@ -1929,10 +1929,7 @@ impl View {
             return;
         }
         let Some(s) = &self.session else { return };
-        let hidden = s
-            .workspaces
-            .get(self.selected)
-            .is_some_and(|w| w.chat.as_ref().is_some_and(|c| c.archived));
+        let hidden = s.workspaces.get(self.selected).is_some_and(archived);
         if !hidden {
             return;
         }

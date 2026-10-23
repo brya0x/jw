@@ -46,8 +46,9 @@ fn one_line(text: &str, max: usize) -> String {
 pub fn arrange(list: Vec<WorkspaceSummary>, groups: &[Id]) -> Vec<WorkspaceSummary> {
     let (mut chats, rest): (Vec<_>, Vec<_>) = list.into_iter().partition(|w| w.chat.is_some());
     chats.sort_by_key(|w| {
-        let c = w.chat.as_ref().expect("partitioned by chat");
-        (c.archived, std::cmp::Reverse(c.active))
+        w.chat
+            .as_ref()
+            .map(|c| (c.archived, std::cmp::Reverse(c.active)))
     });
     let mut out = crate::grouping::group(rest, groups);
     out.extend(chats);
@@ -103,13 +104,21 @@ pub fn refuse(shared: &Shared, cmd: &Cmd) -> Result<(), ErrorBody> {
     Ok(())
 }
 
-/// The workspace `id`, which has to be a chat.
-fn chat_of<'a>(core: &'a Core, id: &str) -> Result<&'a Workspace, ErrorBody> {
+/// The workspace `id` and its `chat`: it has to be a chat.
+fn chat_of<'a>(core: &'a Core, id: &str) -> Result<(&'a Workspace, &'a Chat), ErrorBody> {
     let ws = core.workspace(id)?;
-    if ws.chat.is_none() {
-        return Err(bad("that workspace is not a conversation of its own"));
+    match &ws.chat {
+        Some(chat) => Ok((ws, chat)),
+        None => Err(bad("that workspace is not a conversation of its own")),
     }
-    Ok(ws)
+}
+
+/// The workspace that has the panel `pane`.
+fn workspace_of_pane<'a>(core: &'a mut Core, pane: &str) -> Option<&'a mut Workspace> {
+    core.model
+        .workspaces
+        .iter_mut()
+        .find(|w| w.panes.iter().any(|p| p.id == pane))
 }
 
 fn state_dir(shared: &Shared) -> Result<PathBuf, ErrorBody> {
@@ -203,7 +212,7 @@ fn inside(root: &Path, dir: &Path) -> Result<(), ErrorBody> {
 /// The chat's panels closed, its folder removed and the chat forgotten (REQ-800).
 fn remove(shared: &Shared, id: &str) -> Result<(), ErrorBody> {
     let root = identity::chats_dir(&state_dir(shared)?);
-    let dir = PathBuf::from(&chat_of(&shared.lock(), id)?.path);
+    let dir = PathBuf::from(&chat_of(&shared.lock(), id)?.0.path);
     inside(&root, &dir)?;
     {
         let mut core = shared.lock();
@@ -225,8 +234,7 @@ fn remove(shared: &Shared, id: &str) -> Result<(), ErrorBody> {
 pub fn archive(shared: &Shared, id: &Id) -> Done {
     let (session, env, said) = {
         let core = shared.lock();
-        let ws = chat_of(&core, id)?;
-        let chat = ws.chat.as_ref().expect("a chat");
+        let (ws, chat) = chat_of(&core, id)?;
         if chat.archived {
             return Ok(None);
         }
@@ -270,7 +278,7 @@ pub fn archive(shared: &Shared, id: &Id) -> Done {
 pub fn resume(shared: &Shared, id: &Id) -> Done {
     let session = {
         let core = shared.lock();
-        let chat = chat_of(&core, id)?.chat.as_ref().expect("a chat");
+        let (_, chat) = chat_of(&core, id)?;
         if !chat.archived {
             return Err(bad("the conversation is not archived"));
         }
@@ -332,8 +340,7 @@ fn summary(core: &Core, ws: &Workspace) -> String {
 pub fn promote(shared: &Shared, id: &Id, to: &Id, summary_wanted: Option<bool>) -> Done {
     let text = {
         let core = shared.lock();
-        let ws = chat_of(&core, id)?;
-        let chat = ws.chat.as_ref().expect("a chat");
+        let (ws, chat) = chat_of(&core, id)?;
         if chat.archived {
             return Err(bad(
                 "resume the conversation first: only a live one can be taken",
@@ -360,12 +367,7 @@ pub fn promote(shared: &Shared, id: &Id, to: &Id, summary_wanted: Option<bool>) 
 /// The person sent `text` in the conversation of `pane`: if it is a chat's, that is its activity
 /// and its last line, and its first message names it while nothing else has (REQ-795).
 pub fn said(core: &mut Core, pane: &str, text: &str) {
-    let Some(ws) = core
-        .model
-        .workspaces
-        .iter_mut()
-        .find(|w| w.panes.iter().any(|p| p.id == pane))
-    else {
+    let Some(ws) = workspace_of_pane(core, pane) else {
         return;
     };
     let Some(chat) = ws.chat.as_mut() else { return };
@@ -392,12 +394,7 @@ pub fn answered(core: &mut Core, pane: &str) {
                 _ => None,
             })
     });
-    let Some(ws) = core
-        .model
-        .workspaces
-        .iter_mut()
-        .find(|w| w.panes.iter().any(|p| p.id == pane))
-    else {
+    let Some(ws) = workspace_of_pane(core, pane) else {
         return;
     };
     if let Some(chat) = ws.chat.as_mut() {

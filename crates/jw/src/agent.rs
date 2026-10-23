@@ -673,8 +673,11 @@ fn chat_new(args: &[&str]) -> Out {
     // once. An agent that does not come is not an error: the chat is made.
     let deadline = Instant::now() + agent_wait();
     loop {
-        if let Some(p) = s.panes(&id)?.into_iter().find(|p| p.agent.is_some()) {
-            with_conversation(&mut s, &id, p)?;
+        // Whatever fails here, the chat exists: its id is printed all the same.
+        if let Ok(panes) = s.panes(&id)
+            && let Some(p) = panes.into_iter().find(|p| p.agent.is_some())
+        {
+            let _ = with_conversation(&mut s, &id, p);
             break;
         }
         if Instant::now() >= deadline {
