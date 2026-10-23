@@ -122,6 +122,33 @@ impl Workspace {
         })
     }
 
+    /// What the workspace gives every one of its panes, however it starts: its ports (REQ-496),
+    /// its folder (`cd @` goes to it, REQ-645), and its name and project (REQ-870). The one place that builds it (REQ-871).
+    pub fn pane_env(&self) -> Vec<(String, String)> {
+        let last = |p: &str| {
+            Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|n| !n.is_empty())
+        };
+        let folder = last(&self.path).unwrap_or_else(|| self.name.clone());
+        let name = self.branch.clone().filter(|b| !b.is_empty());
+        let project = self.project_path().and_then(|p| last(&p));
+        let mut env: Vec<_> = self.ports.iter().flat_map(PortBlock::env).collect();
+        if !self.path.is_empty() {
+            env.push((identity::env_var("WORKSPACE_DIR"), self.path.clone()));
+        }
+        for (key, value) in [
+            ("NAME", name.unwrap_or_else(|| folder.clone())),
+            ("PROJECT", project.unwrap_or(folder)),
+        ] {
+            if !value.is_empty() {
+                env.push((identity::env_var(key), value));
+            }
+        }
+        env
+    }
+
     /// What a group is kept under (REQ-685): the repository, or the folder's own path when it
     /// is no repository. The summary's `project` and this are the same logic, so they agree.
     pub fn group_key(&self) -> String {

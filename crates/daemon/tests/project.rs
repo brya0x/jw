@@ -1335,3 +1335,168 @@ fn an_edit_of_the_personal_file_makes_it_private_and_says_when_the_repositorys_h
     );
     d.stop();
 }
+
+/// What a pane says of its environment: `N=<name> P=<project> B=<port base> W=<web port>`.
+fn type_probe(c: &mut Client, pane: &str) {
+    let var = |n: &str| format!("${}", identity::env_var(n));
+    let line = format!(
+        "echo N={} P={} B={} W={}\r",
+        var("NAME"),
+        var("PROJECT"),
+        var("PORT_BASE"),
+        var("PORT_WEB")
+    );
+    c.cmd(Cmd::Write {
+        pane: pane.to_owned(),
+        data: line,
+    })
+    .unwrap()
+    .unwrap();
+}
+
+fn pane_says(c: &mut Client, pane: &str, said: &str) {
+    open(c, pane);
+    type_probe(c, pane);
+    wait_for(said, || {
+        let _ = c.poll(Duration::from_millis(20));
+        screen(c, pane).lines().any(|l| l == said)
+    });
+}
+
+/// N177 (REQ-870 to REQ-872): the panel of the layout, a pane opened by `new_pane` (which is what
+/// `pane open` sends) and a pane restored with the daemon all start with the same names and ports.
+#[test]
+fn every_pane_starts_with_its_name_project_and_ports_whoever_starts_it_and_a_restored_one_too() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, Some("ports = { web = 0 }\n"));
+    let mut c = sb.client();
+    let made = worktree(&mut c, &app, "ws-1").unwrap();
+    let ws = made["workspace"].as_str().unwrap().to_owned();
+    let said = "N=feat/ws-1 P=app B=20000 W=20000";
+
+    let started = ok(
+        &mut c,
+        Cmd::StartWorkspace {
+            workspace: ws.clone(),
+            open: None,
+        },
+    );
+    let layout = started["panes"][0].as_str().unwrap().to_owned();
+    pane_says(&mut c, &layout, said);
+    let opened = ok(
+        &mut c,
+        Cmd::NewPane {
+            workspace: ws.clone(),
+            program: None,
+            beside: None,
+            dir: None,
+        },
+    )["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    pane_says(&mut c, &opened, said);
+
+    drop(c);
+    d.stop();
+    let d = sb.start();
+    let mut c = sb.client();
+    open(&mut c, &ws);
+    pane_says(&mut c, &opened, said);
+    d.stop();
+}
+
+/// REQ-870: with no branch the name is the folder's, and a repository's own checkout and a
+/// folder that is no repository say their own names as the project.
+#[test]
+fn without_a_branch_the_name_is_the_folder_and_the_project_is_the_repository_or_the_folder() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, None);
+    let plain = sb.dir.join("work/plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let mut c = sb.client();
+    for (folder, said) in [
+        (&app, "N=app P=app B= W="),
+        (
+            &std::fs::canonicalize(plain).unwrap(),
+            "N=plain P=plain B= W=",
+        ),
+    ] {
+        let ws = open_folder(&mut c, folder);
+        let pane = ok(
+            &mut c,
+            Cmd::NewPane {
+                workspace: ws,
+                program: None,
+                beside: None,
+                dir: None,
+            },
+        )["pane"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        pane_says(&mut c, &pane, said);
+    }
+    d.stop();
+}
+
+/// REQ-873: opening a worktree git made copies what `copy` lists and the worktree lacks, never
+/// over a file that is there, says what it skipped, and the restore of a session copies nothing.
+#[test]
+fn opening_an_existing_worktree_copies_what_it_lacks_never_over_a_file_and_a_restart_copies_nothing()
+ {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(
+        &sb,
+        Some("copy = [\".env\", \"apps/.env.local\", \"nada\", \"f.txt\"]\n"),
+    );
+    std::fs::write(app.join(".env"), "SECRETO=1\n").unwrap();
+    std::fs::create_dir_all(app.join("apps")).unwrap();
+    std::fs::write(app.join("apps/.env.local"), "LOCAL=2\n").unwrap();
+    let wt = sb.dir.join("work/old");
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "fix/old", &text(&wt)],
+    );
+    std::fs::create_dir_all(wt.join("apps")).unwrap();
+    std::fs::write(wt.join("apps/.env.local"), "MINE\n").unwrap();
+    let mut c = sb.client();
+
+    let reply = ok(
+        &mut c,
+        Cmd::OpenWorktree {
+            repo: text(&app),
+            path: text(&wt),
+        },
+    );
+    assert_eq!(reply["copied"], serde_json::json!([".env"]));
+    assert_eq!(
+        reply["skipped"],
+        serde_json::json!([
+            { "path": "apps/.env.local", "why": "it is already in the worktree" },
+            { "path": "nada", "why": "it is not in the checkout" },
+            { "path": "f.txt", "why": "it is already in the worktree" },
+        ]),
+        "a failure is said, and the open went on"
+    );
+    assert!(reply["workspace"].is_string());
+    assert_eq!(
+        std::fs::read_to_string(wt.join(".env")).unwrap(),
+        "SECRETO=1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.join("apps/.env.local")).unwrap(),
+        "MINE\n",
+        "never over a file"
+    );
+
+    std::fs::remove_file(wt.join(".env")).unwrap();
+    drop(c);
+    d.stop();
+    let d = sb.start();
+    assert!(!wt.join(".env").exists(), "a restart does not copy");
+    d.stop();
+}
