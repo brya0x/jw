@@ -1,0 +1,494 @@
+//! Artifacts (N171): the files an agent publishes for a person to look at on the phone, kept per
+//! workspace as immutable versions on disk, listed by the `artifacts` node and held as attention
+//! while one waits for a verdict (REQ-759 to REQ-768).
+
+use std::fs;
+use std::io::{self, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use contract::artifacts::{
+    ArtifactDoc, ArtifactFormat, ArtifactItem, ArtifactKind, ArtifactVerdict, ArtifactVersion,
+    Verdict,
+};
+use contract::{AttentionKind, ErrorCode, Id};
+use serde_json::json;
+
+use crate::commands::{Done, err};
+use crate::core::Core;
+use crate::model::{Own, new_id};
+use crate::server::Shared;
+
+/// The most an artifact may weigh (REQ-759).
+const MAX_TEXT: usize = 512 * 1024;
+/// The versions of an artifact that are kept; the oldest go (REQ-762).
+const MAX_VERSIONS: usize = 20;
+/// The longest name, in characters, and the longest note of a «changes» verdict, in bytes.
+const MAX_NAME: usize = 64;
+const MAX_NOTE: usize = 4 * 1024;
+
+/// The `artifacts` node of a workspace the daemon serves, and what it needs to be kept.
+pub struct ArtifactsEntry {
+    pub workspace: Id,
+    pub dirty: bool,
+    pub idle_since: Instant,
+}
+
+/// What `artifact_publish` brings.
+pub struct Publish {
+    pub workspace: Id,
+    pub name: String,
+    pub title: Option<String>,
+    pub kind: Option<ArtifactKind>,
+    pub format: ArtifactFormat,
+    pub text: String,
+    pub pane: Option<Id>,
+}
+
+// ---- the store: <state>/artifacts/<workspace id>/<artifact id>/{meta.json, v<n>.html|md}
+
+pub fn dir(state: &Path) -> PathBuf {
+    state.join("artifacts")
+}
+
+fn item_dir(root: &Path, workspace: &str, id: &str) -> PathBuf {
+    root.join(workspace).join(id)
+}
+
+fn extension(format: ArtifactFormat) -> &'static str {
+    match format {
+        ArtifactFormat::Html => "html",
+        ArtifactFormat::Md => "md",
+    }
+}
+
+fn version_file(root: &Path, workspace: &str, item: &ArtifactItem, n: u32) -> PathBuf {
+    item_dir(root, workspace, &item.id).join(format!("v{n}.{}", extension(item.format)))
+}
+
+/// Whole-file write: mode 0600, a temporary file and a rename, as `history` and `sent` do.
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&tmp, path)
+}
+
+fn save_meta(root: &Path, workspace: &str, item: &ArtifactItem) -> io::Result<()> {
+    let bytes = serde_json::to_vec(item).map_err(io::Error::other)?;
+    write_private(
+        &item_dir(root, workspace, &item.id).join("meta.json"),
+        &bytes,
+    )
+}
+
+/// The artifacts a workspace has on disk. A `meta.json` that cannot be read is moved to
+/// `meta.json.bad` and left out, as the other stores do; nothing of its text is logged (REQ-790).
+fn load(root: &Path, workspace: &str) -> Vec<ArtifactItem> {
+    let Ok(entries) = fs::read_dir(root.join(workspace)) else {
+        return Vec::new();
+    };
+    let mut items: Vec<ArtifactItem> = entries
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.path().join("meta.json");
+            let bytes = fs::read(&meta).ok()?;
+            match serde_json::from_slice::<ArtifactItem>(&bytes) {
+                Ok(item) if !item.versions.is_empty() => Some(item),
+                _ => {
+                    eprintln!(
+                        "artifacts: {} is not readable, moved to .bad",
+                        meta.display()
+                    );
+                    let _ = fs::rename(&meta, meta.with_extension("json.bad"));
+                    None
+                }
+            }
+        })
+        .collect();
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    items
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+fn pending(item: &ArtifactItem) -> bool {
+    item.versions.last().is_some_and(|v| v.verdict.is_none())
+}
+
+// ---- what the core keeps
+
+impl Core {
+    /// Start serving what is on disk: the items of every workspace there is, and the attention of
+    /// those that wait (REQ-764). Nothing on disk is deleted here: a model that came up empty must
+    /// not take the artifacts with it.
+    pub fn load_artifacts(&mut self, root: PathBuf) {
+        self.artifacts_dir = Some(root.clone());
+        let workspaces: Vec<Id> = self.model.workspaces.iter().map(|w| w.id.clone()).collect();
+        for ws in workspaces {
+            let items = load(&root, &ws);
+            if !items.is_empty() {
+                self.artifact_items.insert(ws.clone(), items);
+            }
+            self.sync_artifact_attention(&ws);
+        }
+    }
+
+    fn find_artifact(&self, id: &str) -> Option<(&Id, &ArtifactItem)> {
+        self.artifact_items
+            .iter()
+            .find_map(|(ws, items)| items.iter().find(|i| i.id == id).map(|i| (ws, i)))
+    }
+
+    /// The attention `artifact` is on the workspace while an artifact's latest version has no
+    /// verdict, and only then (REQ-764). Nothing but a verdict, a removal or this ends it.
+    pub fn sync_artifact_attention(&mut self, workspace: &str) {
+        let waits = self
+            .artifact_items
+            .get(workspace)
+            .is_some_and(|items| items.iter().any(pending));
+        if let Some(ws) = self.model.workspaces.iter_mut().find(|w| w.id == workspace) {
+            let has = ws
+                .attention
+                .iter()
+                .any(|o| o.kind == AttentionKind::Artifact);
+            if waits && !has {
+                ws.attention.push(Own {
+                    kind: AttentionKind::Artifact,
+                    exit_code: None,
+                    rev: None,
+                });
+            } else if !waits && has {
+                ws.attention.retain(|o| o.kind != AttentionKind::Artifact);
+            }
+        }
+        for e in self.artifact_nodes.values_mut() {
+            if e.workspace == workspace {
+                e.dirty = true;
+            }
+        }
+        self.refresh();
+    }
+
+    /// A workspace was removed on purpose: its artifacts go with it (REQ-763).
+    pub fn forget_artifacts(&mut self, workspace: &str) {
+        self.artifact_items.remove(workspace);
+        if let Some(root) = &self.artifacts_dir {
+            let _ = fs::remove_dir_all(root.join(workspace));
+        }
+    }
+
+    /// The `artifacts` node of a workspace, made when it is asked for (REQ-765).
+    fn artifacts_node(&mut self, workspace: &Id) -> Id {
+        if let Some((id, e)) = self
+            .artifact_nodes
+            .iter_mut()
+            .find(|(_, e)| e.workspace == *workspace)
+        {
+            e.idle_since = Instant::now();
+            return id.clone();
+        }
+        let id = new_id();
+        self.artifact_nodes.insert(
+            id.clone(),
+            ArtifactsEntry {
+                workspace: workspace.clone(),
+                dirty: true,
+                idle_since: Instant::now(),
+            },
+        );
+        self.refresh();
+        id
+    }
+
+    pub fn artifact_items_of(&self, workspace: &str) -> Vec<ArtifactItem> {
+        self.artifact_items
+            .get(workspace)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+// ---- the commands
+
+fn io_failed(what: &str, e: &io::Error) -> crate::commands::ErrorBody {
+    err(ErrorCode::Io, format!("{what}: {e}"))
+}
+
+fn root_of(core: &Core) -> Result<PathBuf, crate::commands::ErrorBody> {
+    core.artifacts_dir
+        .clone()
+        .ok_or_else(|| err(ErrorCode::Io, "the daemon has no folder for artifacts"))
+}
+
+/// `artifact_publish` (REQ-759 to REQ-762).
+pub fn publish(shared: &Shared, p: Publish) -> Done {
+    if p.text.len() > MAX_TEXT {
+        return Err(err(
+            ErrorCode::BadRequest,
+            format!("too big: {} bytes, the most is {MAX_TEXT}", p.text.len()),
+        ));
+    }
+    let name = p.name.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME || name.contains('/') {
+        return Err(err(
+            ErrorCode::BadRequest,
+            format!("bad name: 1 to {MAX_NAME} characters, no `/`"),
+        ));
+    }
+    let hash = web::auth::sha256_hex(&p.text);
+    let mut core = shared.lock();
+    let root = root_of(&core)?;
+    if !core.model.workspaces.iter().any(|w| w.id == p.workspace) {
+        return Err(err(
+            ErrorCode::NotFound,
+            format!("no workspace {}", p.workspace),
+        ));
+    }
+    let existing = core
+        .artifact_items
+        .get(&p.workspace)
+        .and_then(|items| items.iter().find(|i| i.name == name))
+        .cloned();
+    let (mut item, is_new) = match existing {
+        Some(item) => (item, false),
+        None => (
+            ArtifactItem {
+                id: new_id(),
+                name: name.to_owned(),
+                title: name.to_owned(),
+                kind: p.kind.unwrap_or(ArtifactKind::Document),
+                format: p.format,
+                versions: Vec::new(),
+            },
+            true,
+        ),
+    };
+    if !is_new && item.format != p.format {
+        return Err(err(
+            ErrorCode::BadRequest,
+            format!(
+                "{name} was published as {}: use another name for the other format",
+                extension(item.format)
+            ),
+        ));
+    }
+    if let Some(last) = item.versions.last().filter(|v| v.hash == hash) {
+        return Ok(Some(
+            json!({"id": item.id, "n": last.n, "hash": hash, "new": false}),
+        ));
+    }
+    if let Some(title) = p.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        title.clone_into(&mut item.title);
+    }
+    if let Some(kind) = p.kind {
+        item.kind = kind;
+    }
+    let n = item.versions.last().map_or(1, |v| v.n + 1);
+    item.versions.push(ArtifactVersion {
+        n,
+        hash: hash.clone(),
+        size: p.text.len() as u64,
+        at: now(),
+        publisher: p.pane,
+        verdict: None,
+    });
+    // shortcut: the files are written under the core's lock; at most 512 KiB, move it off the lock if it is felt.
+    write_private(
+        &version_file(&root, &p.workspace, &item, n),
+        p.text.as_bytes(),
+    )
+    .and_then(|()| save_meta(&root, &p.workspace, &item))
+    .map_err(|e| io_failed("cannot keep the artifact", &e))?;
+    let dropped: Vec<u32> = if item.versions.len() > MAX_VERSIONS {
+        let extra = item.versions.len() - MAX_VERSIONS;
+        item.versions.drain(..extra).map(|v| v.n).collect()
+    } else {
+        Vec::new()
+    };
+    if !dropped.is_empty() {
+        let _ = save_meta(&root, &p.workspace, &item);
+        for old in dropped {
+            let _ = fs::remove_file(version_file(&root, &p.workspace, &item, old));
+        }
+    }
+    let reply = json!({"id": item.id, "n": n, "hash": hash, "new": true});
+    let items = core.artifact_items.entry(p.workspace.clone()).or_default();
+    match items.iter_mut().find(|i| i.id == item.id) {
+        Some(slot) => *slot = item,
+        None => {
+            items.push(item);
+            items.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+    }
+    core.sync_artifact_attention(&p.workspace);
+    Ok(Some(reply))
+}
+
+/// `open_artifacts` (REQ-765).
+pub fn open(shared: &Shared, workspace: &Id) -> Done {
+    let mut core = shared.lock();
+    if !core.model.workspaces.iter().any(|w| w.id == *workspace) {
+        return Err(err(
+            ErrorCode::NotFound,
+            format!("no workspace {workspace}"),
+        ));
+    }
+    let node = core.artifacts_node(workspace);
+    Ok(Some(json!({ "node": node })))
+}
+
+/// `artifact_read` (REQ-766).
+pub fn read(shared: &Shared, id: &str, n: Option<u32>) -> Done {
+    let (item, version, path) = {
+        let core = shared.lock();
+        let root = root_of(&core)?;
+        let (ws, item) = core
+            .find_artifact(id)
+            .ok_or_else(|| err(ErrorCode::NotFound, format!("no artifact {id}")))?;
+        let version = match n {
+            Some(n) => item.versions.iter().find(|v| v.n == n),
+            None => item.versions.last(),
+        }
+        .ok_or_else(|| {
+            err(
+                ErrorCode::NotFound,
+                format!("{} has no such version", item.name),
+            )
+        })?
+        .clone();
+        let path = version_file(&root, ws, item, version.n);
+        (item.clone(), version, path)
+    };
+    let text = fs::read_to_string(&path).map_err(|e| io_failed("cannot read the artifact", &e))?;
+    let (html, doc) = match item.format {
+        ArtifactFormat::Html => (Some(text), None),
+        ArtifactFormat::Md => (
+            None,
+            Some(crate::markdown::document(&text, &item.name, None, false)),
+        ),
+    };
+    let doc = ArtifactDoc {
+        id: item.id,
+        n: version.n,
+        hash: version.hash,
+        title: item.title,
+        kind: item.kind,
+        format: item.format,
+        html,
+        doc,
+    };
+    let value = serde_json::to_value(&doc).map_err(|e| err(ErrorCode::Io, e.to_string()))?;
+    // The reply is one message of the phone's link (REQ-79); a little room is left for its envelope.
+    if value.to_string().len() > web::bridge::MAX_MESSAGE - 1024 {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "too big for the link to carry in one message",
+        ));
+    }
+    Ok(Some(value))
+}
+
+/// `artifact_decide` (REQ-767, REQ-768). The verdict is kept; telling the agent is N171b's.
+pub fn decide(
+    shared: &Shared,
+    id: &str,
+    n: u32,
+    hash: &str,
+    verdict: Verdict,
+    text: Option<String>,
+) -> Done {
+    let mut core = shared.lock();
+    let root = root_of(&core)?;
+    let (ws, item) = core
+        .find_artifact(id)
+        .map(|(ws, i)| (ws.clone(), i.clone()))
+        .ok_or_else(|| err(ErrorCode::NotFound, format!("no artifact {id}")))?;
+    let last = item
+        .versions
+        .last()
+        .ok_or_else(|| err(ErrorCode::NotFound, "no versions"))?;
+    if last.n != n || last.hash != hash {
+        return Err(err(
+            ErrorCode::Conflict,
+            format!("stale: {} is at version {} now", item.name, last.n),
+        ));
+    }
+    if last.verdict.is_some() {
+        return Err(err(
+            ErrorCode::Conflict,
+            "decided: that version already has a verdict",
+        ));
+    }
+    let note = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+    match (verdict, &note) {
+        (Verdict::Changes, None) => {
+            return Err(err(ErrorCode::BadRequest, "empty: say what to change"));
+        }
+        (Verdict::Changes, Some(t)) if t.len() > MAX_NOTE => {
+            return Err(err(
+                ErrorCode::BadRequest,
+                format!("too long: the most is {MAX_NOTE} bytes"),
+            ));
+        }
+        (Verdict::Approved, Some(_)) => {
+            return Err(err(ErrorCode::BadRequest, "an approval takes no text"));
+        }
+        _ => {}
+    }
+    let mut item = item;
+    if let Some(v) = item.versions.last_mut() {
+        v.verdict = Some(ArtifactVerdict {
+            verdict,
+            text: note,
+            at: now(),
+            delivered: None,
+        });
+    }
+    save_meta(&root, &ws, &item).map_err(|e| io_failed("cannot keep the verdict", &e))?;
+    if let Some(slot) = core
+        .artifact_items
+        .get_mut(&ws)
+        .and_then(|items| items.iter_mut().find(|i| i.id == item.id))
+    {
+        *slot = item;
+    }
+    core.sync_artifact_attention(&ws);
+    Ok(Some(json!({})))
+}
+
+/// `artifact_rm` (REQ-763).
+pub fn rm(shared: &Shared, id: &str) -> Done {
+    let mut core = shared.lock();
+    let root = root_of(&core)?;
+    let ws = core
+        .find_artifact(id)
+        .map(|(ws, _)| ws.clone())
+        .ok_or_else(|| err(ErrorCode::NotFound, format!("no artifact {id}")))?;
+    fs::remove_dir_all(item_dir(&root, &ws, id))
+        .map_err(|e| io_failed("cannot remove the artifact", &e))?;
+    if let Some(items) = core.artifact_items.get_mut(&ws) {
+        items.retain(|i| i.id != id);
+    }
+    core.sync_artifact_attention(&ws);
+    Ok(None)
+}

@@ -13,9 +13,9 @@
     },
     "ErrorCode": { "enum": ["bad_request", "not_found", "unsupported", "conflict", "git_failed", "io", "binary"] },
     "AttentionKind": {
-      "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
+      "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed", "artifact"]
     },
-    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits", "conversation"] },
+    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits", "artifacts", "conversation"] },
     "BlocksMode": { "enum": ["blocks", "full"] },
     "Accent": { "enum": ["blue", "green", "yellow", "red", "magenta", "cyan"] },
     "ConvMode": { "enum": ["manual", "acceptEdits", "plan", "auto"] },
@@ -269,6 +269,60 @@
         "time": { "type": "integer", "minimum": 0, "description": "Commit time in Unix seconds." }
       }
     },
+    "ArtifactKind": { "enum": ["prototype", "document", "report", "spec"] },
+    "ArtifactFormat": { "enum": ["html", "md"] },
+    "ArtifactVerdict": {
+      "type": "object",
+      "required": ["type", "at"],
+      "properties": {
+        "type": { "enum": ["approved", "changes"] },
+        "text": { "type": "string" },
+        "at": { "type": "integer", "minimum": 0 },
+        "delivered": { "enum": ["agent", "none"] }
+      }
+    },
+    "ArtifactVersion": {
+      "type": "object",
+      "required": ["n", "hash", "size", "at"],
+      "properties": {
+        "n": { "type": "integer", "minimum": 1 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "at": { "type": "integer", "minimum": 0 },
+        "publisher": { "$ref": "#/$defs/Id" },
+        "verdict": { "$ref": "#/$defs/ArtifactVerdict" }
+      }
+    },
+    "ArtifactItem": {
+      "type": "object",
+      "required": ["id", "name", "title", "kind", "format", "versions"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^/]+$" },
+        "title": { "type": "string" },
+        "kind": { "$ref": "#/$defs/ArtifactKind" },
+        "format": { "$ref": "#/$defs/ArtifactFormat" },
+        "versions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ArtifactVersion" } }
+      }
+    },
+    "ArtifactDoc": {
+      "type": "object",
+      "required": ["id", "n", "hash", "title", "kind", "format"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "n": { "type": "integer", "minimum": 1 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "title": { "type": "string" },
+        "kind": { "$ref": "#/$defs/ArtifactKind" },
+        "format": { "$ref": "#/$defs/ArtifactFormat" },
+        "html": { "type": "string" },
+        "doc": {
+          "type": "object",
+          "required": ["title", "blocks"],
+          "properties": { "title": { "type": "string" }, "path": { "type": "string" }, "truncated": { "type": "boolean" }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } }
+        }
+      }
+    },
     "WorkspaceKind": { "enum": ["worktree", "folder"] },
     "Attention": {
       "type": "object",
@@ -498,6 +552,15 @@
         },
         {
           "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "items"],
+          "properties": {
+            "type": { "const": "artifacts" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/ArtifactItem" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
           "required": ["pane", "name", "accent", "model", "effort", "mode", "status", "first", "items", "queue", "tasks", "todos", "artifacts", "commands", "cost"],
           "properties": {
             "type": { "const": "conversation" },
@@ -622,6 +685,11 @@
           "then": { "required": ["commit"] }
         },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_commits" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace", "name", "format", "text"], "properties": { "cmd": { "const": "artifact_publish" }, "workspace": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^/]+$" }, "title": { "type": "string" }, "kind": { "$ref": "#/$defs/ArtifactKind" }, "format": { "$ref": "#/$defs/ArtifactFormat" }, "text": { "type": "string" }, "pane": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_artifacts" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "id"], "properties": { "cmd": { "const": "artifact_read" }, "id": { "$ref": "#/$defs/Id" }, "n": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "required": ["cmd", "id", "n", "hash", "type"], "properties": { "cmd": { "const": "artifact_decide" }, "id": { "$ref": "#/$defs/Id" }, "n": { "type": "integer", "minimum": 1 }, "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "type": { "enum": ["approved", "changes"] }, "text": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "id"], "properties": { "cmd": { "const": "artifact_rm" }, "id": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "refresh_diff" }, "node": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "node", "path", "viewed"], "properties": { "cmd": { "const": "set_viewed" }, "node": { "$ref": "#/$defs/Id" }, "path": { "type": "string", "minLength": 1 }, "viewed": { "type": "boolean" } } },
         {

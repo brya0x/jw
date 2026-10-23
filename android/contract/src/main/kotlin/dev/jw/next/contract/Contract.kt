@@ -52,6 +52,8 @@ enum class AttentionKind {
     @SerialName("screen") Screen,
     @SerialName("merged") Merged,
     @SerialName("ci_failed") CiFailed,
+    /** An artifact of the workspace waits for a verdict (N171). */
+    @SerialName("artifact") Artifact,
 }
 
 @Serializable
@@ -308,6 +310,45 @@ sealed interface Cmd {
     /** Make (or find) the `commits` node of [workspace]. The result is `{node}`. */
     @Serializable @SerialName("open_commits")
     data class OpenCommits(val workspace: Id) : Cmd
+
+    /**
+     * Publish an artifact (N171): the next version of the one named [name] in [workspace]. The result is
+     * `{id, n, hash, new}`. Only the CLI sends it: the bridge refuses it from a phone.
+     */
+    @Serializable @SerialName("artifact_publish")
+    data class ArtifactPublish(
+        val workspace: Id,
+        val name: String,
+        val title: String? = null,
+        val kind: ArtifactKind? = null,
+        val format: ArtifactFormat,
+        val text: String,
+        /** The pane that publishes, where the verdict goes. */
+        val pane: Id? = null,
+    ) : Cmd
+
+    /** Make (or find) the `artifacts` node of [workspace]. The result is `{node}`. */
+    @Serializable @SerialName("open_artifacts")
+    data class OpenArtifacts(val workspace: Id) : Cmd
+
+    /** One version of an artifact, the latest by default. The result is an `ArtifactDoc`: Kotlin reads it as JSON until the phone draws it (N171d). */
+    @Serializable @SerialName("artifact_read")
+    data class ArtifactRead(val id: Id, val n: Int? = null) : Cmd
+
+    /** The person's verdict on version [n], which must still be the latest and have that [hash]. */
+    @Serializable @SerialName("artifact_decide")
+    data class ArtifactDecide(
+        val id: Id,
+        val n: Int,
+        val hash: String,
+        @SerialName("type") val verdict: Verdict,
+        /** What to change; a `changes` verdict needs it. */
+        val text: String? = null,
+    ) : Cmd
+
+    /** Remove an artifact and all its versions. Only the CLI sends it. */
+    @Serializable @SerialName("artifact_rm")
+    data class ArtifactRm(val id: Id) : Cmd
 
     /** Read a `diff` node again now. */
     @Serializable @SerialName("refresh_diff")
@@ -892,6 +933,18 @@ sealed interface Node {
         val more: Boolean = false,
         val commits: List<CommitInfo>,
     ) : Node
+
+    /** The artifacts a workspace has (N171), each with its versions. */
+    @Serializable @SerialName("artifacts")
+    data class Artifacts(
+        override val id: Id,
+        override val v: Int,
+        override val epoch: String,
+        override val rev: Long,
+        override val attention: List<Attention>,
+        val workspace: Id,
+        val items: List<ArtifactItem>,
+    ) : Node
 }
 
 /** The hooks of an agent the daemon listens to. */
@@ -962,6 +1015,71 @@ data class Hunk(
     @SerialName("new_lines") val newLines: Int,
     /** Each line prefixed with `+` (added), `-` (deleted) or a space (unchanged). */
     val lines: List<String>,
+)
+
+/** What an artifact is for; only drawn on the list. */
+@Serializable
+enum class ArtifactKind {
+    @SerialName("prototype") Prototype,
+    @SerialName("document") Document,
+    @SerialName("report") Report,
+    @SerialName("spec") Spec,
+}
+
+/** `html` is drawn in an isolated WebView, `md` with the Markdown viewer. */
+@Serializable
+enum class ArtifactFormat {
+    @SerialName("html") Html,
+    @SerialName("md") Md,
+}
+
+@Serializable
+enum class Verdict {
+    @SerialName("approved") Approved,
+    @SerialName("changes") Changes,
+}
+
+/** Whether the verdict reached the agent that published. */
+@Serializable
+enum class Delivered {
+    @SerialName("agent") Agent,
+    @SerialName("none") Nobody,
+}
+
+@Serializable
+data class ArtifactVerdict(
+    @SerialName("type") val verdict: Verdict,
+    /** What to change; only a `changes` verdict has it. */
+    val text: String? = null,
+    /** Unix seconds. */
+    val at: Long,
+    /** Absent until the daemon has tried to tell the agent. */
+    val delivered: Delivered? = null,
+)
+
+@Serializable
+data class ArtifactVersion(
+    /** From 1; a new version of the same name is the next number. */
+    val n: Int,
+    /** SHA-256 of the bytes, in lower-case hex. */
+    val hash: String,
+    val size: Long,
+    /** Unix seconds. */
+    val at: Long,
+    /** The pane that published, where the verdict goes. */
+    val publisher: Id? = null,
+    val verdict: ArtifactVerdict? = null,
+)
+
+/** One artifact of a workspace, its versions oldest first. Its status is its latest version's verdict. */
+@Serializable
+data class ArtifactItem(
+    val id: Id,
+    val name: String,
+    val title: String,
+    val kind: ArtifactKind,
+    val format: ArtifactFormat,
+    val versions: List<ArtifactVersion>,
 )
 
 @Serializable

@@ -21,7 +21,7 @@ use crate::auth::{Limiter, Pairing, Store};
 use crate::tls::{self, Identity, TlsLink};
 
 /// Longest message either way (REQ-79) and the longest a phone may send before it is let in.
-const MAX_MESSAGE: usize = 1 << 20;
+pub const MAX_MESSAGE: usize = 1 << 20;
 const MAX_FIRST: usize = 4096;
 /// How long a phone may take to say who it is.
 const HELLO: Duration = Duration::from_secs(10);
