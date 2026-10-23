@@ -1373,7 +1373,7 @@ fn every_pane_starts_with_its_name_project_and_ports_whoever_starts_it_and_a_res
     let mut c = sb.client();
     let made = worktree(&mut c, &app, "ws-1").unwrap();
     let ws = made["workspace"].as_str().unwrap().to_owned();
-    let said = "N=feat/ws-1 P=app B=20000 W=20000";
+    let said = "N=ws-1 P=app B=20000 W=20000";
 
     let started = ok(
         &mut c,
@@ -1407,10 +1407,10 @@ fn every_pane_starts_with_its_name_project_and_ports_whoever_starts_it_and_a_res
     d.stop();
 }
 
-/// REQ-870: with no branch the name is the folder's, and a repository's own checkout and a
+/// REQ-870: the name is the folder's, whatever the branch, and a repository's own checkout and a
 /// folder that is no repository say their own names as the project.
 #[test]
-fn without_a_branch_the_name_is_the_folder_and_the_project_is_the_repository_or_the_folder() {
+fn the_name_is_the_folder_and_the_project_is_the_repository_or_the_folder() {
     let sb = Sandbox::new();
     let d = sb.start();
     let app = repo(&sb, None);

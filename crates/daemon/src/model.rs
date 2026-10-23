@@ -132,14 +132,13 @@ impl Workspace {
                 .filter(|n| !n.is_empty())
         };
         let folder = last(&self.path).unwrap_or_else(|| self.name.clone());
-        let name = self.branch.clone().filter(|b| !b.is_empty());
         let project = self.project_path().and_then(|p| last(&p));
         let mut env: Vec<_> = self.ports.iter().flat_map(PortBlock::env).collect();
         if !self.path.is_empty() {
             env.push((identity::env_var("WORKSPACE_DIR"), self.path.clone()));
         }
         for (key, value) in [
-            ("NAME", name.unwrap_or_else(|| folder.clone())),
+            ("NAME", folder.clone()),
             ("PROJECT", project.unwrap_or(folder)),
         ] {
             if !value.is_empty() {
