@@ -145,6 +145,8 @@ struct Screen {
     /// Counts items from the first of the conversation, so it survives the node dropping old ones.
     printed: u64,
     shown_ask: Option<String>,
+    /// The question (its id) whose «Otra…» was chosen and whose words are the next line (REQ-753).
+    words: Option<String>,
     buffer: String,
     rev: u64,
 }
@@ -154,6 +156,7 @@ fn view(client: &mut Client, node: &str) -> ExitCode {
     let mut screen = Screen {
         printed: 0,
         shown_ask: None,
+        words: None,
         buffer: String::new(),
         rev: 0,
     };
@@ -213,6 +216,39 @@ enum Step {
     Leave,
 }
 
+/// What a line typed while an ask waits means in the terminal that draws nothing (REQ-753).
+#[derive(Debug, PartialEq)]
+enum Reply {
+    Answer {
+        key: String,
+        text: Option<String>,
+    },
+    /// «Otra…» was chosen: the next line is the person's own words.
+    Words,
+    Nothing,
+}
+
+/// `keys` are those of the options, `words` says «Otra…» was chosen on this question, `line` is trimmed and not empty.
+fn reply_to(question: bool, keys: &[String], words: bool, line: &str) -> Reply {
+    if words {
+        return Reply::Answer {
+            key: String::new(),
+            text: Some(line.to_owned()),
+        };
+    }
+    let number = line.parse::<usize>().ok();
+    if question && number == Some(keys.len() + 1) {
+        return Reply::Words;
+    }
+    let key = match line {
+        "y" | "s" => Some("yes".to_owned()),
+        "n" => Some("no".to_owned()),
+        "a" => Some("session".to_owned()),
+        _ => number.and_then(|i| keys.get(i.wrapping_sub(1)).cloned()),
+    };
+    key.map_or(Reply::Nothing, |key| Reply::Answer { key, text: None })
+}
+
 fn handle_key(
     client: &mut Client,
     node: &str,
@@ -237,6 +273,7 @@ fn handle_key(
         }
         KeyCode::Char('d') if ctrl && screen.buffer.is_empty() => return Step::Leave,
         KeyCode::Esc => {
+            screen.words = None;
             let _ = client.send(Cmd::ConversationInterrupt {
                 node: node.to_owned(),
             });
@@ -261,23 +298,25 @@ fn handle_key(
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let key = match line.as_str() {
-                        "y" | "s" => Some("yes".to_owned()),
-                        "n" => Some("no".to_owned()),
-                        "a" => Some("session".to_owned()),
-                        d => d
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|i| options.get(i.wrapping_sub(1)).cloned()),
-                    };
-                    if let Some(key) = key {
-                        let _ = client.send(Cmd::ConversationAnswer {
-                            node: node.to_owned(),
-                            ask: a["id"].as_str().unwrap_or("").to_owned(),
-                            key,
-                            text: None,
-                            by: Some("este terminal".into()),
-                        });
+                    let id = a["id"].as_str().unwrap_or("").to_owned();
+                    let words = screen.words.as_deref() == Some(id.as_str());
+                    let question = a["kind"] == "question";
+                    match reply_to(question, &options, words, &line) {
+                        Reply::Answer { key, text } => {
+                            screen.words = None;
+                            let _ = client.send(Cmd::ConversationAnswer {
+                                node: node.to_owned(),
+                                ask: id,
+                                key,
+                                text,
+                                by: Some("este terminal".into()),
+                            });
+                        }
+                        Reply::Words => {
+                            screen.words = Some(id);
+                            let _ = write!(stdout(), "\r\x1b[2K  tu respuesta:\r\n");
+                        }
+                        Reply::Nothing => {}
                     }
                 }
                 None => {
@@ -329,6 +368,7 @@ fn draw(out: &mut impl Write, conv: &Conversation, screen: &mut Screen) {
         }
     } else {
         screen.shown_ask = None;
+        screen.words = None;
     }
     for l in &lines {
         let _ = write!(out, "\r\x1b[2K{l}\r\n");
@@ -377,6 +417,13 @@ pub fn ask_lines(ask: &Ask) -> Vec<String> {
     lines.extend(ask.plan.iter().map(|p| format!("    {p}")));
     for (i, o) in ask.options.iter().enumerate() {
         lines.push(format!("  {}) {}", i + 1, o.label));
+    }
+    // A question has a last row for the person's own words (REQ-753).
+    if ask.kind == AskKind::Question {
+        lines.push(format!(
+            "  {}) Otra… (escribe tu respuesta)",
+            ask.options.len() + 1
+        ));
     }
     lines
 }
@@ -472,6 +519,68 @@ pub fn item_lines(item: &Item) -> Vec<String> {
 mod tests {
     use super::*;
     use contract::conversation::DividerKind;
+
+    fn ask(kind: AskKind, labels: &[&str]) -> Ask {
+        Ask {
+            id: "req-1:0".into(),
+            kind,
+            tool: "AskUserQuestion".into(),
+            title: "¿Qué base?".into(),
+            command: None,
+            diff: vec![],
+            plan: vec![],
+            options: labels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| contract::conversation::AskOption {
+                    key: i.to_string(),
+                    label: (*l).into(),
+                })
+                .collect(),
+            multi: false,
+        }
+    }
+
+    #[test]
+    fn a_question_prints_its_last_row_for_the_persons_own_words_and_a_permission_does_not() {
+        let q = ask_lines(&ask(AskKind::Question, &["PostgreSQL", "SQLite", "MySQL"]));
+        assert_eq!(
+            q,
+            [
+                "? pregunta: ¿Qué base?",
+                "  1) PostgreSQL",
+                "  2) SQLite",
+                "  3) MySQL",
+                "  4) Otra… (escribe tu respuesta)"
+            ]
+        );
+        for kind in [AskKind::Permission, AskKind::Plan] {
+            let lines = ask_lines(&ask(kind, &["Sí", "No"]));
+            assert!(lines.iter().all(|l| !l.contains("Otra")), "{lines:?}");
+        }
+    }
+
+    #[test]
+    fn the_last_number_of_a_question_asks_for_the_words_and_the_next_line_is_the_answer() {
+        let keys: Vec<String> = ["0", "1", "2"].map(String::from).to_vec();
+        let answer = |key: &str, text: Option<&str>| Reply::Answer {
+            key: key.into(),
+            text: text.map(String::from),
+        };
+        assert_eq!(reply_to(true, &keys, false, "2"), answer("1", None));
+        assert_eq!(reply_to(true, &keys, false, "4"), Reply::Words);
+        assert_eq!(reply_to(true, &keys, false, "5"), Reply::Nothing);
+        assert_eq!(reply_to(true, &keys, false, "sqlite"), Reply::Nothing);
+        assert_eq!(
+            reply_to(true, &keys, true, "SQLite en memoria"),
+            answer("", Some("SQLite en memoria")),
+            "after «Otra…» a number is words as well"
+        );
+        // a permission has no such number, and keeps its letters
+        let yes_no: Vec<String> = ["yes", "no"].map(String::from).to_vec();
+        assert_eq!(reply_to(false, &yes_no, false, "3"), Reply::Nothing);
+        assert_eq!(reply_to(false, &yes_no, false, "n"), answer("no", None));
+    }
 
     #[test]
     fn an_item_is_printed_as_plain_lines() {
