@@ -1,0 +1,294 @@
+<meta charset="utf-8">
+<title>jw Lo pendiente vuelve tras reiniciar</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid and colours as session-held.html. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px}
+.wrap{max-width:1300px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:84ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp>span{font:12px var(--mono);color:var(--mut)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.hint{font:12px var(--mono);color:var(--mut)}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;height:440px;font:13px/1.35 var(--mono);color:var(--fg);outline:none}
+.term:focus-visible{box-shadow:inset 0 0 0 1px var(--blue)}
+.term.short{height:280px}
+.term .list{flex:1;min-height:0;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;white-space:pre-wrap;word-break:break-word}
+.term .card{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px;display:flex;flex-direction:column;gap:3px}
+.term .foot{border-top:1px solid var(--line);padding:3px 10px;font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.o{padding:0 4px;cursor:pointer}
+.o.on{background:var(--sel)}
+.o:hover{background:var(--sel)}
+.u{background:var(--sel);padding:0 4px}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.yellow{color:var(--yellow)}.red{color:var(--red)}.green{color:var(--green)}.cyan{color:var(--cyan)}
+.phone{width:100%;height:600px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.phone.short{height:420px}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.ph .hd b{font-size:14px}.ph .hd span{font-size:11px;color:var(--dim)}
+.ph .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;padding:8px 12px;word-break:break-word}
+.ph .card{border-top:1px solid var(--line);background:var(--panel);padding:8px 12px;display:flex;flex-direction:column;gap:6px}
+.ph .opt{min-height:44px;text-align:left;border-radius:8px;background:var(--sel);font-size:13px;white-space:normal}
+.ph .opt.p{background:var(--green);color:var(--panel);border-color:var(--green);font-weight:700}
+.ph textarea,.ta{width:100%;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:13px var(--mono);resize:vertical}
+.wire{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:12px/1.5 var(--mono);color:var(--fg);white-space:pre-wrap;word-break:break-all;min-height:96px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes>div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.rec{color:var(--green)}
+kbd{font:inherit;color:var(--cyan)}
+fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+legend{padding:0;margin-bottom:6px;font-weight:700;color:var(--yellow)}
+label{display:flex;gap:8px;align-items:baseline;cursor:pointer}
+input[type=radio]{accent-color:var(--blue);margin:0;flex:none}
+.tr{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--dim);white-space:pre-wrap;word-break:break-word}
+</style>
+
+<div class="wrap">
+  <h1>jw · Lo pendiente vuelve tras reiniciar</h1>
+  <p>Cuando el daemon arranca, cada conversación recupera lo que esperaba respuesta: la pregunta, el plan o el permiso. El proceso <kbd>claude</kbd> de antes ya no existe, así que la respuesta de la persona no puede ser un <kbd>control_response</kbd>: el motor arranca con <kbd>--resume</kbd> y la respuesta va como un mensaje. Elige qué volvió, contesta en la terminal (clic, <kbd>1</kbd>–<kbd>3</kbd>, <kbd>↵</kbd>) o en el teléfono, y mira abajo lo que recibe el motor. Los comportamientos de claude son medidos (claude 2.1.309, <kbd>docs/claude-engine.md</kbd>, «Resume with an unanswered tool_use»).</p>
+
+  <div class="bar" role="group" aria-label="Opciones del prototipo">
+    <div class="grp"><span>lo que volvió</span>
+      <button id="k-ask" aria-pressed="true">pregunta</button>
+      <button id="k-plan" aria-pressed="false">plan</button>
+      <button id="k-perm" aria-pressed="false">permiso</button></div>
+    <button id="reset">reiniciar</button>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · tras <kbd>jw stop</kbd> y arrancar de nuevo</h2>
+      <div class="term" id="t" tabindex="0" aria-label="Conversación restaurada">
+        <div class="list" id="t-list"></div>
+        <div class="card" id="t-card"></div>
+        <div class="foot"><span id="t-keys"></span><span id="t-mode"></span></div>
+      </div>
+      <div class="hint" id="t-note"></div>
+    </div>
+    <div class="side">
+      <h2>TELÉFONO · la misma tarjeta</h2>
+      <div class="phone"><div class="ph">
+        <div class="hd"><b>probar la reanudación</b><span id="p-sub"></span></div>
+        <div class="list" id="p-list"></div>
+        <div class="card" id="p-card"></div>
+      </div></div>
+    </div>
+  </div>
+
+  <h2>LO QUE RECIBE EL MOTOR</h2>
+  <div class="wire" id="wire" role="status"></div>
+
+  <h2>DESPUÉS DE <kbd>jw stop</kbd> · LAS HERRAMIENTAS QUE CORRÍAN</h2>
+  <div class="bar" role="group" aria-label="Antes o con el cambio">
+    <div class="grp"><span>se ve</span>
+      <button id="s-now" aria-pressed="false">hoy</button>
+      <button id="s-new" aria-pressed="true">con el cambio</button></div>
+  </div>
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL</h2>
+      <div class="term short"><div class="list" id="s-t"></div><div class="foot"><span>el daemon se detuvo y volvió a arrancar</span><span>sonnet-5.5 · manual</span></div></div>
+    </div>
+    <div class="side">
+      <h2>TELÉFONO</h2>
+      <div class="phone short"><div class="ph"><div class="hd"><b>arregla el test que falla</b><span>parada</span></div><div class="list" id="s-p"></div></div></div>
+    </div>
+  </div>
+
+  <h2>LO QUE CAMBIA</h2>
+  <div class="notes">
+    <div><b>Qué vuelve.</b> Una pregunta o un plan: la última herramienta <kbd>AskUserQuestion</kbd> o <kbd>ExitPlanMode</kbd> de la transcripción de claude sin resultado (siempre esperan a una persona). Un permiso: <b>no se puede leer de la transcripción</b>: medido, un permiso en espera y una herramienta ya aprobada que corre dejan exactamente la misma transcripción (acaba en el <kbd>tool_use</kbd>), y la segunda puede haber terminado sola; por eso el permiso sale de un registro <kbd>pending</kbd> que el daemon guarda al llegar la petición y borra al contestar. Con ello vuelven también las marcas de atención de siempre.</div>
+    <div><b>Qué dice la tarjeta.</b> Lo mismo que antes, y una línea encima: «↻ se retomó tras reiniciar · tu respuesta irá como un mensaje». En el teléfono es una fila de la tarjeta, no un aviso que se va.</div>
+    <div><b>Cómo se contesta.</b> El motor no arranca al restaurar (una conversación restaurada sigue sin motor hasta que se le escribe); la respuesta lo arranca con <kbd>--resume</kbd> y el modo que dice la respuesta; claude rellena él solo el resultado huérfano («[Tool call interrupted…]») y atiende el mensaje. Esa línea sintética y su «No response requested.» están solo en la transcripción: el daemon no debe dibujarlas.</div>
+    <div><b>Plan.</b> Aprobar arranca el motor en el modo de la opción (<kbd>acceptEdits</kbd> o el de antes del plan): medido, con <kbd>plan</kbd> el primer <kbd>Write</kbd> volvía a pedir permiso. «Seguir planeando» manda el texto y el motor sigue en <kbd>plan</kbd>.</div>
+  </div>
+
+  <h2>PARA DECIDIR</h2>
+  <div class="notes">
+    <fieldset id="d1"><legend>1 · cómo se para un motor con algo pendiente</legend>
+      <label><input type="radio" name="d1" value="a" checked><span><b class="rec">a · recomiendo:</b> pregunta y plan de la transcripción; el permiso de un registro <kbd>pending</kbd> (<kbd>tool_use_id</kbd>, herramienta, <kbd>input</kbd>) en <kbd>Saved</kbd>, que se guarda con el guardado de cada 2 s y a la fuerza al parar, y se contrasta con la transcripción (el <kbd>tool_use</kbd> sigue sin resultado). Y <kbd>jw stop</kbd> mata al momento el grupo de un motor con algo pendiente, en vez de cerrar stdin y esperar 3 s: la transcripción queda como tras una caída y no se gasta nada después de parar.</span></label>
+      <label><input type="radio" name="d1" value="b"><span><b>b ·</b> todo de la transcripción, cerrando stdin como hoy y reconociendo los textos de error de claude. Medido: tras un stop limpio claude rechaza él la pregunta, o reintenta el plan y el permiso hasta que lo matan a los 3 s; los textos son suyos, en inglés, y pueden cambiar. Y un permiso no se distingue de una herramienta en marcha.</span></label>
+      <label><input type="radio" name="d1" value="c"><span><b>c ·</b> los tres desde <kbd>pending</kbd> en <kbd>Saved</kbd>, sin leer la transcripción. Pierde lo que pasó en los últimos 2 s si el daemon cae, y duplica lo que la transcripción ya dice de la pregunta y el plan.</span></label>
+      <div class="tr" id="d1-tr"></div>
+    </fieldset>
+    <fieldset id="d2"><legend>2 · el permiso (el caso delicado)</legend>
+      <label><input type="radio" name="d2" value="a" checked><span><b class="rec">a · recomiendo: reproponer.</b> La tarjeta vuelve con «Sí / No». «Sí» manda el mensaje y, cuando claude propone la misma orden (medido: la propone otra vez), el daemon la aprueba una vez, solo si el <kbd>tool_name</kbd> y el <kbd>input</kbd> son idénticos a los del registro <kbd>pending</kbd> (que prueba que esa orden nunca corrió: medido, una orden que esperaba permiso no se ejecutó); si cambian, se muestra como siempre. Un solo clic.</span></label>
+      <label><input type="radio" name="d2" value="b"><span><b>b ·</b> mandar «sí» / «no» como mensaje y mostrar la nueva petición cuando llegue. Seguro, pero la persona confirma dos veces lo mismo.</span></label>
+      <label><input type="radio" name="d2" value="c"><span><b>c ·</b> dejar la herramienta sin ejecutar y avisar («no se ejecutó: el daemon se reinició»): sin botones de sí/no, solo un botón para pedirle a claude que la ejecute otra vez. Nunca aprueba nada por la persona.</span></label>
+    </fieldset>
+    <fieldset id="d3"><legend>3 · una herramienta que corría cuando se paró</legend>
+      <label><input type="radio" name="d3" value="a" checked><span><b class="rec">a · recomiendo:</b> «⏸ sin resultado · pudo terminar», en tono neutro, para un <kbd>jw stop</kbd> y para una herramienta sin resultado al abrir la conversación. No dice «interrumpida» ni «falló»: medido, un Bash que corría cuando se paró el motor <b>terminó solo</b> (creó su archivo 20 s después, fuera del grupo que mata el daemon). Solo un motor que se cae solo sigue en rojo, «El motor se detuvo».</span></label>
+      <label><input type="radio" name="d3" value="b"><span><b>b ·</b> como hoy: «✗ El motor se detuvo» en rojo para todo, también tras un stop deliberado.</span></label>
+      <label><input type="radio" name="d3" value="c"><span><b>c ·</b> no marcar nada: la herramienta queda como si corriera, hasta que el motor arranque.</span></label>
+    </fieldset>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const val = n => document.querySelector('input[name=' + n + ']:checked').value;
+const SID = '5643539a-e247-4b41-83a2-280712106eb2';
+const Q = '¿Qué letra prefieres?';
+const LETTERS = [['A','opción A'],['B','opción B'],['C','opción C']];
+const PLAN = ['# Plan: añadir suma a math.py','1. Crear math.py con suma(a, b)','2. Añadir tests en tests/test_math.py'];
+const CMD = 'touch probe-file && date > probe-file';
+const PLAN_OPTS = [['Aprobar y editar sin preguntar','acceptEdits'],['Aprobar, preguntando cada edición','manual'],['Seguir planeando','plan']];
+const BASE = {
+  ask: [['u','elige una letra'],['t','Te pregunto cuál prefieres.']],
+  plan: [['u','añade suma a math.py'],['t','Escribí el plan; te lo dejo para que lo apruebes.']],
+  perm: [['u','crea probe-file con la fecha'],['t','Voy a ejecutar un comando.']],
+};
+let kind, S;
+function reset(){ S = {step:'pending', sel:0, typing:false, text:'', msg:null, mode:null, extra:[], again:false}; draw(); }
+function kindSet(k){ kind = k; ['ask','plan','perm'].forEach(x => $('k-'+x).setAttribute('aria-pressed', x === k)); reset(); }
+const restoreNote = '↻ se retomó tras reiniciar · tu respuesta irá como un mensaje';
+
+// What the card offers now: a list of [label, key], a title and the lines under it.
+function card(){
+  if (S.step === 'done') return null;
+  if (kind === 'ask') return {title: Q, body: [], opts: LETTERS.map(([l,d]) => [l + ' · ' + d, l]), note: S.step === 'pending' ? restoreNote : null};
+  if (kind === 'plan') return {title: 'Plan listo', body: PLAN, opts: PLAN_OPTS.map(([l],i) => [l, String(i)]), note: restoreNote, typing: S.typing};
+  const first = S.step === 'pending';
+  if (first && val('d2') === 'c') return {title: 'Bash · no se ejecutó', body: [CMD, 'El daemon se reinició antes de que la aprobaras.'], opts: [['Pedirle a claude que la ejecute otra vez','again']], note: restoreNote};
+  return {title: 'Bash quiere ejecutar', body: [CMD], opts: [['Sí, ejecutar','y'],['No','n']], note: first ? restoreNote : 'otra vez: claude volvió a proponerla'};
+}
+function lines(){
+  const out = BASE[kind].slice();
+  if (S.msg !== null && S.step !== 'pending') out.push(['u', S.msg]);
+  S.extra.forEach(e => out.push(e));
+  return out;
+}
+function act(key){
+  const c = card(); if (!c) return;
+  if (kind === 'ask') {
+    S.msg = 'Elegí «' + key + '» para «' + Q + '»'; S.mode = 'manual';
+    S.extra = [['t','Anotado: elegiste ' + key + '.']]; S.step = 'done';
+  } else if (kind === 'plan') {
+    if (key === '2' && !S.typing) { S.typing = true; return draw(true); }
+    if (key === '2') { S.msg = 'No apruebo el plan; seguí planeando' + (S.text.trim() ? ': ' + S.text.trim() : '.'); S.mode = 'plan'; S.extra = [['t','Entendido: reviso el plan.']]; }
+    else { S.msg = key === '0' ? 'Aprobado: seguí con el plan y editá sin preguntar.' : 'Aprobado: seguí con el plan.'; S.mode = PLAN_OPTS[+key][1];
+      S.extra = [['t','Plan aprobado. Creo math.py.'], key === '0' ? ['d','▸ Write math.py ✓ (sin preguntar)'] : ['d','▸ Write math.py · pide permiso']]; }
+    S.step = 'done';
+  } else if (S.step === 'pending') {
+    S.mode = 'manual';
+    if (key === 'n') { S.msg = 'No, no ejecutes ' + CMD; S.extra = [['t','De acuerdo, no la ejecuto.']]; S.step = 'done'; }
+    else if (key === 'again') { S.msg = 'Ejecuta de nuevo: ' + CMD; S.extra = [['t','Propongo la orden otra vez.']]; S.step = 'second'; }
+    else {
+      S.msg = 'Sí, adelante con ' + CMD;
+      if (val('d2') === 'a') { S.extra = [['t','Propongo la orden otra vez.'],['d','✔ aprobada de antemano, una vez: misma orden'],['d','▸ Bash ✓ ' + CMD]]; S.step = 'done'; }
+      else { S.extra = [['t','Propongo la orden otra vez.']]; S.step = 'second'; }
+    }
+  } else {
+    if (key === 'y') { S.extra.push(['d','▸ Bash ✓ ' + CMD]); S.extra.push(['t','Hecho.']); } else S.extra.push(['t','No la ejecuto.']);
+    S.step = 'done';
+  }
+  draw();
+}
+
+function wire(){
+  const w = $('wire');
+  if (S.msg === null) { w.innerHTML = '<span class="dim">Sin respuesta todavía: no hay motor. Contesta la tarjeta.</span>'; return; }
+  const flag = '--permission-mode ' + S.mode;
+  let h = '<span class="cyan">claude -p --input-format stream-json … --resume ' + SID + ' ' + flag + '</span>\n<span class="green">→ {"type":"user","message":{"role":"user","content":' + esc(JSON.stringify(S.msg)) + '}}</span>';
+  if (kind === 'perm' && val('d2') === 'a' && S.step === 'done' && S.msg.startsWith('Sí')) h += '\n<span class="yellow">← control_request can_use_tool Bash {"command":' + esc(JSON.stringify(CMD)) + '}   (misma orden)</span>\n<span class="green">→ control_response allow  (una sola vez)</span>';
+  else if (S.step === 'second') h += '\n<span class="yellow">← control_request can_use_tool Bash  (se muestra otra tarjeta)</span>';
+  else if (S.step === 'done' && kind === 'perm' && S.extra.some(e => e[1].indexOf('Bash ✓') >= 0)) h += '\n<span class="green">→ control_response allow  (la segunda tarjeta)</span>';
+  w.innerHTML = h;
+}
+
+function drawList(el, big){
+  el.innerHTML = '';
+  const add = (cls, html) => { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; el.appendChild(d); };
+  lines().forEach(([k,t]) => {
+    if (k === 'u') add('u', '<span class="b blue">❯ </span>' + esc(t));
+    else if (k === 't') add('', '<span class="b">● </span>' + esc(t));
+    else add('dim', esc(t));
+  });
+  el.scrollTop = el.scrollHeight;
+}
+function draw(focusTa){
+  drawList($('t-list')); drawList($('p-list'));
+  const c = card();
+  const t = $('t-card'), p = $('p-card');
+  if (!c) {
+    t.innerHTML = '<span class="green">✔ enviado como mensaje</span>'; p.innerHTML = '<span class="green">✔ enviado como mensaje</span>';
+    $('t-keys').textContent = 'reiniciar para volver a probar'; $('p-sub').textContent = 'trabajando';
+  } else {
+    const head = (c.note ? '<span class="yellow">' + esc(c.note) + '</span>' : '') ;
+    t.innerHTML = head + '<span class="b ' + (kind === 'perm' ? 'yellow' : 'blue') + '">' + esc(c.title) + '</span>' + c.body.map(l => '<span class="dim">' + esc(l) + '</span>').join('') +
+      c.opts.map(([l,k],i) => '<div class="o' + (i === S.sel ? ' on' : '') + '" data-k="' + k + '" role="button" tabindex="-1">' + (i === S.sel ? '▸ ' : '  ') + (i + 1) + '  ' + esc(l) + '</div>').join('') +
+      (c.typing ? '<span class="yellow">Seguir planeando · ¿qué sigue? (opcional)</span><input class="ta" id="t-ta" placeholder="¿qué sigue?" value="' + esc(S.text) + '">' : '');
+    p.innerHTML = head + '<b>' + esc(c.title) + '</b>' + c.body.map(l => '<span class="dim">' + esc(l) + '</span>').join('') +
+      c.opts.map(([l,k],i) => '<button class="opt' + (i === 0 && !c.typing ? ' p' : '') + '" data-k="' + k + '" type="button">' + esc(l) + '</button>').join('') +
+      (c.typing ? '<textarea id="p-ta" placeholder="¿qué sigue? (opcional)">' + esc(S.text) + '</textarea>' : '');
+    $('t-keys').textContent = c.typing ? 'escribe · ↵ envía (vacío: sigue planeando)' : '1-' + c.opts.length + ' · ↑↓ · ↵ responde';
+    $('p-sub').textContent = kind === 'perm' ? 'permiso' : kind === 'plan' ? 'plan' : 'pregunta';
+    t.querySelectorAll('[data-k]').forEach(e => e.onclick = () => act(e.dataset.k));
+    p.querySelectorAll('[data-k]').forEach(e => e.onclick = () => act(e.dataset.k));
+    ['t-ta','p-ta'].forEach(id => { const ta = $(id); if (ta) { ta.oninput = () => { S.text = ta.value; }; ta.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter' && id === 't-ta') act('2'); }; if (focusTa && id === 't-ta') ta.focus(); } });
+  }
+  $('t-mode').textContent = 'sonnet-5.5 · ' + (S.mode || (kind === 'plan' ? 'plan' : 'manual'));
+  $('t-note').textContent = c ? 'El motor no existe: la respuesta lo arranca.' : 'Después de la respuesta es una conversación normal.';
+  wire(); trans(); stopped();
+}
+
+function trans(){
+  const tail = {
+    a: 'assistant  tool_use:@  ←  última línea; sin tool_result\n(igual si la herramienta ya estaba aprobada y corría)',
+    b: kind === 'ask' ? 'assistant  tool_use:AskUserQuestion\n  user  tool_result: «The user doesn\'t want to proceed with this tool use…»\n  user  «[Request interrupted by user for tool use]»'
+        : 'assistant  tool_use\n  user  tool_result: «Tool permission request failed: AbortError: …stream closed…»\n  assistant  tool_use  (reintento)\n  user  tool_result: «…AbortError: Stream closed»   ← o dónde esté a los 3 s',
+    c: 'lo que sea que dejara claude + Saved.pending {tool_use_id, kind, input}',
+  };
+  const v = val('d1');
+  $('d1-tr').textContent = 'transcripción tras parar (medido):\n' + (v === 'a' ? tail.a.replace('@', kind === 'ask' ? 'AskUserQuestion' : kind === 'plan' ? 'ExitPlanMode' : 'Bash') : tail[v]);
+}
+
+// After jw stop: the tools that ran.
+function stopped(){
+  const now = $('s-now').getAttribute('aria-pressed') === 'true', d3 = val('d3');
+  const rows = [['u','arregla el test que falla en auth::expired'],['t','Corro los tests para ver el fallo.']];
+  let tool, note;
+  if (now || d3 === 'b') { tool = '<span class="red">✗ Bash · cargo test auth — El motor se detuvo</span>'; note = '<span class="red">El motor se detuvo</span>'; }
+  else if (d3 === 'c') { tool = '<span class="yellow">▸ Bash · cargo test auth …</span>'; note = '<span class="dim">daemon reiniciado 19:31 · la conversación sigue aquí</span>'; }
+  else { tool = '<span class="dim">⏸ Bash · cargo test auth — sin resultado · pudo terminar</span>'; note = '<span class="dim">daemon reiniciado 19:31 · la conversación sigue aquí</span>'; }
+  const html = rows.map(([k,t]) => k === 'u' ? '<div class="u"><span class="b blue">❯ </span>' + esc(t) + '</div>' : '<div><span class="b">● </span>' + esc(t) + '</div>').join('') + '<div>' + tool + '</div><div>' + note + '</div>';
+  $('s-t').innerHTML = html; $('s-p').innerHTML = html;
+}
+
+$('k-ask').onclick = () => kindSet('ask'); $('k-plan').onclick = () => kindSet('plan'); $('k-perm').onclick = () => kindSet('perm');
+$('reset').onclick = reset;
+$('s-now').onclick = () => { $('s-now').setAttribute('aria-pressed', true); $('s-new').setAttribute('aria-pressed', false); stopped(); };
+$('s-new').onclick = () => { $('s-new').setAttribute('aria-pressed', true); $('s-now').setAttribute('aria-pressed', false); stopped(); };
+document.querySelectorAll('input[type=radio]').forEach(r => r.onchange = () => reset());
+$('t').addEventListener('keydown', e => {
+  const c = card(); if (!c) return;
+  if (e.key === 'ArrowDown') S.sel = Math.min(c.opts.length - 1, S.sel + 1);
+  else if (e.key === 'ArrowUp') S.sel = Math.max(0, S.sel - 1);
+  else if (/^[1-9]$/.test(e.key) && +e.key <= c.opts.length) return act(c.opts[+e.key - 1][1]), e.preventDefault();
+  else if (e.key === 'Enter') return act(c.opts[S.sel][1]), e.preventDefault();
+  else return;
+  draw(); e.preventDefault();
+});
+kindSet('ask');
+</script>
