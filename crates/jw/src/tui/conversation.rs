@@ -21,6 +21,7 @@ use super::field::{self, Field, Look, Mark, Peek, Window};
 use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
+use super::paste::{self, Fold};
 use super::{Grid, Rgb, Style, clip, look, select};
 use crate::claude::tools_word;
 
@@ -31,6 +32,10 @@ pub enum Act {
         node: String,
         text: String,
         images: Vec<Image>,
+        /// The characters of `text` that were each a fold, and whether the line began with a blank:
+        /// what the daemon's history needs (REQ-716).
+        folds: Vec<[usize; 2]>,
+        private: bool,
     },
     Answer {
         node: String,
@@ -127,6 +132,11 @@ const COLORS: Choices = &[
     ("magenta", "magenta"),
     ("cyan", "cian"),
 ];
+
+/// A message of the person that wraps to more rows than `USER_FOLDS_PAST` is drawn with its first
+/// `USER_SHOWN` and a line that says how many it leaves out (REQ-713).
+const USER_SHOWN: usize = 3;
+const USER_FOLDS_PAST: usize = 4;
 
 /// The most diff lines an edit shows before it is opened, and the most lines of output an opened item shows.
 const DIFF_SHOWN: usize = 14;
@@ -292,15 +302,120 @@ enum Pop {
 /// The line being typed: characters, and where the cursor is among them.
 #[derive(Default, Debug, Clone)]
 pub struct Composer {
+    /// The characters, a fold of a long paste being one of the private-use block (REQ-710).
     chars: Vec<char>,
     cursor: usize,
+    /// What each fold stands for, in the order of its character (`paste::char_of`), and how many
+    /// folds the message has numbered so far (REQ-709).
+    folds: Vec<Fold>,
+    made: usize,
     /// Where a selection began, when there is one: it covers what lies between this and the cursor.
     anchor: Option<usize>,
 }
 
 impl Composer {
+    /// What the line says: a fold is the text that was pasted (REQ-712).
     pub fn text(&self) -> String {
+        self.sendable().0
+    }
+
+    /// The text of the line and the characters of it that each fold covers, in order (REQ-712).
+    pub fn sendable(&self) -> (String, Vec<(usize, usize)>) {
+        let (mut text, mut folds, mut at) = (String::new(), Vec::new(), 0);
+        for &c in &self.chars {
+            match paste::index_of(c).and_then(|k| self.folds.get(k)) {
+                Some(f) => {
+                    let len = f.body.chars().count();
+                    folds.push((at, at + len));
+                    text.push_str(&f.body);
+                    at += len;
+                }
+                None => {
+                    text.push(c);
+                    at += 1;
+                }
+            }
+        }
+        (text, folds)
+    }
+
+    /// Put `sent` in the line, its folds folded again and numbered from 1, the cursor at the start
+    /// or at the end (REQ-714).
+    pub fn set_folded(&mut self, sent: &paste::Sent, start: bool) {
+        self.set("");
+        let text: Vec<char> = sent.text.chars().collect();
+        let piece = |from: usize, to: usize| text[from..to].iter().collect::<String>();
+        let mut at = 0;
+        for &(from, to) in &sent.folds {
+            if text.get(from..to).is_none() || from < at {
+                continue;
+            }
+            let Some(c) = paste::char_of(self.folds.len()) else {
+                break;
+            };
+            self.insert(&piece(at, from));
+            self.made += 1;
+            self.folds
+                .push(Fold::new(self.made, paste::clean(&piece(from, to))));
+            self.chars.push(c);
+            self.cursor = self.chars.len();
+            at = to;
+        }
+        self.insert(&piece(at, text.len()));
+        if start {
+            self.cursor = 0;
+        }
+    }
+
+    /// The line as it is kept, a fold being its character: what `cursor` and the marks count in.
+    pub fn raw(&self) -> String {
         self.chars.iter().collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
+
+    /// The folds of the line, for the field to draw their labels.
+    pub fn folds(&self) -> &[Fold] {
+        &self.folds
+    }
+
+    /// Put a long paste in the line as a fold, in place of what is selected (REQ-709); with no
+    /// room left in the block of folds it goes in as the text.
+    pub fn fold(&mut self, text: &str) {
+        let Some(c) = paste::char_of(self.folds.len()) else {
+            return self.insert(text);
+        };
+        self.delete_selection();
+        self.made += 1;
+        self.folds.push(Fold::new(self.made, paste::clean(text)));
+        self.chars.insert(self.cursor, c);
+        self.cursor += 1;
+    }
+
+    fn fold_at(&self) -> Option<usize> {
+        let is_fold = |i: usize| self.chars.get(i).is_some_and(|c| paste::is_fold(*c));
+        if is_fold(self.cursor) {
+            Some(self.cursor)
+        } else {
+            self.cursor.checked_sub(1).filter(|i| is_fold(*i))
+        }
+    }
+
+    /// Turn the fold at the cursor (or just before it) into its text, the cursor after it
+    /// (REQ-710); whether there was one.
+    pub fn unfold(&mut self) -> bool {
+        let Some(i) = self.fold_at() else {
+            return false;
+        };
+        let body: Vec<char> = paste::index_of(self.chars[i])
+            .and_then(|k| self.folds.get(k))
+            .map_or_else(Vec::new, |f| f.body.chars().collect());
+        self.anchor = None;
+        self.cursor = i + body.len();
+        self.chars.splice(i..=i, body);
+        true
     }
 
     pub fn cursor(&self) -> usize {
@@ -316,7 +431,13 @@ impl Composer {
 
     /// Select the word that has the character `at` (REQ-637); `true` when there is one.
     pub fn select_word_at(&mut self, at: usize) -> bool {
-        let Some((from, to)) = select::word_at(&self.text(), at) else {
+        // A fold is a word by itself (REQ-710).
+        if self.chars.get(at).is_some_and(|c| paste::is_fold(*c)) {
+            self.anchor = Some(at);
+            self.cursor = at + 1;
+            return true;
+        }
+        let Some((from, to)) = select::word_at(&self.raw(), at) else {
             return false;
         };
         self.anchor = Some(from);
@@ -325,21 +446,28 @@ impl Composer {
     }
 
     pub fn set(&mut self, text: &str) {
-        self.chars = text.chars().collect();
+        self.chars = paste::clean(text).chars().collect();
         self.cursor = self.chars.len();
         self.anchor = None;
+        self.folds.clear();
+        self.made = 0;
     }
 
     pub fn take(&mut self) -> String {
+        let text = self.text();
+        self.chars.clear();
         self.cursor = 0;
         self.anchor = None;
-        std::mem::take(&mut self.chars).into_iter().collect()
+        self.folds.clear();
+        self.made = 0;
+        text
     }
 
-    /// Write `text` at the cursor, in place of what is selected.
+    /// Write `text` at the cursor, in place of what is selected; a character that would pass for a
+    /// fold's is written as U+FFFD (REQ-712).
     pub fn insert(&mut self, text: &str) {
         self.delete_selection();
-        for c in text.chars() {
+        for c in paste::clean(text).chars() {
             self.chars.insert(self.cursor, c);
             self.cursor += 1;
         }
@@ -438,7 +566,7 @@ impl Composer {
     /// last row it grows to the start or the end of the text, and the key is always taken;
     /// without, false says there was no row to go to (and the selection is gone all the same).
     fn vertical(&mut self, down: bool, select: bool, width: usize) -> bool {
-        let starts = field::row_starts(&self.chars, width, self.cursor);
+        let starts = field::row_starts(&self.chars, width, self.cursor, &self.folds);
         let row = starts.partition_point(|s| *s <= self.cursor) - 1;
         let to = if down {
             Some(row + 1).filter(|r| *r < starts.len())
@@ -455,8 +583,15 @@ impl Composer {
         };
         // A row ends at its last character, or at the one before the next row begins.
         let end = starts.get(to + 1).map_or(self.chars.len(), |next| next - 1);
-        let col = self.cursor - starts[row];
-        self.go(starts[to] + col.min(end - starts[to]), select);
+        // The column is counted in cells, a fold taking those of its label (REQ-710).
+        let cells = |c: &char| field::cell_width(*c, width, &self.folds);
+        let col: usize = self.chars[starts[row]..self.cursor].iter().map(cells).sum();
+        let (mut at, mut seen) = (starts[to], 0);
+        while at < end && seen + cells(&self.chars[at]) <= col {
+            seen += cells(&self.chars[at]);
+            at += 1;
+        }
+        self.go(at, select);
         true
     }
 
@@ -598,6 +733,19 @@ pub struct Ui {
     images: Vec<(u32, Image)>,
     /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
     pasted: u32,
+    /// The messages sent, oldest first, for ↑ and ^R (REQ-714, REQ-717).
+    sent: Vec<paste::Sent>,
+    /// The daemon was asked for the messages of the repository (`sent_asked`) and has not answered
+    /// (`asking`): what is sent meanwhile (`since`) goes after them, and an answer that comes while
+    /// a message is recalled or the list is open waits (`pending`).
+    asking: bool,
+    sent_asked: bool,
+    since: Vec<paste::Sent>,
+    pending: Option<Vec<paste::Sent>>,
+    /// The message of `sent` that is in the line, and the draft that was being written when the
+    /// first one was put there, with the pictures it had: they are not the message that is shown.
+    recalling: Option<usize>,
+    draft: Option<(Composer, Vec<(u32, Image)>)>,
     /// The files that hold what follows the `@` the line ends with, for which fragment, the
     /// one lit, the fragment last asked for and the one the person closed the list on.
     /// The command lit in the `/` list, and the line the person closed it on.
@@ -742,8 +890,12 @@ impl Ui {
             return;
         }
         self.menu_at = 0;
-        self.editor
-            .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if paste::folds(&text) {
+            self.editor.fold(&text);
+        } else {
+            self.editor.insert(&text);
+        }
     }
 
     /// A picture the clipboard held, now small: it goes with the next message.
@@ -800,7 +952,7 @@ impl Ui {
     /// The commands whose names hold the letters after the `/` the line is, the ones that begin
     /// with them first (REQ-416).
     fn menu<'a>(&self, conv: &'a Conversation) -> Vec<&'a ConvCommand> {
-        let text = self.editor.text();
+        let text = self.editor.raw();
         let Some((_, typed)) = self.editor.slash().filter(|_| self.menu_off != text) else {
             return Vec::new();
         };
@@ -854,7 +1006,7 @@ impl Ui {
     /// that is a command that exists, wherever it is, in the colour of where it is defined
     /// (REQ-596).
     fn marks(&self, conv: &Conversation) -> Vec<Mark> {
-        let text = self.editor.text();
+        let text = self.editor.raw();
         let mut out = Vec::new();
         if text.starts_with('!') && text.len() > 1 {
             out.push((0, 1, look::green()));
@@ -969,6 +1121,10 @@ impl Ui {
             RowAct::Nothing => None,
             RowAct::Insert(text) => {
                 self.editor.set(&text);
+                None
+            }
+            RowAct::Recall(at) => {
+                self.recall_at(at, false);
                 None
             }
             RowAct::Resume(id) => Some(Act::Resume {
@@ -1173,13 +1329,26 @@ impl Ui {
         let open = running || self.open.contains(&abs);
         match item {
             Item::User { text, images } => {
-                let rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
+                let mut rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
+                // A long message shows its first rows and says how many it leaves out (REQ-713).
+                let left = if rows.len() > USER_FOLDS_PAST {
+                    rows.len() - USER_SHOWN
+                } else {
+                    0
+                };
+                rows.truncate(rows.len() - left);
                 for (k, (continues, row)) in rows.into_iter().enumerate() {
                     let mark = if k == 0 { "❯ " } else { "  " };
                     let mut spans = vec![(mark.to_owned(), Style::fg(accent).bold())];
                     spans.extend(row);
                     soft.set(continues);
                     push(spans, Some(look::sel()));
+                }
+                if left > 0 {
+                    push(
+                        vec![(format!("  … +{left} filas más"), dim)],
+                        Some(look::sel()),
+                    );
                 }
                 if *images > 0 {
                     push(
@@ -1470,7 +1639,7 @@ impl Ui {
     fn ghost<'a>(&self, conv: &'a Conversation) -> Option<&'a str> {
         conv.suggestion.as_deref().filter(|s| {
             conv.held.is_none()
-                && self.editor.text().is_empty()
+                && self.editor.is_empty()
                 && conv.ask.is_none()
                 && self.pop.is_none()
                 && !self.working(conv)
@@ -1543,7 +1712,7 @@ impl Ui {
         self.text_width.set(field::text_width(iw));
         Field::selecting(
             &PaneInput {
-                text: self.editor.text(),
+                text: self.editor.raw(),
                 cursor: self.editor.cursor() as u32,
             },
             self.editor.selection(),
@@ -1554,6 +1723,7 @@ impl Ui {
                 offset: self.offset.get(),
                 pin: self.peeked(),
             },
+            self.editor.folds(),
         )
     }
 
@@ -1637,6 +1807,9 @@ impl Ui {
             }
             if !self.images.is_empty() {
                 chips.push((format!("▣ {}", self.images.len()), look::cyan()));
+            }
+            if let Some(at) = self.recalling {
+                chips.push((format!("↑ {}/{}", at + 1, self.sent.len()), look::yellow()));
             }
             let proposed = match &conv.held {
                 Some(h) => Some(Ui::held_why(h).0),
@@ -2210,7 +2383,7 @@ impl Ui {
                 }
                 KeyCode::Enter => return self.choose_command(conv, menu[at]),
                 KeyCode::Esc => {
-                    self.menu_off = self.editor.text();
+                    self.menu_off = self.editor.raw();
                     return None;
                 }
                 _ => {}
@@ -2273,11 +2446,16 @@ impl Ui {
                 self.editor.insert("\n");
                 None
             }
+            KeyCode::Char('r') if ctrl && conv.ask.is_none() => {
+                self.open_history();
+                None
+            }
             KeyCode::Char('c') if ctrl => {
                 if self.working(conv) {
                     Some(Act::Interrupt { node })
                 } else {
                     self.editor.take();
+                    self.forget_recall();
                     None
                 }
             }
@@ -2294,12 +2472,13 @@ impl Ui {
                 self.agents.focus = true;
                 None
             }
+            // A fold turns into the text that was pasted, to edit it (REQ-710); the agents' area
+            // keeps the Tab it has (REQ-601).
+            KeyCode::Tab if self.editor.unfold() => None,
             // The terminal sends the same byte for ^/ and ^? (crossterm reads it as ^7 or ^_
             // when it does not know the key).
             KeyCode::Char('/' | '?' | '_' | '7') if ctrl => self.open_panel(conv, "keys", ""),
-            KeyCode::Char('?') if self.editor.text().is_empty() => {
-                self.open_panel(conv, "keys", "")
-            }
+            KeyCode::Char('?') if self.editor.is_empty() => self.open_panel(conv, "keys", ""),
             KeyCode::Esc if self.working(conv) => Some(Act::Interrupt { node }),
             KeyCode::BackTab => Some(Act::Mode {
                 node,
@@ -2318,7 +2497,9 @@ impl Ui {
             KeyCode::Up | KeyCode::Down => {
                 let down = ev.code == KeyCode::Down;
                 let shift = ev.modifiers.contains(KeyModifiers::SHIFT);
-                if !self.editor.vertical(down, shift, self.row_width()) {
+                if !self.editor.vertical(down, shift, self.row_width())
+                    && (shift || !self.recall(down))
+                {
                     self.scroll_by(!down, 1);
                 }
                 None
@@ -2545,11 +2726,12 @@ impl Ui {
             return None;
         }
         let node = conv.head.id.clone();
-        let text = self.editor.text();
+        let (text, folds) = self.editor.sendable();
         let line = text.trim();
         if line.is_empty() {
             return None;
         }
+        self.forget_recall();
         if let Some(rest) = line.strip_prefix('/') {
             let (word, arg) = rest
                 .split_once(char::is_whitespace)
@@ -2577,6 +2759,9 @@ impl Ui {
             return None;
         }
         let line = line.to_owned();
+        let sent = paste::trimmed(&text, &folds);
+        let private = text.starts_with([' ', '\t']);
+        let kept = paste::keeps(&text);
         self.editor.take();
         self.scroll = 0;
         if let Some(command) = line
@@ -2592,6 +2777,9 @@ impl Ui {
         if matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = true;
         }
+        if kept {
+            self.remember(sent.clone());
+        }
         // Only the pictures whose mark is still in the line go.
         let images = std::mem::take(&mut self.images)
             .into_iter()
@@ -2602,7 +2790,138 @@ impl Ui {
             node,
             text: line,
             images,
+            folds: sent.folds.iter().map(|&(from, to)| [from, to]).collect(),
+            private,
         })
+    }
+
+    fn forget_recall(&mut self) {
+        self.recalling = None;
+        self.draft = None;
+        self.take_pending();
+    }
+
+    /// Whether the daemon has to be asked for the messages sent from the repository: once.
+    pub fn want_sent(&mut self) -> bool {
+        !std::mem::replace(&mut self.sent_asked, true) && {
+            self.asking = true;
+            true
+        }
+    }
+
+    /// The daemon's answer, oldest first, or none when it could not give it: the messages sent
+    /// while it was awaited go after them, and one that is already there is not twice (REQ-716).
+    /// While a message is recalled the list waits, so that its numbers do not move.
+    pub fn history(&mut self, list: Option<contract::conversation::SentList>) {
+        self.asking = false;
+        let since = std::mem::take(&mut self.since);
+        let Some(list) = list else {
+            return;
+        };
+        let mut all: Vec<paste::Sent> = list
+            .messages
+            .into_iter()
+            .map(|m| paste::Sent {
+                text: m.text,
+                folds: m.folds.iter().map(|&[from, to]| (from, to)).collect(),
+            })
+            .collect();
+        // What the file already had is looked for among its last ones, not among those added here.
+        let theirs = all.len();
+        let tail = theirs.saturating_sub(since.len() + 1);
+        for s in since {
+            if !all[tail..theirs].iter().any(|a| a.text == s.text) {
+                all.push(s);
+            }
+        }
+        let from = all.len().saturating_sub(paste::KEEP_LAST);
+        all.drain(..from);
+        self.pending = Some(all);
+        // While a message is recalled or the list of ^R is open its numbers must not move.
+        if self.recalling.is_none() && !matches!(self.pop, Some(Pop::List(_))) {
+            self.take_pending();
+        }
+    }
+
+    fn take_pending(&mut self) {
+        if let Some(all) = self.pending.take() {
+            self.sent = all;
+        }
+    }
+
+    /// A message that was sent goes to the end of the history (REQ-716), unless it is the same as
+    /// the last.
+    fn remember(&mut self, sent: paste::Sent) {
+        if self.sent.last().is_some_and(|last| last.text == sent.text) {
+            return;
+        }
+        if self.asking {
+            self.since.push(sent.clone());
+        }
+        self.sent.push(sent);
+        if self.sent.len() > paste::KEEP_LAST {
+            self.sent.remove(0);
+        }
+    }
+
+    /// ↑ or ↓ on the first or last row of the field: the previous message or the next one is put in
+    /// it, and past the newest the draft comes back (REQ-714). Whether there was one to put.
+    fn recall(&mut self, down: bool) -> bool {
+        if self.recalling.is_none() {
+            self.take_pending();
+        }
+        let to = match (self.recalling, down) {
+            (None, true) => return false,
+            (None, false) => self.sent.len().checked_sub(1),
+            // At the oldest there is nothing further back, and what was edited stays.
+            (Some(0), false) => return true,
+            (Some(at), false) => Some(at - 1),
+            (Some(at), true) => Some(at + 1),
+        };
+        let Some(to) = to else {
+            return false;
+        };
+        self.recall_at(to, down);
+        true
+    }
+
+    /// Put the message `to` of the history in the line, the cursor at its start when it was reached
+    /// going back and at its end going forward; past the newest, the draft (REQ-714).
+    fn recall_at(&mut self, to: usize, down: bool) {
+        if self.recalling.is_none() {
+            self.draft = Some((self.editor.clone(), std::mem::take(&mut self.images)));
+        }
+        if to >= self.sent.len() {
+            self.recalling = None;
+            if let Some((draft, images)) = self.draft.take() {
+                self.editor = draft;
+                self.images = images;
+            }
+            self.take_pending();
+        } else {
+            self.recalling = Some(to);
+            self.editor.set_folded(&self.sent[to].clone(), !down);
+        }
+        // What was put in the line does not open the lists of the `/` or the `@` it may end in.
+        self.menu_at = 0;
+        self.menu_off = self.editor.raw();
+        self.files.clear();
+        if let Some(fragment) = self.editor.mention() {
+            self.asked.clone_from(&fragment);
+            self.dismissed = fragment;
+        }
+    }
+
+    /// `^R`: the messages sent, newest first, to filter and choose from (REQ-717).
+    fn open_history(&mut self) {
+        if self.recalling.is_none() {
+            self.take_pending();
+        }
+        if self.sent.is_empty() {
+            self.says = "no se ha enviado nada todavía".into();
+            return;
+        }
+        self.pop = Some(Pop::List(ListState::of(panels::sent(&self.sent))));
     }
 
     fn open_pick(&mut self, conv: &Conversation, of: Of) {
@@ -4480,7 +4799,9 @@ mod tests {
             Some(Act::Send {
                 node: conv.head.id.clone(),
                 text: "hola\nadiós".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         assert_eq!(ui.editor.text(), "");
@@ -4586,7 +4907,9 @@ mod tests {
             Some(Act::Send {
                 node,
                 text: "/effort low".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         type_in(&mut ui, &conv, "/model");
@@ -5230,6 +5553,661 @@ mod tests {
         assert_eq!(ui.scroll, 0);
     }
 
+    /// REQ-709: a paste of five rows is one fold in the line and the text is what is sent.
+    #[test]
+    fn a_long_paste_is_one_label_in_the_line_and_the_whole_text_in_the_message() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira ");
+        ui.paste(&paste::sample_rows(12));
+        assert_eq!(ui.editor.text(), format!("mira {}", paste::sample_rows(12)));
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            6,
+            "five letters and one fold"
+        );
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "mira [Texto pegado #1 +12 líneas «línea 1»]");
+        match press(&mut ui, &conv, KeyCode::Enter) {
+            Some(Act::Send { text, .. }) => {
+                assert_eq!(text, format!("mira {}", paste::sample_rows(12)))
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(ui.editor.raw(), "");
+    }
+
+    /// REQ-709: below the limit the paste goes in as it did; one line of 300 characters folds.
+    #[test]
+    fn a_short_paste_goes_in_as_typed_and_a_long_line_folds_by_its_characters() {
+        let mut ui = Ui::default();
+        ui.paste("git status\ngit diff --stat");
+        assert_eq!(ui.editor.raw(), "git status\ngit diff --stat");
+        ui.editor.take();
+        ui.paste(&paste::sample_rows(4));
+        assert_eq!(ui.editor.raw(), paste::sample_rows(4), "four rows");
+        ui.editor.take();
+        ui.paste(&"y".repeat(700));
+        assert_eq!(ui.editor.raw().chars().count(), 1);
+        assert_eq!(ui.editor.text(), "y".repeat(700));
+        let conv = idle();
+        let (_, rows) = frame(&ui, &conv);
+        row_of(
+            &rows,
+            "[Texto pegado #1 700 caracteres «yyyyyyyyyyyyyyyy…»]",
+        );
+    }
+
+    /// REQ-710: the arrows cross a fold in one step and backspace and delete erase it whole.
+    #[test]
+    fn a_fold_is_one_step_and_one_erase() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "a");
+        ui.paste(&paste::sample_rows(6));
+        type_in(&mut ui, &conv, "b");
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Left);
+        assert_eq!(ui.editor.cursor(), 1, "one step over the fold");
+        press(&mut ui, &conv, KeyCode::Right);
+        assert_eq!(ui.editor.cursor(), 2);
+        press(&mut ui, &conv, KeyCode::Backspace);
+        assert_eq!(ui.editor.text(), "ab", "backspace takes it whole");
+        ui.editor.take();
+        ui.paste(&paste::sample_rows(6));
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Delete);
+        assert_eq!(ui.editor.text(), "");
+    }
+
+    /// REQ-710: tab on a fold, or just after it, gives the text back to be edited.
+    #[test]
+    fn tab_turns_a_fold_into_its_text_and_leaves_the_others() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&paste::sample_rows(6));
+        type_in(&mut ui, &conv, " ");
+        ui.paste(&"z".repeat(400));
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Left);
+        assert_eq!(ui.editor.cursor(), 0);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert_eq!(ui.editor.cursor(), paste::sample_rows(6).chars().count());
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "línea 6");
+        row_of(&rows, "[Texto pegado #2 400 caracteres");
+        assert_eq!(
+            ui.editor.text(),
+            format!("{} {}", paste::sample_rows(6), "z".repeat(400))
+        );
+    }
+
+    /// REQ-711, REQ-712: the number counts the folds of a message and starts again with the next.
+    #[test]
+    fn the_folds_of_a_message_are_numbered_from_one() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&paste::sample_rows(6));
+        type_in(&mut ui, &conv, " ");
+        ui.paste(&paste::sample_rows(7));
+        let (_, rows) = frame(&ui, &conv);
+        row_of(
+            &rows,
+            "[Texto pegado #1 +6 líneas «línea 1»] [Texto pegado #2 +7 líneas",
+        );
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { .. })
+        ));
+        ui.paste(&paste::sample_rows(8));
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "[Texto pegado #1 +8 líneas");
+    }
+
+    /// REQ-712, RISK-87: the message has the whole text of each fold, whatever lies between them.
+    #[test]
+    fn a_message_with_two_folds_and_text_between_them_is_sent_whole() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&paste::sample_rows(6));
+        type_in(&mut ui, &conv, " y ");
+        ui.paste(&"z".repeat(350));
+        type_in(&mut ui, &conv, "!");
+        match press(&mut ui, &conv, KeyCode::Enter) {
+            Some(Act::Send { text, .. }) => {
+                assert_eq!(
+                    text,
+                    format!("{} y {}!", paste::sample_rows(6), "z".repeat(350))
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// REQ-710, RISK-87, RISK-88: a double click on a label selects the fold and `text()` is not
+    /// what the cursor counts in.
+    #[test]
+    fn a_double_click_on_a_label_selects_the_fold() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "x ");
+        ui.paste(&paste::sample_rows(6));
+        type_in(&mut ui, &conv, " y");
+        let rows = frame(&ui, &conv).1;
+        let y = row_of(&rows, "[Texto pegado #1");
+        let x = rows[y]
+            .find("[Texto")
+            .map(|b| rows[y][..b].chars().count())
+            .unwrap();
+        assert!(ui.select_word_in_field(&conv, INNER, x + 5, y));
+        assert_eq!(
+            ui.editor.selection(),
+            Some((2, 3)),
+            "one character: the fold"
+        );
+        assert_ne!(
+            ui.editor.text().chars().count(),
+            ui.editor.raw().chars().count()
+        );
+    }
+
+    /// REQ-710: ↑ and ↓ keep the column in cells, a label counting as wide as it is drawn.
+    #[test]
+    fn up_and_down_count_a_label_by_its_width() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "ab");
+        ui.paste(&paste::sample_rows(6));
+        type_in(&mut ui, &conv, "cd");
+        ui.key(
+            &conv,
+            &KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+        type_in(&mut ui, &conv, &"m".repeat(80));
+        frame(&ui, &conv);
+        // from the end of the first row (a fold wide) down to the long one and back up
+        for _ in 0..4 {
+            press(&mut ui, &conv, KeyCode::Up);
+        }
+        let label = Fold::new(1, paste::sample_rows(6))
+            .label(ui.row_width())
+            .chars()
+            .count();
+        press(&mut ui, &conv, KeyCode::End);
+        assert_eq!(
+            ui.editor.cursor(),
+            5,
+            "the end of the line that holds the fold"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        let cursor = ui.editor.cursor();
+        let first = 6;
+        assert_eq!(
+            cursor - first,
+            2 + label + 2,
+            "the column is {} cells",
+            2 + label + 2
+        );
+    }
+
+    /// REQ-713: a long message of the person shows three rows and how many it leaves out.
+    #[test]
+    fn a_long_message_of_the_person_is_drawn_folded_to_three_rows() {
+        let mut conv = idle();
+        let user = |text: String| Item::User { text, images: 0 };
+        conv.items = vec![user(paste::sample_rows(12))];
+        let ui = Ui::default();
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "❯ línea 1");
+        row_of(&rows, "línea 3");
+        row_of(&rows, "… +9 filas más");
+        assert!(
+            !rows.iter().any(|r| r.contains("línea 4")),
+            "{}",
+            rows.join("\n")
+        );
+        conv.items = vec![user(paste::sample_rows(5))];
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "… +2 filas más");
+        // four rows are drawn whole: a fold of one would take the room of the row it hides
+        conv.items = vec![user(paste::sample_rows(4))];
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "línea 4");
+        assert!(!rows.iter().any(|r| r.contains("filas más")));
+    }
+
+    /// REQ-713: the rows are those the width makes, and the item's own copy still has it all.
+    #[test]
+    fn the_rows_of_a_folded_message_are_counted_as_drawn_and_its_copy_is_whole() {
+        let mut conv = idle();
+        conv.items = vec![Item::User {
+            text: "palabra ".repeat(60),
+            images: 0,
+        }];
+        let rows = frame(&Ui::default(), &conv).1;
+        row_of(&rows, "filas más");
+        assert_eq!(plain_of(&conv.items[0]), "palabra ".repeat(60));
+        // the line that says it is not glued to the row above when a drag copies
+        let lines = Ui::default().lines(&conv, 94);
+        let marker = lines
+            .iter()
+            .find(|l| l.text().contains("filas más"))
+            .unwrap();
+        assert!(!marker.soft);
+    }
+
+    fn send(ui: &mut Ui, conv: &Conversation, text: &str) {
+        ui.editor.set(text);
+        assert!(matches!(
+            press(ui, conv, KeyCode::Enter),
+            Some(Act::Send { .. })
+        ));
+    }
+
+    /// REQ-714, REQ-715: ↑ on the first row brings back the messages sent, ↓ on the last goes
+    /// forward and past the newest the draft comes back; a chip says which one it is.
+    #[test]
+    fn up_recalls_the_messages_sent_and_down_brings_the_draft_back() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        for t in ["uno", "dos", "tres"] {
+            send(&mut ui, &conv, t);
+        }
+        type_in(&mut ui, &conv, "borrador");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!((ui.editor.text(), ui.editor.cursor()), ("tres".into(), 0));
+        row_of(&frame(&ui, &conv).1, "↑ 3/3");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "dos");
+        press(&mut ui, &conv, KeyCode::Up);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(
+            ui.editor.text(),
+            "uno",
+            "at the oldest there is nothing further back"
+        );
+        row_of(&frame(&ui, &conv).1, "↑ 1/3");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!((ui.editor.text(), ui.editor.cursor()), ("dos".into(), 3));
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            ui.editor.text(),
+            "borrador",
+            "past the newest the draft is back"
+        );
+        assert!(!frame(&ui, &conv).1.iter().any(|r| r.contains("↑ 3/3")));
+    }
+
+    /// REQ-714: with nothing recalled ↓ on the last row scrolls the list one line, as it did.
+    #[test]
+    fn down_with_nothing_recalled_scrolls_the_list_one_line() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "uno");
+        let mut g = Grid::new(100, 22);
+        ui.draw(&mut g, &conv, (2, 1, 96, 20), &[], true, 0);
+        press(&mut ui, &conv, KeyCode::PageUp);
+        let up = ui.scroll;
+        assert!(up > 1);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.scroll, up - 1);
+    }
+
+    /// REQ-714: a message put in the line does not open the `/` list, which would take the next ↓.
+    #[test]
+    fn a_command_that_is_recalled_does_not_open_the_list_of_commands() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        for t in ["a", "/compact", "b"] {
+            send(&mut ui, &conv, t);
+        }
+        for _ in 0..3 {
+            press(&mut ui, &conv, KeyCode::Up);
+        }
+        assert_eq!(ui.editor.text(), "a");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.editor.text(), "/compact");
+        assert!(ui.menu(&conv).is_empty(), "the list of commands stays shut");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.editor.text(), "b");
+    }
+
+    /// REQ-714, REQ-716: the pictures belong to the draft, not to the message that is shown.
+    #[test]
+    fn the_pictures_of_the_draft_wait_while_a_message_is_recalled() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "[Imagen#1] viejo");
+        ui.attach(Image {
+            media_type: "image/png".into(),
+            data: "AAAA".into(),
+        });
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "[Imagen#1] viejo");
+        assert!(ui.images.is_empty(), "the pictures wait with the draft");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.images.len(), 1);
+        assert_eq!(
+            ui.editor.text(),
+            "[Imagen#1]",
+            "the draft is back with its mark"
+        );
+    }
+
+    /// REQ-714: with nothing to recall ↑ scrolls the list one line, as it did (REQ-682).
+    #[test]
+    fn up_with_no_messages_to_recall_scrolls_the_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let mut g = Grid::new(100, 22);
+        ui.draw(&mut g, &conv, (2, 1, 96, 20), &[], true, 0);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.scroll, 1);
+    }
+
+    /// REQ-714: a message that had folds comes back folded; and sending ends the recall.
+    #[test]
+    fn a_message_with_a_fold_comes_back_folded() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira ");
+        ui.paste(&paste::sample_rows(7));
+        type_in(&mut ui, &conv, " ya");
+        press(&mut ui, &conv, KeyCode::Enter);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(
+            ui.editor.text(),
+            format!("mira {} ya", paste::sample_rows(7))
+        );
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            9,
+            "five, the fold and three"
+        );
+        row_of(
+            &frame(&ui, &conv).1,
+            "mira [Texto pegado #1 +7 líneas «línea 1»] ya",
+        );
+        press(&mut ui, &conv, KeyCode::Enter);
+        assert_eq!(
+            (ui.recalling, ui.sent.len()),
+            (None, 1),
+            "the same message is not kept twice"
+        );
+    }
+
+    /// REQ-716: what goes in the history is what is sent as a message, not blank, private or twice.
+    #[test]
+    fn the_history_keeps_what_is_sent_as_a_message() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "uno");
+        send(&mut ui, &conv, " con espacio");
+        send(&mut ui, &conv, "uno");
+        ui.editor.set("!ls");
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Shell { .. })
+        ));
+        ui.editor.set("/model");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.pop = None;
+        let texts: Vec<&str> = ui.sent.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["uno"]);
+        send(&mut ui, &conv, &"x".repeat(20 * 1024 + 1));
+        assert_eq!(ui.sent.len(), 1, "over 20 KB");
+    }
+
+    /// REQ-712: the trim of the sent text moves the folds with it.
+    #[test]
+    fn a_fold_at_the_edge_of_the_line_loses_the_blanks_the_trim_takes() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&format!("\n\n{}\n\n", paste::sample_rows(6)));
+        type_in(&mut ui, &conv, " fin");
+        press(&mut ui, &conv, KeyCode::Enter);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(
+            ui.editor.text(),
+            format!("{}\n\n fin", paste::sample_rows(6))
+        );
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            5,
+            "the fold, and ` fin`... less the lead"
+        );
+    }
+
+    /// RISK-86: the chip of the recall is cut before the count of the rows above and below.
+    #[test]
+    fn the_recall_chip_stops_short_of_the_count_of_rows() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let long: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
+        send(&mut ui, &conv, &long.join("\n"));
+        press(&mut ui, &conv, KeyCode::Up);
+        let drawn = |chip: String| {
+            let mut g = Grid::new(100, 60);
+            ui.draw(&mut g, &conv, SMALL, &[(chip, look::dim())], true, 0);
+            g.rows_plain()
+        };
+        let rows = drawn("rama".into());
+        let row = &rows[row_of(&rows, "↑0 ↓6")];
+        assert!(row.contains("↑ 1/1"), "{row}");
+        let rows = drawn("rama-larga".repeat(7));
+        let row = &rows[row_of(&rows, "↑0 ↓6")];
+        assert!(
+            row.contains("rama-larga") && !row.contains("↑ 1/1"),
+            "{row}"
+        );
+        assert!(row.trim_end().ends_with("↑0 ↓6"), "{row}");
+    }
+
+    fn listed(texts: &[&str]) -> Option<contract::conversation::SentList> {
+        Some(contract::conversation::SentList {
+            messages: texts
+                .iter()
+                .map(|t| contract::conversation::SentMessage {
+                    text: (*t).into(),
+                    folds: Vec::new(),
+                })
+                .collect(),
+        })
+    }
+
+    fn texts_of(ui: &Ui) -> Vec<&str> {
+        ui.sent.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    /// REQ-716: the daemon's list goes first, what was sent while it was awaited goes after it, and a
+    /// message that the daemon already had is not twice.
+    #[test]
+    fn the_list_of_the_daemon_goes_before_what_was_sent_while_it_was_awaited() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        assert!(ui.want_sent());
+        assert!(!ui.want_sent(), "once");
+        send(&mut ui, &conv, "nuevo");
+        send(&mut ui, &conv, "otro");
+        ui.history(listed(&["a", "b", "nuevo"]));
+        assert_eq!(texts_of(&ui), ["a", "b", "nuevo", "otro"]);
+        send(&mut ui, &conv, "ya no se espera");
+        assert_eq!(ui.since.len(), 0, "nothing is held once it has answered");
+    }
+
+    /// REQ-716: a message that the person sends twice while the answer is awaited is twice.
+    #[test]
+    fn a_message_sent_twice_while_the_list_is_awaited_is_kept_twice() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        for t in ["uno", "dos", "uno"] {
+            send(&mut ui, &conv, t);
+        }
+        ui.history(listed(&[]));
+        assert_eq!(texts_of(&ui), ["uno", "dos", "uno"]);
+    }
+
+    /// REQ-716: an answer that comes while a message is recalled waits for the recall to end.
+    #[test]
+    fn an_answer_that_comes_while_a_message_is_recalled_waits_for_the_recall_to_end() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        send(&mut ui, &conv, "uno");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "uno");
+        ui.history(listed(&["viejo", "uno"]));
+        assert_eq!(
+            texts_of(&ui),
+            ["uno"],
+            "the numbers do not move under the recall"
+        );
+        row_of(&frame(&ui, &conv).1, "↑ 1/1");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(texts_of(&ui), ["viejo", "uno"]);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "uno");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "viejo");
+    }
+
+    /// REQ-716: an answer that is an error leaves what was sent here as it is.
+    #[test]
+    fn no_answer_leaves_the_messages_sent_here_as_they_are() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        send(&mut ui, &conv, "uno");
+        ui.history(None);
+        assert_eq!(texts_of(&ui), ["uno"]);
+    }
+
+    fn ctrl_r(ui: &mut Ui, conv: &Conversation) -> Option<Act> {
+        ui.key(
+            conv,
+            &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        )
+    }
+
+    /// REQ-717: ^R lists the messages sent, newest first, narrows them as letters are typed and
+    /// puts the chosen one in the field as ↑ would, the draft kept.
+    #[test]
+    fn ctrl_r_lists_the_messages_filters_them_and_puts_the_chosen_one_as_up_would() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        for t in ["arregla el login", "corre cargo test", "haz un commit"] {
+            send(&mut ui, &conv, t);
+        }
+        send(&mut ui, &conv, &paste::sample_rows(6));
+        type_in(&mut ui, &conv, "borrador");
+        assert_eq!(ctrl_r(&mut ui, &conv), None);
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "mensajes enviados");
+        let (newest, oldest) = (
+            row_of(&rows, "línea 1 ⏎ línea 2"),
+            row_of(&rows, "arregla el login"),
+        );
+        assert!(newest < oldest, "newest first");
+        row_of(&rows, "6 líneas");
+        assert_eq!(ui.editor.text(), "borrador", "the field is as it was");
+        type_in(&mut ui, &conv, "CARGO");
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "corre cargo test");
+        assert!(
+            !rows.iter().any(|r| r.contains("arregla el login")),
+            "the filter narrows"
+        );
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(ui.editor.text(), "corre cargo test");
+        assert!(ui.pop.is_none());
+        row_of(&frame(&ui, &conv).1, "↑ 2/4");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            ui.editor.text(),
+            "haz un commit",
+            "↓ goes on from where it was put"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            ui.editor.text(),
+            "borrador",
+            "and past the newest the draft is back"
+        );
+    }
+
+    /// REQ-717: esc closes the list and leaves the field; a message with folds comes back folded.
+    #[test]
+    fn esc_closes_the_list_and_a_chosen_message_with_a_fold_comes_back_folded() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&paste::sample_rows(8));
+        press(&mut ui, &conv, KeyCode::Enter);
+        type_in(&mut ui, &conv, "x");
+        ctrl_r(&mut ui, &conv);
+        press(&mut ui, &conv, KeyCode::Esc);
+        assert!(ui.pop.is_none());
+        assert_eq!((ui.editor.text(), ui.recalling), ("x".into(), None));
+        ctrl_r(&mut ui, &conv);
+        press(&mut ui, &conv, KeyCode::Enter);
+        assert_eq!(ui.editor.text(), paste::sample_rows(8));
+        assert_eq!(ui.editor.raw().chars().count(), 1);
+        row_of(
+            &frame(&ui, &conv).1,
+            "[Texto pegado #1 +8 líneas «línea 1»]",
+        );
+    }
+
+    /// REQ-716, REQ-717: an answer that comes while the list is open does not change which message a row is.
+    #[test]
+    fn an_answer_that_comes_while_the_list_is_open_waits_for_it_to_close() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        send(&mut ui, &conv, "uno");
+        ctrl_r(&mut ui, &conv);
+        ui.history(listed(&["viejo", "uno"]));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(
+            ui.editor.text(),
+            "uno",
+            "the row chosen is the one that was drawn"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(
+            texts_of(&ui),
+            ["viejo", "uno"],
+            "and the list is the daemon's after"
+        );
+    }
+
+    /// REQ-717: with nothing sent there is no list.
+    #[test]
+    fn ctrl_r_with_nothing_sent_opens_no_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        assert_eq!(ctrl_r(&mut ui, &conv), None);
+        assert!(ui.pop.is_none());
+        assert!(ui.take_says().is_some_and(|s| s.contains("nada")));
+    }
+
+    /// REQ-712: what is typed or pasted cannot be taken for a fold.
+    #[test]
+    fn a_character_that_would_pass_for_a_fold_is_written_as_the_replacement_one() {
+        let mut ui = Ui::default();
+        ui.paste(&paste::sample_rows(6));
+        ui.paste("a\u{E000}b");
+        ui.editor.insert("\u{E001}");
+        assert_eq!(
+            ui.editor.text(),
+            format!("{}a\u{FFFD}b\u{FFFD}", paste::sample_rows(6))
+        );
+    }
+
     #[test]
     fn a_picture_goes_with_the_message_only_while_its_mark_is_in_the_line() {
         let conv = idle();
@@ -5575,7 +6553,9 @@ mod tests {
             Some(Act::Send {
                 node: node.clone(),
                 text: "/deploy".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             }),
             "enter runs it"
         );
@@ -5634,7 +6614,9 @@ mod tests {
             Some(Act::Send {
                 node,
                 text: "/vercel:deploy".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         conv.commands = (0..20)

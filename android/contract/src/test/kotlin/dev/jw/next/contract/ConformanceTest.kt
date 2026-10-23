@@ -286,6 +286,18 @@ class ConformanceTest {
         assertTrue(blocks.any { it is MdBlock.Table })
     }
 
+    /** The result of `conversation_history` in the fixture is what [SentList] reads, folds included, and writes back as it was. */
+    @Test
+    fun theReplyOfConversationHistoryIsTheMessagesSentOldestFirst() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-conversation-history.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val list = ContractJson.decodeFromJsonElement(SentList.serializer(), result)
+        assertEquals(2, list.messages.size)
+        assertEquals(emptyList<List<Int>>(), list.messages[0].folds)
+        assertEquals(listOf(listOf(5, 40)), list.messages[1].folds)
+        assertEquals(result, ContractJson.encodeToJsonElement(SentList.serializer(), list))
+    }
+
     /** The result of `list_conversations` in the fixture is what [ConversationList] reads, and writes back as it was. */
     @Test
     fun theReplyOfListConversationsIsTheSavedConversationsNewestFirst() {

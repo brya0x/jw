@@ -33,6 +33,7 @@ mod rename;
 mod replies;
 mod review;
 mod saved;
+mod sent;
 mod server;
 mod sessions;
 mod settings;

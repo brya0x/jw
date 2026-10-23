@@ -42,6 +42,7 @@ mod markdown;
 mod older;
 mod open;
 mod panels;
+mod paste;
 mod phone;
 mod programs;
 mod project;
@@ -492,6 +493,10 @@ pub enum FileAsk {
     Older {
         node: String,
         before: u64,
+    },
+    /// The messages sent from the conversation's repository, for ↑ (REQ-716).
+    Sent {
+        node: String,
     },
     /// The conversations Claude saved for the workspace's folder, for `/resume`.
     Saved {
@@ -4859,6 +4864,16 @@ impl View {
             self.older_replied(node, *before, reply);
             return;
         }
+        if let FileAsk::Sent { node } = &ask {
+            let list = reply_value(reply).and_then(|v| {
+                serde_json::from_value::<contract::conversation::SentList>(v)
+                    .map_err(|e| e.to_string())
+            });
+            if let Some(ui) = self.conv_ui.get_mut(node) {
+                ui.history(list.ok());
+            }
+            return;
+        }
         let (FileAsk::List { workspace, .. }
         | FileAsk::Find { workspace, .. }
         | FileAsk::Mention { workspace, .. }
@@ -4900,7 +4915,19 @@ impl View {
                 }
             }
             // Answered above.
-            FileAsk::Mention { .. } | FileAsk::Saved { .. } | FileAsk::Older { .. } => {}
+            FileAsk::Mention { .. }
+            | FileAsk::Saved { .. }
+            | FileAsk::Older { .. }
+            | FileAsk::Sent { .. } => {}
+        }
+    }
+
+    /// The conversations whose messages sent are not known yet ask for them, once (REQ-716).
+    fn ask_sent(&mut self) {
+        for (id, ui) in &mut self.conv_ui {
+            if self.convs.contains_key(id) && ui.want_sent() {
+                self.file_asks.push(FileAsk::Sent { node: id.clone() });
+            }
         }
     }
 
@@ -7318,6 +7345,7 @@ fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
             FileAsk::Saved { workspace, .. } => Cmd::ListConversations {
                 workspace: workspace.clone(),
             },
+            FileAsk::Sent { node } => Cmd::ConversationHistory { node: node.clone() },
             FileAsk::Older { node, before } => Cmd::ReadOlder {
                 node: node.clone(),
                 before: *before,
@@ -7664,7 +7692,19 @@ fn set(
 /// unknown command, an engine that is gone) goes to the status bar.
 fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
     let cmd = match act {
-        ConvAct::Send { node, text, images } => Cmd::ConversationSend { node, text, images },
+        ConvAct::Send {
+            node,
+            text,
+            images,
+            folds,
+            private,
+        } => Cmd::ConversationSend {
+            node,
+            text,
+            images,
+            folds,
+            private,
+        },
         ConvAct::Answer {
             node,
             ask,
@@ -8189,6 +8229,7 @@ pub fn run() -> Result<(), String> {
             spawn_prs(ask, prs_tx.clone());
         }
         view.ask_older();
+        view.ask_sent();
         for ask in view.take_file_asks() {
             spawn_files(ask, files_tx.clone());
         }
@@ -13906,6 +13947,36 @@ mod tests {
         v
     }
 
+    /// REQ-716: a conversation asks the daemon for the messages sent from its repository, once, and
+    /// what the daemon says is what ↑ brings back.
+    #[test]
+    fn a_conversation_asks_for_the_messages_sent_once_and_up_brings_them_back() {
+        let mut v = conv_view_older(true, None);
+        v.plain(120, 40);
+        v.ask_sent();
+        let ask = FileAsk::Sent { node: CONV.into() };
+        assert_eq!(v.take_file_asks(), std::slice::from_ref(&ask));
+        v.ask_sent();
+        assert!(v.take_file_asks().is_empty(), "one is out");
+        v.files_replied(FilesReply {
+            ask,
+            reply: Ok(Ok(Some(serde_json::json!({"messages": [
+                {"text": "uno"},
+                {"text": "mira\nl1\nl2", "folds": [[5, 10]]}
+            ]})))),
+        });
+        v.press_key(plain(KeyCode::Up));
+        let ui = &v.conv_ui[CONV];
+        assert_eq!(ui.editor.text(), "mira\nl1\nl2");
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            6,
+            "`mira` and a line break, and a fold"
+        );
+        v.press_key(plain(KeyCode::Up));
+        assert_eq!(v.conv_ui[CONV].editor.text(), "uno");
+    }
+
     /// REQ-567: a conversation scrolled to its top asks for the items before the first, once; the
     /// answer goes before the others and the row above them says where the conversation starts.
     #[test]
@@ -14016,7 +14087,9 @@ mod tests {
             After::Conv(ConvAct::Send {
                 node: CONV.into(),
                 text: "hola".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         // the leader gives the keyboard back
