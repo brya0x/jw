@@ -1306,18 +1306,16 @@ impl State {
             return Err(format!("{key} is not one of its answers"));
         }
         let labels: Vec<String> = picks.iter().map(|i| q.options[*i].0.clone()).collect();
-        let told = labels
-            .iter()
-            .map(String::as_str)
-            .chain(own)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let shown = labels
-            .iter()
-            .cloned()
-            .chain(own.map(|t| format!("«{t}»")))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let joined = |own: Option<String>| {
+            labels
+                .iter()
+                .cloned()
+                .chain(own)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let told = joined(own.map(str::to_owned));
+        let shown = joined(own.map(|t| format!("«{t}»")));
         qs.answered.push((q.question.clone(), told, shown));
         if qs.answered.len() < qs.all.len() {
             p.ask = question_ask(&p.request, qs.answered.len(), &qs.all[qs.answered.len()]);

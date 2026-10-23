@@ -895,14 +895,13 @@ impl Ui {
         }
         // The reason of a refusal is one line: a line break in it becomes a space.
         if let Some((_, editor)) = self.refusing.as_mut() {
-            editor.insert(&text.replace("\r\n", " ").replace(['\r', '\n'], " "));
+            editor.insert(&one_line(text));
             return;
         }
         // The words of «Otra…» are one line too.
         if self.other_open {
             self.other_empty = false;
-            self.other
-                .insert(&text.replace("\r\n", " ").replace(['\r', '\n'], " "));
+            self.other.insert(&one_line(text));
             return;
         }
         self.menu_at = 0;
@@ -1906,8 +1905,7 @@ impl Ui {
         // The options sit at the bottom, where `click` counts them from; what the box is about
         // takes the rows above them and is cut when the pane is too short.
         let other = has_other(ask);
-        let other_pre =
-            2 + (ask.options.len() + 1).to_string().len() + 1 + if ask.multi { 4 } else { 0 };
+        let other_pre = other_prefix(ask, false, false).chars().count();
         self.other_w.set(tw.saturating_sub(other_pre + 2).max(1));
         let opts_at = (y + h)
             .saturating_sub(2 + ask.options.len() + usize::from(other) + self.other_extra(ask));
@@ -2009,16 +2007,11 @@ impl Ui {
     /// The row of «Otra…»: its label or what was written, and while it has the keys its field, up to
     /// `OTHER_ROWS` rows with the cursor in view (REQ-743, REQ-745).
     fn draw_other(&self, g: &mut Grid, ask: &Ask, (ix, iw, tw): (usize, usize, usize), at: usize) {
-        let (ground, i) = (look::panel(), ask.options.len());
-        let lit = self.ask_at == i || self.other_open;
+        let ground = look::panel();
+        let lit = self.ask_at == ask.options.len() || self.other_open;
         let bg = if lit { look::sel() } else { ground };
         let said = self.other_said();
-        let mark = match (ask.multi, said.is_some()) {
-            (true, true) => "[x] ",
-            (true, false) => "[ ] ",
-            _ => "",
-        };
-        let n = format!("{}{} {mark}", if lit { "❯ " } else { "  " }, i + 1);
+        let n = other_prefix(ask, lit, said.is_some());
         let tx = ix + 2;
         let x = tx + n.chars().count();
         let number = Style::fg(look::yellow()).bold().on(bg);
@@ -2668,13 +2661,11 @@ impl Ui {
 
     /// The rows the field of «Otra…» takes beyond the one of the row, while it has the keys.
     fn other_extra(&self, a: &Ask) -> usize {
-        match self.other_w.get() {
-            0 => 0,
-            w if has_other(a) && self.other_open => {
-                self.other_wrap(w).0.len().min(OTHER_ROWS).saturating_sub(1)
-            }
-            _ => 0,
+        let w = self.other_w.get();
+        if w == 0 || !(has_other(a) && self.other_open) {
+            return 0;
         }
+        self.other_wrap(w).0.len().min(OTHER_ROWS).saturating_sub(1)
     }
 
     /// What was written in «Otra…», when it is something (REQ-722).
@@ -2800,7 +2791,7 @@ impl Ui {
         }
         let n = ask.options.len();
         let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
-        // The row of «Otra…» does not answer: its number, `↵` and, in a choice of several, space give it the keys.
+        // The row of «Otra…» does not answer: its number, `↵` and space give it the keys.
         if has_other(ask) {
             let on_it = self.ask_at == n;
             match ev.code {
@@ -3874,9 +3865,28 @@ fn ask_rows(a: &Ask) -> usize {
         + 1
 }
 
+/// A pasted text as one line: a line break in it becomes a space.
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
 /// A question has a last row, «Otra…», for the person's own words (REQ-743).
 fn has_other(a: &Ask) -> bool {
     a.kind == AskKind::Question
+}
+
+/// What leads the row of «Otra…»: the lit mark, its number, and in a choice of several its box.
+fn other_prefix(ask: &Ask, lit: bool, said: bool) -> String {
+    let mark = match (ask.multi, said) {
+        (true, true) => "[x] ",
+        (true, false) => "[ ] ",
+        _ => "",
+    };
+    format!(
+        "{}{} {mark}",
+        if lit { "❯ " } else { "  " },
+        ask.options.len() + 1
+    )
 }
 
 /// The rows the words of «Otra…» show at most (REQ-745).
