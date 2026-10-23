@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · zona de conversaciones</title>
+<style>
+/* the tokens of groups.html, tui.html and mobile.html: One Dark */
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:22px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.note{max-width:920px}
+.row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none;display:inline-block;max-width:100%;overflow-x:auto}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.c-chip{background:var(--blue);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}.c-chipm{background:var(--magenta);color:var(--bg);font-weight:700}
+.ctl{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0;align-items:center}
+.ctl fieldset{border:1px solid #2f3440;border-radius:8px;padding:6px 10px 8px;margin:0;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.ctl legend{font-size:11px;color:var(--mut);padding:0 4px}
+button,select{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer;max-width:100%}
+button:hover,select:hover{border-color:var(--blue)}
+label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
+.tag-opt{display:inline-block;background:#2f3440;color:var(--ink);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.tag-dec{display:inline-block;background:var(--yellow);color:var(--bg);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.rec{color:var(--green)}
+/* the phone: 390 px, as in groups.html */
+.phone{position:relative;width:390px;max-width:100%;height:780px;background:var(--bg);border:1px solid var(--line);border-radius:36px;overflow:hidden;display:flex;flex-direction:column;font:13.5px/1.4 var(--mono);color:var(--fg)}
+.sbr{display:flex;justify-content:space-between;padding:10px 22px 4px;color:var(--dim);font-size:11px}
+.screen{flex:1;display:flex;flex-direction:column;min-height:0}
+.hd{display:flex;align-items:center;gap:10px;padding:8px 14px 6px}
+.hd b{font-size:15px;color:#e6e9ef}.hd .sub{color:var(--dim);font-size:11px}.hd .sp1{flex:1}
+.hd .tt{min-width:0;flex:1}.hd .tt b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ib{position:relative;background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;padding:4px 8px;min-height:40px}
+.ib .bdg{position:absolute;top:-2px;right:-2px;background:var(--yellow);color:var(--bg);border-radius:8px;font-size:10px;padding:0 5px;font-weight:700}
+.list{flex:1;overflow:auto;padding:0 0 8px}
+.sec{color:var(--dim);font-size:11px;padding:12px 14px 4px;letter-spacing:.04em;display:flex;justify-content:space-between}
+.row1{display:flex;align-items:center;gap:8px;width:100%;min-height:54px;padding:6px 14px;background:none;border:0;border-left:3px solid transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.row1[aria-current]{background:var(--sel);border-left-color:var(--blue)}
+.row1 .o{width:14px}.row1 .nm{flex:1;min-width:0}
+.row1 .nm b{color:#e6e9ef;font-weight:700;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row1 .nm span{color:var(--dim);font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row1 .mk{font-size:12px;min-width:34px;text-align:right}
+.tag{font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.plus{color:var(--blue);font-size:20px;font-weight:700}
+.emp{color:var(--dim);font-size:12px;padding:6px 14px 6px 28px;font-style:italic}
+.lnk{display:block;width:100%;text-align:left;background:none;border:0;color:var(--dim);font:inherit;font-size:12px;padding:8px 14px;cursor:pointer;min-height:40px}
+.msgs{flex:1;overflow:auto;padding:6px 14px}
+.m{margin:8px 0;white-space:pre-wrap;word-break:break-word}
+.m.u{color:#e6e9ef}.m.u:before{content:'❯ ';color:var(--green)}.m.a{color:var(--fg)}
+.cmp{display:flex;gap:8px;padding:8px 10px;border-top:1px solid var(--line);background:var(--panel)}
+.cmp input{flex:1;min-width:0;min-height:44px;background:#1c2027;border:1px solid var(--line);border-radius:10px;color:#e6e9ef;font:inherit;padding:0 12px}
+.cmp input:focus{outline:none;border-color:var(--blue)}
+.cmp button{min-height:44px;min-width:56px;border-radius:10px;color:var(--blue)}
+.status{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sel);font-size:11.5px;color:var(--dim)}
+.status .chipb{background:var(--blue);color:var(--bg);font-weight:700;padding:0 6px;border-radius:3px}.status .sp1{flex:1}
+.back{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none}.back.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:82%;overflow:auto;background:var(--panel);border-radius:14px 14px 0 0;padding:8px 14px 18px;border-top:1px solid var(--line)}
+.sheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 10px}
+.sheet h3{margin:4px 0 6px;font-size:14px;color:#e6e9ef}.sheet p{margin:4px 0;color:var(--fg);font-size:12.5px}
+.act{display:flex;justify-content:space-between;align-items:center;width:100%;min-height:48px;margin:6px 0;background:#2a2f3a;border:1px solid var(--line);border-radius:10px;color:var(--fg);font:inherit;cursor:pointer;text-align:left;padding:8px 14px}
+.act.red{color:var(--red);border-color:#6b3a40}.act small{color:var(--dim);font-size:11px}
+.cancel{display:block;text-align:center;color:var(--dim);padding:10px;cursor:pointer}
+#toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:7px 13px;border-radius:16px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86%;text-align:center}
+#toast.on{opacity:1}
+</style></head><body>
+<h1>jw · zona de conversaciones</h1>
+<p class="note">Prototipo para aprobar antes del spec. Hoy una conversación con un agente siempre cuelga de un workspace (una carpeta o un worktree). Esta propuesta añade, <b>al fondo de la lista de Home, debajo de los workspaces</b>, una zona <b>Conversaciones</b> que no es un repo: cada conversación es una fila con su propio panel, como un workspace pero <b>sin git, sin diff, sin worktrees ni setup</b>. Cada una corre en <b>su propia carpeta vacía bajo el estado de jw</b> (<code>&lt;estado&gt;/chats/&lt;id&gt;</code>), así que el agente no ve tus proyectos por defecto. La terminal y el teléfono de abajo leen el mismo estado. Lo de «PARA DECIDIR» está abierto: cada punto lleva mi recomendación marcada y, si cambia lo que se ve, un selector.</p>
+
+<div class="ctl">
+  <fieldset><legend><span class="tag-dec">PARA DECIDIR</span>lo que cambia lo que ves (recomendado primero)</legend>
+    <label>cerrar <select id="o-close"><option value="archive">archivar y poder reanudar (recomendado)</option><option value="delete">borrar la carpeta</option></select></label>
+    <label>nombre <select id="o-name"><option value="first">el primer mensaje (recomendado)</option><option value="auto">automático: «charla 4»</option></select></label>
+    <label>carpeta <select id="o-dir"><option value="empty">siempre vacía (recomendado)</option><option value="pick">puedo elegir una al crear</option></select></label>
+    <label>promover a proyecto <select id="o-pro"><option value="summary">nueva en el proyecto, con resumen (recomendado)</option><option value="empty">nueva en el proyecto, vacía</option><option value="move">mover la sesión</option></select></label>
+  </fieldset>
+  <fieldset><legend><span class="tag-opt">para probar</span>casos, no decisiones</legend>
+    <label>pantalla <select id="f-cols"><option value="100">100 columnas</option><option value="60">60 (estrecha, &lt; 64)</option></select></label>
+    <button data-b="three">tres conversaciones</button>
+    <button data-b="empty">zona vacía</button>
+  </fieldset>
+  <fieldset><legend>simular</legend>
+    <button data-b="perm">una pide permiso</button>
+    <button data-b="ask">una pregunta</button>
+    <button data-b="done">el agente termina</button>
+  </fieldset>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p class="note" style="max-width:800px">Teclas (la terminal tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · <kbd>C</kbd> conversación nueva (se abre y se escribe) · <kbd>↵</kbd> o <kbd>l</kbd> entrar · en el compositor: <kbd>↵</kbd> envía, <kbd>↑</kbd> recuerda lo enviado (N166, sin cambios), <kbd>esc</kbd> vuelve a la lista · <kbd>x</kbd> cierra la conversación · <kbd>A</kbd> archivadas (<kbd>↵</kbd> reanuda, <kbd>d</kbd> borra) · <kbd>P</kbd> la lleva a un proyecto. Ninguna lleva Alt. <code>C</code>, <code>A</code> y <code>P</code> están libres en la lista (<code>key_of</code> de <code>tui.rs</code> no las mapea); <code>c</code>, <code>n</code> y <code>p</code> ya son de otra cosa, por eso las mayúsculas.</p>
+  </div>
+  <div>
+    <div class="phone" id="phone">
+      <div class="sbr"><span>9:41</span><span>LTE · 92%</span></div>
+      <div class="screen" id="screen"></div>
+      <div class="back" id="back"><div class="sheet" id="sheet"></div></div>
+      <div id="toast"></div>
+    </div>
+    <p class="note" style="max-width:390px">Teléfono: el <b>+</b> de la cabecera abre «nuevo» (carpeta, grupo, conversación); toca una conversación para entrar; <b>⋯</b> en su cabecera abre archivar o borrar y «llevar a un proyecto».</p>
+  </div>
+</div>
+
+<h2>Lo mismo desde el CLI (<code>jw ls</code>, <code>jw prompt</code>, <code>jw read</code>)</h2>
+<div class="term"><pre id="cli"></pre></div>
+<p class="note">Una conversación es un workspace con <code>chat</code>: el CLI no cambia. <code>jw ls</code> la lista (su tipo sale del campo <code>chat</code>) y <code>jw prompt</code> / <code>jw read</code> la resuelven por nombre o prefijo (<code>agent.rs</code> resuelve primero un workspace y luego su panel).</p>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>Una conversación es un workspace (<code>kind: "folder"</code>) que lleva un campo opcional <code>chat</code>.</b> Su <code>path</code> es <code>identity::state_dir().join("chats").join(id)</code> (la ruta sale del crate <code>identity</code>, nunca escrita a mano). <b>El contrato no cambia</b>: <code>Pane.workspace</code> sigue siendo obligatorio y toda la CLI de agentes resuelve primero un workspace. El daemon salta git, el diff, el sondeo de <code>uncommitted</code>, <code>gh</code> y el setup para un workspace con <code>chat</code>.</li>
+  <li><b>Home:</b> la zona <b>CONVERSACIONES</b> va <b>al final de la lista, debajo de los workspaces</b> (y de «sin grupo», si hay grupos, REQ-684 a 702), con su contador; lo de hoy queda arriba, igual que ahora. Con muchos workspaces la zona queda más abajo de la pantalla y el cursor la alcanza con <kbd>j</kbd>; <kbd>C</kbd> y <kbd>A</kbd> funcionan desde cualquier fila. La agrupación por repositorio (REQ-219 a 221) no la toca: una conversación nunca cae en <code>carpetas</code>. Zona vacía: una línea que dice cómo abrir una.</li>
+  <li><b>Orden: las recientes arriba</b> (por la última actividad: lo que envías o lo que contesta el agente). Una que recibe respuesta sube sola; el cursor no salta de fila.</li>
+  <li><b>Crear con una tecla:</b> <kbd>C</kbd> crea la conversación, la selecciona y deja el cursor en el compositor. Sin elegir carpeta ni rama ni nombre. Una conversación que se cierra sin ningún mensaje se descarta, no se archiva.</li>
+  <li><b>El nombre</b> nace del primer mensaje (cortado a 40 letras con <code>…</code>) y no cambia solo; hasta entonces se llama «conversación nueva». Se puede renombrar como un worktree (<kbd>r</kbd>).</li>
+  <li><b>Qué ve el agente:</b> una carpeta vacía y nada más. Permisos: el modo por defecto de las conversaciones, <code>manual</code> (<code>conversation.rs</code>), así que pide permiso antes de tocar nada fuera. Sin git, no hay rama que decir ni diff que abrir.</li>
+  <li><b>Avisos:</b> las conversaciones cuentan en <code>avisos N</code> y en la campana del teléfono, como cualquier workspace (<code>!</code> permiso, <code>?</code> pregunta, <code>✓</code> terminó).</li>
+  <li><b>Cerrar = archivar.</b> Se conserva la carpeta, se marca archivada y se cierra su panel (el proceso de <code>claude</code> se libera). <b>Reanudar</b> abre un panel nuevo en la misma carpeta y el motor arranca con <code>--resume</code> solo, porque el transcript está en disco (N169, REQ-754 y REQ-755). Con la otra opción, borrar la carpeta pide confirmación y <b>no borra el transcript de Claude</b>, que queda en <code>~/.claude/projects/</code> bajo el nombre de esa carpeta.</li>
+  <li><b>Promover no mueve la sesión:</b> claude guarda la sesión por carpeta de trabajo. <kbd>P</kbd> abre una conversación nueva en un workspace que elijas, llevando un resumen; la original se queda donde está.</li>
+  <li><b>Lo que ya existe sigue igual:</b> el historial del compositor (N166, REQ-709 a 718: <kbd>↑</kbd> recuerda, lo probarás aquí), el texto libre en las preguntas (N168, REQ-743 a 753) el compositor que crece y se desplaza (N165, REQ-703 a 708) y los paneles de vistas (el diff y el visor como hojas del <code>layout</code>, N167, REQ-719) son los de una conversación de workspace; la zona no los repite ni los toca. Una conversación no tiene diff, pero un visor de Markdown sobre su carpeta seguiría cabiendo en su <code>layout</code>.</li>
+  <li><b>Terminal estrecha (&lt; 64 columnas):</b> como el resto (REQ-738, RISK-95), un panel a la vez bajo una tira de títulos; <kbd>↵</kbd> sobre una conversación pasa a su panel y <kbd>esc</kbd> vuelve a la lista (en el compositor <kbd>h</kbd>, <kbd>l</kbd> y <kbd>Tab</kbd> escriben o son del compositor, así que el cambio de panel es <kbd>esc</kbd>). Elige «60» arriba.</li>
+  <li><b>Teléfono:</b> la zona va al final de Home, debajo de los workspaces, las mismas filas y «archivadas ›». <b>Conversación nueva vive en el «+» de la cabecera</b>, la hoja que hoy se llama «workspace nuevo» y que también sale con una pulsación larga sobre el título (REQ-201): pasa a llamarse «nuevo» y ofrece <i>abrir una carpeta del PC</i> (lo de hoy), <i>grupo nuevo…</i> y <i>conversación nueva</i>, que abre directo el compositor, sin carpeta ni rama. No hay ningún botón al final de la lista: <b>también se quita la línea «＋ grupo nuevo» del final de Home</b> (la que REQ-697 añade para hacer el primer grupo); crear un grupo pasa a ser «grupo nuevo…» de esta hoja. El «＋ grupo nuevo…» de la hoja de mover a un grupo (REQ-698) se queda, y en la terminal <kbd>G</kbd> sigue igual. La conversación abierta es el compositor de siempre, con su <b>⋯</b>.</li>
+</ul>
+
+<h2>Costo en el contrato</h2>
+<ul class="note">
+  <li><b>Ninguno en el envelope ni en <code>Pane</code>, y no se toca <code>WorkspaceKind</code></b>: es un enum cerrado (<code>worktree | folder</code> en <code>contract/src/lib.rs</code> y en Kotlin, sin <code>serde(other)</code> ni valor por defecto), así que un <code>kind: "chat"</code> haría fallar al teléfono ya instalado en su primera conversación. En su lugar, el workspace y su resumen ganan un campo opcional <code>chat: {archived}</code> (additivo, <code>v</code> no cambia; el envelope tampoco). Un cliente viejo ignora el campo y ve una carpeta más, en <code>carpetas</code>: no se rompe, y las conversaciones encuentran su zona en los clientes nuevos. La otra salida, un <code>kind</code> nuevo, exige actualizar teléfono y daemon a la vez.</li>
+  <li><b>Teléfono (Android):</b> solo del cliente, sin contrato: la hoja «workspace nuevo» (REQ-201, <code>NewWorkspaceSheet</code>) se renombra «nuevo» y gana dos entradas; <code>NewGroupLine</code> sale del final de Home (enmienda de REQ-697: Home deja de tener «una línea más»). El prototipo ya no la dibuja.</li>
+  <li><b>Daemon:</b> crear (<code>chat_new</code>: carpeta bajo el estado + un panel de conversación), archivar, reanudar y borrar son comandos nuevos; <code>start_workspace</code> no se usa. <code>jw</code> los tendrá también (<code>jw chat new|archive|resume|rm</code>) y <code>jw ls</code> dirá el tipo, para que un agente abra otra conversación.</li>
+  <li><b>A medida de lo que hay:</b> el motor arranca con <code>current_dir(cwd)</code> y <code>--resume</code> si el transcript existe (<code>engine.rs</code>); el modo <code>manual</code> ya es el defecto. No hace falta tocar el motor.</li>
+</ul>
+
+<h2>PARA DECIDIR</h2>
+<ul class="note">
+  <li><b>¿Se puede «promover» a un proyecto?</b> <span class="rec">Recomiendo no moverla</span> y abrir una conversación nueva en el proyecto <b>con un resumen</b> (selector «promover a proyecto»; pruébalo con <kbd>P</kbd>). Mover la sesión exige copiar el transcript a la carpeta del repo y reescribir su ruta: frágil, y si falla se pierde la conversación. Sin resumen es más simple pero pierde el hilo.</li>
+  <li><b>¿Qué pasa al cerrarla?</b> <span class="rec">Recomiendo archivar</span> (reversible, y reanudar sale gratis por N169), con borrar definitivamente desde la lista de archivadas. Borrar al cerrar es más limpio pero irreversible; el transcript de Claude queda de todos modos.</li>
+  <li><b>¿Grupo más o zona aparte?</b> <span class="rec">Recomiendo zona propia.</span> Los grupos (N163) se identifican por la ruta de su repo y esto no tiene repo. Mezclarlos obligaría a un grupo sin ruta y a que «mover a un grupo» tuviera sentido solo a medias.</li>
+  <li><b>¿Qué ve el agente, y qué permisos?</b> <span class="rec">Recomiendo carpeta vacía siempre</span> y modo <code>manual</code>. Elegir una carpeta (selector «carpeta») cubre «hablar de este directorio», pero entonces la conversación vive en una carpeta tuya y ya es un workspace de carpeta: se abre así hoy.</li>
+  <li><b>¿Cuántas, cómo se nombran, cómo se ordenan?</b> <span class="rec">Recomiendo sin tope</span> (una archivada no gasta proceso; las abiertas sí, una por conversación), nombre por el <b>primer mensaje</b> (el automático «charla 4» no dice nada al volver) y <b>recientes arriba</b>.</li>
+  <li><b>¿Cómo se ve en el teléfono y en una terminal angosta?</b> Lo que está dibujado: el «+» de la cabecera con «conversación nueva» dentro (junto a «grupo nuevo» y «abrir una carpeta»), mismas filas; y debajo de 64 columnas, un panel a la vez (REQ-738).</li>
+  <li><b>¿La tecla?</b> <span class="rec">Recomiendo <kbd>C</kbd></span> para conversación nueva (como <kbd>G</kbd> para grupo nuevo), <kbd>A</kbd> para archivadas y <kbd>P</kbd> para llevarla a un proyecto, sin Alt: las tres están libres en la lista; <kbd>c</kbd> (copiar comando), <kbd>n</kbd>, <kbd>p</kbd> (proyecto) y <kbd>x</kbd> (cerrar, que aquí también cierra la conversación) ya existen. <kbd>^R</kbd> ya es el historial del compositor (N166): para las archivadas habría que tomar otra tecla o dejarla solo en la lista.</li>
+</ul>
+
+<script>
+const SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const $=id=>document.getElementById(id);
+const ROWS=26;
+const STATE='~/.local/state/jw';     // what identity::state_dir() answers; never written by hand in the product
+const clip=(s,n)=>{s=[...String(s)];return n<=0?'':s.length<=n?s.join(''):s.slice(0,Math.max(0,n-1)).join('')+'…'};
+const wrap=(s,n)=>{const out=[];String(s).split('\n').forEach(p=>{let l='';p.split(' ').forEach(w=>{if(l&&[...(l+' '+w)].length>n){out.push(l);l=w}else l=l?l+' '+w:w});out.push(l)});return out};
+const KINDS={perm:{g:'!',c:'c-red',txt:'pide permiso'},ask:{g:'?',c:'c-yellow',txt:'pregunta'},done:{g:'✓',c:'c-green',txt:'terminó'}};
+const opt={close:'archive',name:'first',dir:'empty',pro:'summary'};
+const fx={cols:100};
+const REPLIES=['Claro. Lo veo así: primero lo básico y luego el caso difícil. ¿Quieres que lo detalle?','Hecho. Te dejo el resultado arriba; dime si cambio algo.','Buena pregunta. Depende de cuántos datos tengas; con pocos no merece la pena.'];
+
+/* ---------- the model: pure, no drawing */
+let M,clock,ui,ph,nrep=0;
+const chatById=id=>M.chats.find(c=>c.id===id);
+const wsById=id=>M.ws.find(w=>w.id===id);
+const live=()=>M.chats.filter(c=>!c.archived).sort((a,b)=>b.t-a.t);
+const shelved=()=>M.chats.filter(c=>c.archived).sort((a,b)=>b.t-a.t);
+const title=c=>c.name||'conversación nueva';
+const dirOf=id=>STATE+'/chats/'+id;
+const viewing=c=>!!((ui&&ui.mode==='chat'&&ui.sel.t==='c'&&ui.sel.id===c.id)||(ph&&ph.screen==='chat'&&ph.id===c.id));
+function addChat(o){const c=Object.assign({id:'c'+M.nid++,name:'',msgs:[],t:++clock,att:null,working:false,archived:false,own:false,ago:'ahora'},o);c.cwd=c.cwd||dirOf(c.id);M.chats.push(c);return c}
+const newChat=dir=>addChat(dir?{cwd:dir,own:true}:{});
+const nameFor=(c,text)=>opt.name==='first'?clip(text.replace(/\s+/g,' '),40):'charla '+c.id.slice(1);
+function send(c,text){text=String(text).trim();if(!text)return false;if(!c.msgs.length)c.name=nameFor(c,text);c.msgs.push({r:'u',t:text});c.t=++clock;c.ago='ahora';c.att=null;c.working=true;return true}
+function reply(c){c.msgs.push({r:'a',t:REPLIES[nrep++%REPLIES.length]});c.working=false;c.t=++clock;c.ago='ahora';if(!viewing(c))c.att='done'}
+const drop=c=>{M.chats=M.chats.filter(x=>x!==c)};
+// 'discarded' (nothing was said), 'archived', or 'confirm' (deleting asks first)
+function closeChat(c){if(!c.msgs.length){drop(c);return 'discarded'}if(opt.close==='delete')return 'confirm';c.archived=true;c.working=false;c.att=null;return 'archived'}
+function resume(c){c.archived=false;c.t=++clock;c.ago='ahora'}
+// promoting never moves the session (claude keeps it per working folder)
+function promote(c,w){
+  if(opt.pro==='move'){c.archived=true;c.working=false;return {cls:'c-yellow',text:'mover: copiar el transcript a ~/.claude/projects/ de «'+w.name+'» y reanudar allí · la conversación se archiva'}}
+  w.panes++;
+  return {cls:'c-green',text:'conversación nueva en «'+w.name+'»'+(opt.pro==='summary'?' con un resumen de '+c.msgs.length+' mensajes':', vacía')+' · esta sigue aquí'};
+}
+const attOf=()=>M.chats.filter(c=>c.att&&!c.archived).length+M.ws.filter(w=>w.att).length;
+const history=c=>c.msgs.filter(m=>m.r==='u').map(m=>m.t).reverse();     // N166: newest first
+const selRows=()=>M.ws.map(w=>({t:'w',id:w.id})).concat(live().map(c=>({t:'c',id:c.id})));
+const keyOf=s=>s.t+':'+s.id;
+function seed(three){
+  clock=100;nrep=0;M={nid:1,chats:[],ws:[
+    {id:'w1',name:'sales-assist',branch:'main',panes:2,att:null,working:true},
+    {id:'w2',name:'design-studio',branch:'feat/theme',panes:2,att:'perm',working:false},
+    {id:'w3',name:'jw',branch:'feat/chats-area',panes:3,att:null,working:true},
+    {id:'w4',name:'dotfiles',branch:'',panes:1,att:null,working:false}]};
+  if(three){
+    addChat({name:'ideas para el nombre del proyecto',archived:true,ago:'2 d',msgs:[{r:'u',t:'ideas para el nombre del proyecto'},{r:'a',t:'Te propongo cinco: Brisa, Nodo, Faro, Tinta y Lienzo.'}]});
+    addChat({name:'resumen del contrato de alquiler',archived:true,ago:'5 d',msgs:[{r:'u',t:'resumen del contrato de alquiler'},{r:'a',t:'Tres puntos clave: plazo, fianza y preaviso.'}]});
+    addChat({name:'resumen del PDF del seguro',ago:'1 h',msgs:[{r:'u',t:'resumen del PDF del seguro'},{r:'a',t:'La póliza cubre robo y agua; la franquicia es de 150 €.'}]});
+    addChat({name:'¿qué diferencia hay entre un índice parcial y uno cubriente?',ago:'2 min',att:'ask',msgs:[{r:'u',t:'¿qué diferencia hay entre un índice parcial y uno cubriente?'},{r:'a',t:'Un índice parcial solo cubre las filas que cumplen una condición; uno cubriente guarda además las columnas que lees. ¿En qué motor lo quieres?'}]});
+    addChat({name:'script para renombrar fotos por fecha',ago:'5 s',working:true,msgs:[{r:'u',t:'script para renombrar fotos por fecha'}]});
+  }
+}
+
+/* ---------- the screen grid, as in groups.html */
+function Scr(id){
+  return {id,cols:0,rows:0,g:[],
+    reset(c,r){this.cols=c;this.rows=r;this.g=Array.from({length:r},()=>Array.from({length:c},()=>[' ','']))},
+    put(r,c,t,cls){for(const ch of [...t]){if(r<0||r>=this.rows||c<0||c>=this.cols)return;this.g[r][c]=[ch,cls||''];c++}},
+    fill(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<this.cols&&r>=0&&r<this.rows)this.g[r][c+i]=[' ',cls||'']},
+    tint(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<this.cols){const x=this.g[r][c+i];x[1]=(x[1]+' '+cls).trim()}},
+    text(){return this.g.map(r=>r.map(x=>x[0]).join('').trimEnd()).join('\n')},
+    paint(){
+      const out=this.g.map(row=>{let s='',cur=null,buf='';
+        for(const [ch,cl] of row){if(cl!==cur){if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);buf='';cur=cl}buf+=ch}
+        if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);return s});
+      $(this.id).innerHTML=out.join('\n');
+    }};
+}
+const T=Scr('scr');
+const spin=()=>SPIN[Math.floor(performance.now()/110)%SPIN.length];
+
+/* ---------- state of the screens */
+function resetUi(){ui={sel:{t:'w',id:'w1'},last:0,mode:'nav',buf:'',hi:-1,draft:'',flash:'',fcls:'',ai:0,pi:0,cf:null}}
+function resetPh(){ph={screen:'home',id:null,sheet:null,draft:''}}
+function fixSel(){
+  const rows=selRows(),k=keyOf(ui.sel);
+  if(!rows.some(r=>keyOf(r)===k)){ui.sel=rows[Math.min(ui.last,rows.length-1)]}
+}
+const say=(t,cls)=>{ui.flash=t;ui.fcls=cls||'c-green'};
+const selChat=()=>ui.sel.t==='c'?chatById(ui.sel.id):null;
+
+/* ---------- drawing the terminal */
+function drawSide(S,x0,w,y0){
+  const L=live(),cur=keyOf(ui.sel);let y=y0;
+  S.put(y,x0+1,'WORKSPACES','c-dim');y++;
+  M.ws.forEach(wk=>{
+    const on=cur==='w:'+wk.id;
+    S.put(y,x0+1,wk.panes?'●':'○',wk.panes?'c-green':'c-dim');
+    S.put(y,x0+3,clip(wk.name+(wk.branch&&wk.branch!=='main'?' ⎇ '+wk.branch:''),w-9),on?'c-blue c-bold':'');
+    if(wk.att){const k=KINDS[wk.att];S.put(y,x0+w-5,k.g,k.c)}
+    if(wk.working)S.put(y,x0+w-3,spin(),'c-blue');
+    if(on)S.tint(y,x0,w-1,'c-sel');y++});
+  y++;S.put(y,x0+1,'CONVERSACIONES','c-dim');S.put(y,x0+w-3,String(L.length),'c-dim');y++;
+  if(!L.length){S.put(y,x0+2,clip('ninguna · C abre una',w-3),'c-dim');y++}
+  L.forEach(c=>{
+    const on=cur==='c:'+c.id;
+    S.put(y,x0+1,'✦',c.working?'c-blue':'c-green');
+    S.put(y,x0+3,clip(title(c),w-9),on?'c-blue c-bold':'');
+    if(c.att){const k=KINDS[c.att];S.put(y,x0+w-5,k.g,k.c)}
+    if(c.working)S.put(y,x0+w-3,spin(),'c-blue');
+    if(on)S.tint(y,x0,w-1,'c-sel');y++});
+  if(shelved().length){S.put(y,x0+2,clip('archivadas '+shelved().length+' · A',w-3),'c-dim');y++}
+  S.put(ROWS-4,x0+1,clip('✦ conversación ● workspace',w-2),'c-dim');
+  S.put(ROWS-3,x0+1,clip('C nueva · x cierra · A archivadas',w-2),'c-dim');
+}
+function drawChat(S,x0,w,y0,c){
+  S.put(y0,x0+1,clip(title(c),w-3),'c-bold');
+  S.put(y0+1,x0+1,clip('carpeta '+(c.own?'tuya: ':'vacía: ')+c.cwd,w-3),'c-dim');
+  S.put(y0+2,x0+1,clip('permisos manual · sin git ni diff',w-3),'c-dim');
+  for(let i=0;i<w-2;i++)S.put(y0+3,x0+1+i,'─','c-dim');
+  const top=y0+4,bot=ROWS-5,lines=[];
+  if(!c.msgs.length)wrap('escribe y ↵: la carpeta, la rama y el nombre se resuelven solos. El nombre será tu primer mensaje.',w-4).forEach(l=>lines.push([l,'c-dim']));
+  c.msgs.forEach(m=>wrap(m.t,w-5).forEach((l,i)=>lines.push(m.r==='u'?[(i?'  ':'❯ ')+l,'c-bold']:['  '+l,''])));
+  if(c.working)lines.push(['  '+spin()+' trabajando','c-blue']);
+  lines.slice(-(bot-top+1)).forEach(([l,cl],i)=>S.put(top+i,x0+1,clip(l,w-2),cl));
+  const y=ROWS-4;
+  for(let i=0;i<w-2;i++)S.put(y,x0+1+i,'─','c-dim');
+  const typing=ui.mode==='chat',txt=ui.buf+(typing?'▏':'');
+  S.put(y+1,x0+1,'❯','c-green');S.put(y+1,x0+3,clip(txt||(typing?'':'↵ para escribir'),w-5),txt?'':'c-dim');
+  S.put(y+2,x0+1,clip('↵ envía · ↑ recuerda lo enviado · esc lista',w-2),'c-dim');
+}
+function drawBox(S,x0,y,w,lines,cls){
+  const bw=Math.min(w-2,Math.max(...lines.map(l=>[...l[0]].length))+4);
+  const bx=x0+Math.floor((w-bw)/2);
+  S.fill(y,bx,bw,'c-box');S.put(y,bx+1,'┌'+'─'.repeat(bw-4)+'┐','c-box c-dim');
+  lines.forEach(([t,cl],i)=>{S.fill(y+1+i,bx,bw,'c-box');S.put(y+1+i,bx+2,clip(t,bw-4),'c-box '+(cl||''))});
+  S.fill(y+1+lines.length,bx,bw,'c-box');S.put(y+1+lines.length,bx+1,'└'+'─'.repeat(bw-4)+'┘','c-box c-dim');
+}
+function drawTui(){
+  fixSel();
+  const S=T,COLS=fx.cols,narrow=COLS<64;S.reset(COLS,ROWS);
+  const inMain=ui.mode==='chat'||ui.mode==='dir',c=selChat();
+  let sx=0,sw=30,mx=31,mw=COLS-32;
+  if(narrow){
+    S.put(0,1,' lista ',!inMain?'c-chip':'c-dim');S.put(0,9,' conversación ',inMain?'c-chip':'c-dim');S.put(0,24,'l / esc cambian','c-dim');
+    sw=COLS;mx=0;mw=COLS;
+  }else{for(let r=0;r<ROWS-1;r++)S.put(r,30,'│',ui.mode==='nav'?'c-blue':'c-dim');S.put(0,1,'jw','c-bold c-dim')}
+  const y0=1;
+  if(!narrow||!inMain)drawSide(S,sx,sw,y0);
+  if(!narrow||inMain){
+    if(c)drawChat(S,mx,mw,y0,c);
+    else{const w=wsById(ui.sel.id);if(w){S.put(y0,mx+1,clip(w.name,mw-3),'c-bold');S.put(y0+2,mx+1,clip('un workspace, como hoy: shell | claude',mw-3),'c-dim')}}
+  }
+  const bx=narrow?0:mx,bw=narrow?COLS:mw;
+  if(ui.mode==='dir')drawBox(S,bx,8,bw,[['carpeta de trabajo (↵ vacía):',''],[ui.buf+'▏','c-yellow']]);
+  if(ui.mode==='confirm'){const k=chatById(ui.cf);drawBox(S,bx,8,bw,[['¿borrar «'+clip(title(k),30)+'»?','c-bold'],['borra su carpeta; el transcript de Claude queda','c-dim'],['en ~/.claude/projects/','c-dim'],['y sí · n no','c-yellow']])}
+  if(ui.mode==='arch'){const A=shelved();drawBox(S,bx,4,bw,[['archivadas','c-bold'],...(A.length?A.map((a,i)=>[(i===ui.ai?'❯ ':'  ')+clip(title(a),38)+'  '+a.ago,i===ui.ai?'c-blue':'']):[['ninguna','c-dim']]),['↵ reanuda · d borra · esc','c-dim']])}
+  if(ui.mode==='pro'){drawBox(S,bx,6,bw,[['llevar «'+clip(title(c),24)+'» a un proyecto','c-bold'],...M.ws.map((w,i)=>[(i===ui.pi?'❯ ':'  ')+w.name,i===ui.pi?'c-blue':'']),['↵ elige · esc','c-dim']])}
+  drawBar(S);
+  S.paint();
+}
+function drawBar(S){
+  const COLS=fx.cols,y=ROWS-1;S.fill(y,0,COLS,'c-sel');
+  const chips={nav:selChat()?' CONVERSACIÓN ':' WORKSPACE ',chat:' ESCRIBIR ',dir:' CARPETA ',confirm:' BORRAR ',arch:' ARCHIVADAS ',pro:' PROYECTO '};
+  const chip=chips[ui.mode];S.put(y,0,chip,ui.mode==='nav'||ui.mode==='chat'?'c-chip':'c-chipy');
+  const hints={nav:'j k · C nueva · ↵ entrar · x cierra · A archivadas · P proyecto',chat:'↵ envía · ↑ ↓ historial · esc lista',dir:'↵ acepta · esc cancela',confirm:'y sí · n no',arch:'j k · ↵ reanuda · d borra · esc',pro:'j k · ↵ elige · esc'};
+  const av=attOf(),right=av?'avisos '+av:'',room=COLS-chip.length-(right?right.length+2:0)-3;
+  if(ui.flash)S.put(y,chip.length+1,clip(ui.flash,room),ui.fcls+' c-sel');else S.put(y,chip.length+1,clip(hints[ui.mode],room),'c-dim c-sel');
+  if(right)S.put(y,COLS-right.length-1,right,'c-yellow c-sel');
+}
+
+/* ---------- terminal keys */
+function move(d){const rows=selRows(),k=keyOf(ui.sel);let i=rows.findIndex(r=>keyOf(r)===k);i=Math.max(0,Math.min(rows.length-1,i+d));ui.last=i;ui.sel=rows[i]}
+function enterChat(c){ui.sel={t:'c',id:c.id};ui.mode='chat';ui.buf='';ui.hi=-1;ui.draft='';if(c.att==='done')c.att=null}
+function createChat(dir){const c=newChat(dir);enterChat(c);say('conversación nueva · escribe y ↵','c-dim')}
+function afterClose(r,c){
+  if(r==='discarded')say('vacía: se descartó','c-dim');
+  else if(r==='archived')say('«'+clip(title(c),24)+'» archivada · A para reanudar','c-dim');
+  else{ui.cf=c.id;ui.from='nav';ui.mode='confirm'}
+}
+function submit(c,text){
+  if(!send(c,text))return false;
+  const id=c.id;if(typeof setTimeout==='function')setTimeout(()=>{const k=chatById(id);if(k&&k.working){reply(k);drawAll()}},1400);
+  return true;
+}
+function onTermKey(e){
+  const k=e.key;if(k==='Meta'||k==='Control'||k==='Shift'||k==='Alt'||e.metaKey||e.ctrlKey||e.altKey)return;
+  const m=ui.mode;ui.flash='';
+  if(m==='nav'){
+    const c=selChat();
+    if(k==='j'||k==='ArrowDown')move(1);else if(k==='k'||k==='ArrowUp')move(-1);
+    else if(k==='C')opt.dir==='pick'?(ui.mode='dir',ui.buf=''):createChat();
+    else if((k==='Enter'||k==='l'||k==='Tab')&&c)enterChat(c);
+    else if(k==='Enter'||k==='l')say('entra al workspace, como hoy','c-dim');
+    else if(k==='x'&&c)afterClose(closeChat(c),c);
+    else if(k==='A')ui.mode='arch',ui.ai=0;
+    else if(k==='P'&&c){if(!c.msgs.length)say('nada que llevar: la conversación está vacía','c-yellow');else ui.mode='pro',ui.pi=0}
+    else return;
+  }else if(m==='chat'){
+    const c=selChat();
+    if(k==='Escape'){ui.mode='nav'}
+    else if(k==='Enter'){if(submit(c,ui.buf)){ui.buf='';ui.hi=-1}}
+    else if(k==='Backspace')ui.buf=[...ui.buf].slice(0,-1).join('');
+    else if(k==='ArrowUp'){const h=history(c);if(ui.hi<h.length-1){if(ui.hi<0)ui.draft=ui.buf;ui.hi++;ui.buf=h[ui.hi]}}
+    else if(k==='ArrowDown'){if(ui.hi>=0){ui.hi--;ui.buf=ui.hi<0?ui.draft:history(c)[ui.hi]}}
+    else if(k.length===1)ui.buf+=k;
+    else return;
+  }else if(m==='dir'){
+    if(k==='Escape')ui.mode='nav';
+    else if(k==='Enter')createChat(ui.buf.trim());
+    else if(k==='Backspace')ui.buf=[...ui.buf].slice(0,-1).join('');
+    else if(k.length===1)ui.buf+=k;else return;
+  }else if(m==='confirm'){
+    if(k==='y'){const c=chatById(ui.cf);if(c)drop(c);say('borrada','c-dim');ui.mode=ui.from==='arch'&&shelved().length?'arch':'nav'}
+    else if(k==='n'||k==='Escape')ui.mode='nav';else return;
+  }else if(m==='arch'){
+    const A=shelved();
+    if(k==='Escape')ui.mode='nav';
+    else if(k==='j'||k==='ArrowDown')ui.ai=Math.min(A.length-1,ui.ai+1);else if(k==='k'||k==='ArrowUp')ui.ai=Math.max(0,ui.ai-1);
+    else if(k==='Enter'&&A[ui.ai]){const c=A[ui.ai];resume(c);enterChat(c);say('reanudada · claude sigue con --resume','c-green')}
+    else if(k==='d'&&A[ui.ai]){ui.cf=A[ui.ai].id;ui.from='arch';ui.mode='confirm'}
+    else return;
+  }else if(m==='pro'){
+    if(k==='Escape')ui.mode='nav';
+    else if(k==='j'||k==='ArrowDown')ui.pi=Math.min(M.ws.length-1,ui.pi+1);else if(k==='k'||k==='ArrowUp')ui.pi=Math.max(0,ui.pi-1);
+    else if(k==='Enter'){const r=promote(selChat(),M.ws[ui.pi]);say(r.text,r.cls);ui.mode='nav'}
+    else return;
+  }
+  e.preventDefault&&e.preventDefault();drawAll();
+}
+
+/* ---------- the phone */
+const mark=c=>c.att?`<span class="${KINDS[c.att].c}">${KINDS[c.att].g}</span>`:'';
+const last=c=>{const m=c.msgs[c.msgs.length-1];return m?(m.r==='u'?'tú: ':'')+m.t:'vacía · escribe para empezar'};
+function homeHtml(){
+  const L=live(),av=attOf();
+  let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span><button class="ib plus" data-sheet="new" aria-label="nuevo">+</button><button class="ib">🔔${av?`<span class="bdg">${av}</span>`:''}</button><button class="ib">⚙</button></div><div class="list">`;
+  h+=`<div class="sec"><span>WORKSPACES · ${M.ws.length}</span></div>`;
+  M.ws.forEach(w=>{h+=`<button class="row1" data-ws="${w.id}"><span class="o ${w.panes?'c-green':'c-dim'}">●</span><span class="nm"><b>${esc(w.name)}</b><span>${esc(w.branch||'carpeta')} · ${w.panes} panel${w.panes>1?'es':''}</span></span><span class="tag">${w.branch?'wt':'carpeta'}</span><span class="mk">${w.att?`<span class="${KINDS[w.att].c}">${KINDS[w.att].g}</span>`:''}</span></button>`});
+  h+=`<div class="sec"><span>CONVERSACIONES · ${L.length}</span></div>`;
+  if(!L.length)h+=`<div class="emp">ninguna · el + de arriba abre una</div>`;
+  L.forEach(c=>{h+=`<button class="row1" data-chat="${c.id}"><span class="o ${c.working?'c-blue':'c-green'}">✦</span><span class="nm"><b>${esc(title(c))}</b><span>${esc(last(c))}</span></span><span class="mk">${mark(c)} ${c.working?`<span class="c-blue sp">${SPIN[0]}</span>`:`<span class="c-dim">${esc(c.ago)}</span>`}</span></button>`});
+  if(shelved().length)h+=`<button class="lnk" data-go="arch">archivadas · ${shelved().length} ›</button>`;
+  return h+'</div>';
+}
+function chatHtml(){
+  const c=chatById(ph.id);if(!c)return homeHtml();
+  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div class="tt"><b>${esc(title(c))}</b><span class="sub">carpeta ${c.own?'tuya':'vacía'} · permisos manual</span></div><button class="ib" data-sheet="chat">⋯</button></div><div class="msgs" id="msgs">`;
+  if(!c.msgs.length)h+=`<div class="m a c-dim">escribe y envía: sin carpeta, rama ni nombre que elegir.</div>`;
+  c.msgs.forEach(m=>{h+=`<div class="m ${m.r}">${esc(m.t)}</div>`});
+  if(c.working)h+=`<div class="m c-blue"><span class="sp">${SPIN[0]}</span> trabajando</div>`;
+  return h+`</div><div class="cmp"><input id="pin" placeholder="escribe…" autocomplete="off" value="${esc(ph.draft).replace(/"/g,'&quot;')}"><button data-send="1">▶</button></div>`;
+}
+function archHtml(){
+  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div class="tt"><b>archivadas</b><span class="sub">se reanudan donde las dejaste</span></div></div><div class="list">`;
+  if(!shelved().length)h+=`<div class="emp">ninguna archivada</div>`;
+  shelved().forEach(c=>{h+=`<div class="row1"><span class="o c-dim">✦</span><span class="nm"><b>${esc(title(c))}</b><span>${c.msgs.length} mensajes · ${esc(c.ago)}</span></span><button data-resume="${c.id}">reanudar</button><button data-del="${c.id}" class="c-red">✗</button></div>`});
+  return h+'</div>';
+}
+function sheetHtml(){
+  if(ph.sheet==='new')return `<div class="grab"></div><h3>nuevo</h3>
+  <button class="act" data-act="newfolder"><span><span class="c-dim">o</span>  abrir una carpeta del PC</span></button>
+  <button class="act" data-act="newgroup"><span><span class="c-dim">＋</span>  grupo nuevo…</span></button>
+  <button class="act" data-act="newchat"><span><span class="c-green">✦</span>  conversación nueva</span><small>sin carpeta ni rama</small></button>
+  <div class="cancel" data-act="cancel">cancelar</div>`;
+  const c=chatById(ph.id);if(!ph.sheet||!c)return '';
+  if(ph.sheet==='confirm')return `<div class="grab"></div><h3>¿borrar «${esc(clip(title(c),30))}»?</h3><p>Borra su carpeta. El transcript de Claude queda en ~/.claude/projects/.</p><button class="act red" data-act="erase">borrar</button><div class="cancel" data-act="cancel">cancelar</div>`;
+  return `<div class="grab"></div><h3>${esc(clip(title(c),34))}</h3>
+  <button class="act" data-act="pro">llevar a un proyecto… <small>${opt.pro==='summary'?'con resumen':opt.pro==='empty'?'vacía':'mueve la sesión'}</small></button>
+  <button class="act ${opt.close==='delete'?'red':''}" data-act="close">${opt.close==='delete'?'borrar':'archivar'} <small>${opt.close==='delete'?'pide confirmar':'se reanuda luego'}</small></button>
+  <div class="cancel" data-act="cancel">cancelar</div>`;
+}
+function renderPhone(){
+  const l=document.querySelector('.list'),st=l?l.scrollTop:0,inp=$('pin'),had=inp&&document.activeElement===inp;
+  const body=ph.screen==='chat'?chatHtml():ph.screen==='arch'?archHtml():homeHtml(),run=live().filter(c=>c.working).length;
+  const chip=ph.screen==='chat'?'CONVERSACIÓN':ph.screen==='arch'?'ARCHIVADAS':'HOME';
+  $('screen').innerHTML=body+`<div class="status"><span class="chipb">${chip}</span><span>wifi · conectado</span><span class="sp1"></span>${run?`<span class="c-blue"><span class="sp">${SPIN[0]}</span> ${run}</span>`:''}</div>`;
+  const l2=document.querySelector('.list');if(l2)l2.scrollTop=st;
+  const m=$('msgs');if(m)m.scrollTop=m.scrollHeight;
+  if(had&&$('pin'))$('pin').focus();
+  $('sheet').innerHTML=sheetHtml();$('back').classList.toggle('on',!!ph.sheet);
+}
+let toastT;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2600)}
+function onPhoneClick(t){
+  const q=s=>t.closest(s);let el;
+  if(q('#back')&&!q('.sheet')){ph.sheet=null}
+  else if((el=q('[data-act]'))){
+    const a=el.dataset.act,c=chatById(ph.id);
+    if(a==='cancel')ph.sheet=null;
+    else if(a==='newchat'){ph.sheet=null;ph.id=newChat().id;ph.screen='chat';ph.draft=''}
+    else if(a==='newgroup'||a==='newfolder'){ph.sheet=null;toast(a==='newgroup'?'grupo nuevo: como hoy (N163)':'abrir una carpeta: como hoy')}
+    else if(a==='close'){const r=closeChat(c);ph.sheet=null;if(r==='confirm')ph.sheet='confirm';else{ph.screen='home';toast(r==='discarded'?'vacía: se descartó':'archivada · «archivadas ›» la reanuda')}}
+    else if(a==='erase'){drop(c);ph.sheet=null;ph.screen='home';toast('borrada')}
+    else if(a==='pro'){const w=M.ws[0],r=promote(c,w);ph.sheet=null;toast(r.text+' (aquí, el primer workspace)');if(opt.pro==='move')ph.screen='home'}
+  }
+  else if((el=q('[data-chat]'))){ph.id=el.dataset.chat;ph.screen='chat';ph.draft='';const c=chatById(ph.id);if(c&&c.att==='done')c.att=null}
+  else if((el=q('[data-go]'))){ph.screen=el.dataset.go;ph.sheet=null;
+    if(ph.screen==='home'){const c=chatById(ph.id);if(c&&!c.msgs.length&&!c.archived)drop(c)}}   // an empty conversation left unsent is not kept
+  else if((el=q('[data-sheet]')))ph.sheet=el.dataset.sheet;
+  else if(q('[data-send]')){const c=chatById(ph.id),i=$('pin');if(c&&submit(c,i.value)){ph.draft='';i.value=''}}
+  else if((el=q('[data-resume]'))){const c=chatById(el.dataset.resume);resume(c);ph.id=c.id;ph.screen='chat';toast('reanudada · claude sigue con --resume')}
+  else if((el=q('[data-del]'))){ph.id=el.dataset.del;ph.sheet='confirm';ph.screen='arch'}
+  else if((el=q('[data-ws]')))toast('entra al workspace, como hoy');
+  drawAll();
+}
+
+/* ---------- the CLI, same state */
+function drawCli(){
+  const L=live().concat(shelved()),pad=(s,n)=>(s+' '.repeat(n)).slice(0,n);
+  let o='$ jw ls\n'+pad('ID',6)+pad('NOMBRE',36)+pad('TIPO',8)+'PANELES\n';
+  L.forEach(c=>{o+=pad(c.id,6)+pad(clip(title(c),34),36)+pad('chat',8)+(c.archived?'—  (archivada)':'1')+'\n'});
+  M.ws.forEach(w=>{o+=pad(w.id,6)+pad(clip(w.name+(w.branch?' ('+w.branch+')':''),34),36)+pad(w.branch?'worktree':'carpeta',8)+w.panes+'\n'});
+  const c=live()[0];
+  if(c)o+='\n$ jw prompt "'+clip(title(c),12).replace('…','')+'" "¿y con un ejemplo?"\n$ jw read "'+clip(title(c),12).replace('…','')+'"   # lo que dice el panel de la conversación\n';
+  $('cli').textContent=o;
+}
+
+function onControl(b){
+  if(b==='three'){seed(true);resetUi();resetPh()}else if(b==='empty'){seed(false);resetUi();resetPh()}
+  else{
+    const pick=live().find(c=>!viewing(c)&&!c.att)||live()[0];
+    if(!pick){drawAll();return}
+    if(b==='perm')pick.att='perm';else if(b==='ask')pick.att='ask';
+    else if(b==='done'){const w=live().find(c=>c.working);if(w)reply(w)}
+  }
+  drawAll();
+}
+function drawAll(){drawTui();renderPhone();drawCli()}
+function tick(){drawTui();if(typeof document.querySelectorAll==='function')document.querySelectorAll('.sp').forEach(e=>e.textContent=spin())}
+
+seed(true);resetUi();resetPh();
+if(typeof document!=='undefined'&&typeof document.addEventListener==='function'){
+  $('term').addEventListener('keydown',onTermKey);
+  document.addEventListener('click',e=>{const t=e.target;if(!t.closest)return;
+    if(t.closest('.ctl')){const b=t.dataset.b;if(b)onControl(b);return}
+    if(t.closest('#phone'))onPhoneClick(t)});
+  document.addEventListener('input',e=>{if(e.target.id==='pin')ph.draft=e.target.value});
+  document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='pin'){e.preventDefault();onPhoneClick($('phone').querySelector('[data-send]'))}});
+  const sel=(id,fn)=>$(id).addEventListener('change',()=>{fn($(id).value);drawAll()});
+  sel('o-close',v=>opt.close=v);sel('o-name',v=>opt.name=v);sel('o-dir',v=>opt.dir=v);sel('o-pro',v=>opt.pro=v);sel('f-cols',v=>fx.cols=+v);
+  drawAll();
+  if(typeof setInterval==='function'&&typeof window!=='undefined'){setInterval(tick,110);$('term').focus()}
+}
+</script></body></html>
