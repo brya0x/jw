@@ -78,6 +78,9 @@ data class HomeRow(
     val removing: Boolean = false,
     /** Its removal failed and the job was not dismissed: a red cross; the cause is in the jobs (REQ-660). */
     val removalFailed: Boolean = false,
+    /** A conversation of its own: its last line, and when it was said in seconds (REQ-813). */
+    val chatLast: String? = null,
+    val chatActive: Long? = null,
 )
 
 /** An item of Avisos: one unseen attention and the workspace it belongs to, and its group when it has one (REQ-699). */
@@ -130,6 +133,8 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
         working = w.working,
         removing = w.removing,
         removalFailed = !w.removing && removalFailed(session, w.id),
+        chatLast = w.chat?.last,
+        chatActive = w.chat?.active,
     )
 }
 
@@ -174,6 +179,26 @@ sealed interface HomeItem {
     data object Ungrouped : HomeItem {
         override val key get() = "ungrouped"
     }
+
+    /** The section of the conversations of their own, after everything, with how many are live (REQ-813). */
+    data class Chats(val count: Int) : HomeItem {
+        override val key get() = "chats"
+    }
+
+    /** A live conversation of its own: a row with no number. */
+    data class Chat(val row: HomeRow) : HomeItem {
+        override val key get() = row.id
+    }
+
+    /** What the section says while it has no live conversation. */
+    data object NoChats : HomeItem {
+        override val key get() = "nochats"
+    }
+
+    /** The link to the archived ones, when some are (REQ-813). */
+    data class ArchivedLink(val count: Int) : HomeItem {
+        override val key get() = "archived"
+    }
 }
 
 /** How many kinds of attention a folded group draws before it says how many more (REQ-692). */
@@ -189,8 +214,9 @@ private const val SHOWN_MARKS = 3
  */
 fun homeItems(session: Node.Session, seen: Seen, folded: Set<Id> = emptySet()): List<HomeItem> {
     val rows = homeRows(session, seen)
-    val all = session.workspaces.indices.toList()
-    if (session.groups.isEmpty()) return itemsOf(session, rows, all, carpetas = true, grouped = false)
+    // A conversation of its own is no repository, folder or member of a group: it has its section, last (REQ-813).
+    val all = session.workspaces.indices.filter { session.workspaces[it].chat == null }
+    if (session.groups.isEmpty()) return itemsOf(session, rows, all, carpetas = true, grouped = false) + chatItems(session, rows)
     val items = mutableListOf<HomeItem>()
     for (g in session.groups) {
         val mine = all.filter { session.workspaces[it].group == g.id }
@@ -206,7 +232,19 @@ fun homeItems(session: Node.Session, seen: Seen, folded: Set<Id> = emptySet()): 
         items += HomeItem.Ungrouped
         items += itemsOf(session, rows, rest, carpetas = false, grouped = true)
     }
-    return items
+    return items + chatItems(session, rows)
+}
+
+/** The section of the conversations of their own, in the order the daemon sent them, and the line to the archived (REQ-813). */
+private fun chatItems(session: Node.Session, rows: List<HomeRow>): List<HomeItem> {
+    val live = session.workspaces.indices.filter { session.workspaces[it].chat?.archived == false }
+    val archived = session.workspaces.count { it.chat?.archived == true }
+    return buildList {
+        add(HomeItem.Chats(live.size))
+        if (live.isEmpty()) add(HomeItem.NoChats)
+        live.forEach { add(HomeItem.Chat(rows[it])) }
+        if (archived > 0) add(HomeItem.ArchivedLink(archived))
+    }
 }
 
 /** The workspaces at [at], in that order, as the lines of a list: the headings of REQ-220 and, with [carpetas], REQ-221. */

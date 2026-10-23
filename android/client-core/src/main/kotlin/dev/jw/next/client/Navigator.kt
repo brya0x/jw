@@ -111,6 +111,31 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Make a conversation of its own; [reply] gets its workspace's id (REQ-815). */
+    fun chatNew(reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Archive a conversation of its own; [reply] gets `true` when it was empty and went (REQ-817). */
+    fun archiveChat(workspace: Id, reply: (Result<Boolean>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Open a panel in an archived conversation; [reply] gets the pane (REQ-817). */
+    fun resumeChat(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Delete an archived conversation and its folder (REQ-817). */
+    fun deleteChat(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Start a new conversation in [to] with a summary of [chat]; [reply] gets its pane and the text for its field (REQ-817). */
+    fun promoteChat(chat: Id, to: Id, reply: (Result<Promoted>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Name a pane (empty: the automatic name). */
     fun renamePane(pane: Id, name: String, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -279,6 +304,9 @@ sealed interface Screen {
 
     /** The files of one workspace, folder by folder and no higher than its own (REQ-323). */
     data class Files(val workspace: Id) : Screen
+
+    /** The conversations of their own that are archived, to resume or delete (REQ-817). */
+    data object Archived : Screen
 }
 
 /**
@@ -298,6 +326,8 @@ data class ClientState(
     val folded: Set<Id> = emptySet(),
     /** The chip of Avisos: null for every alert, [NO_GROUP], or a group's id (REQ-699). */
     val avisosFilter: Id? = null,
+    /** A conversation of its own just made, resumed or promoted: its field is focused once its conversation is there (REQ-815). */
+    val chatOpen: ChatOpen? = null,
 )
 
 /** Lines [from] to [to] (from 1) of the file [path] of a workspace, as a reference for the agent (REQ-639). */
@@ -375,7 +405,18 @@ class Navigator(private val source: NodeSource) {
      * session until the daemon says so. Null until then.
      */
     fun openWhenShown(s: ClientState, id: Id): ClientState? =
-        if (source.session().workspaces.any { it.id == id }) openWorkspace(s, id) else null
+        // An archived conversation is listed and has no panel: it is not opened until it is live (REQ-817).
+        if (source.session().workspaces.any { it.id == id && it.chat?.archived != true }) openWorkspace(s, id) else null
+
+    /**
+     * Opens [workspace] once it is live and has the field of its conversation take the focus when it opens, with [text]
+     * in it, in [pane] when the PC named one (REQ-815, REQ-817). Null until the session lists it as live.
+     */
+    fun openChat(s: ClientState, workspace: Id, pane: Id? = null, text: String? = null): ClientState? =
+        openWhenShown(s, workspace)?.copy(chatOpen = ChatOpen(workspace, pane, text?.takeIf { it.isNotEmpty() }))
+
+    /** The field took the focus, or never will: it is not asked for again. */
+    fun spendChatOpen(s: ClientState): ClientState = s.copy(chatOpen = null)
 
     /**
      * Selects [pane] of [workspace] once the workspace's document lists it, as a pane or as a view: one the
@@ -387,7 +428,9 @@ class Navigator(private val source: NodeSource) {
         return if (shown) selectPane(s, pane) else null
     }
 
-    fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)
+    fun show(s: ClientState, screen: Screen): ClientState =
+        // What waits for a conversation's field does not outlive the conversation's screen, so it cannot surface days later.
+        s.copy(screen = screen, chatOpen = s.chatOpen.takeIf { screen is Screen.Workspace })
 
     /**
      * Avisos on [tab], or on the one that has something when none is asked for: the alerts that wait,
@@ -408,7 +451,7 @@ class Navigator(private val source: NodeSource) {
         return if (ended.toSet() == s.seen.jobs) s else s.copy(seen = s.seen.seeJobs(ended, source.epoch))
     }
 
-    fun back(s: ClientState): ClientState = s.copy(screen = Screen.Home)
+    fun back(s: ClientState): ClientState = s.copy(screen = Screen.Home, chatOpen = null)
 
     /** The files of [workspace]. */
     fun files(s: ClientState, workspace: Id): ClientState = s.copy(screen = Screen.Files(workspace), last = workspace)

@@ -14,12 +14,14 @@ class HomeListTest {
     private val worktree = session.workspaces[0]
     private val notes = session.workspaces[1]
 
-    private fun shape(s: Node.Session) = homeItems(s, Seen()).map {
+    // What is above the section of the conversations of their own, which has its own tests (ChatsHomeTest).
+    private fun shape(s: Node.Session) = homeItems(s, Seen()).takeWhile { it !is HomeItem.Chats }.map {
         when (it) {
             is HomeItem.Heading -> "# ${it.text}"
             is HomeItem.Row -> "${it.row.kind}:${it.row.id.takeLast(2)}"
             // the groups have their own tests, GroupsHomeTest
             is HomeItem.Group, is HomeItem.Empty, HomeItem.Ungrouped -> error("no groups here: $it")
+            is HomeItem.Chats, is HomeItem.Chat, HomeItem.NoChats, is HomeItem.ArchivedLink -> error("cut above: $it")
         }
     }
 

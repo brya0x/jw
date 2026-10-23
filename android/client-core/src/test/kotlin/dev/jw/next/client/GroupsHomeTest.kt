@@ -26,13 +26,15 @@ class GroupsHomeTest {
     private val f1 = session.groups[0].id
     private val f2 = session.groups[1].id
 
-    private fun shape(s: Node.Session, folded: Set<String> = emptySet()) = homeItems(s, Seen(), folded).map {
+    // What is above the section of the conversations of their own, which has its own tests (ChatsHomeTest).
+    private fun shape(s: Node.Session, folded: Set<String> = emptySet()) = homeItems(s, Seen(), folded).takeWhile { it !is HomeItem.Chats }.map {
         when (it) {
             is HomeItem.Heading -> "# ${it.text}${if (it.grouped) " (in)" else ""}"
             is HomeItem.Row -> "${it.row.kind}:${it.row.id.takeLast(2)}${if (it.grouped) " (in)" else ""}"
             is HomeItem.Group -> "@${it.id.takeLast(2)} ${if (it.open) "open" else "folded"} ${it.count}"
             is HomeItem.Empty -> "vacío"
             HomeItem.Ungrouped -> "sin grupo"
+            is HomeItem.Chats, is HomeItem.Chat, HomeItem.NoChats, is HomeItem.ArchivedLink -> error("cut above: $it")
         }
     }
 

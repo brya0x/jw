@@ -47,6 +47,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -146,10 +148,11 @@ private sealed interface Open {
  * A pane that runs `claude`, drawn from its `conversation` node in place of the pane's blocks (REQ-440 to REQ-452;
  * prototype `docs/prototypes/conversation.html`): the items, the sheet that asks, the line with `+` above it, the lists.
  * [settingsAsked] counts the taps on the pane's tab, each of which opens the settings. [draft] is a reference to lines of a file
- * picked in the viewer: it is written in the field once and then [spendDraft] says it was (REQ-639).
+ * picked in the viewer: it is written in the field once and then [spendDraft] says it was (REQ-639). With [focusField] the field takes
+ * the focus, with [fieldText] in it (a summary of a conversation taken from another), and [fieldDone] says it did (REQ-815, REQ-817).
  */
 @Composable
-internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, workspacePath: String?, branch: String?, settingsAsked: Int, draft: Draft?, spendDraft: () -> Unit) {
+internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, workspacePath: String?, branch: String?, settingsAsked: Int, draft: Draft?, focusField: Boolean, fieldText: String?, fieldDone: () -> Unit, spendDraft: () -> Unit) {
     val nodeId = node.id
     val accent = Palette.accent(node.accent)
     val context = LocalContext.current
@@ -267,6 +270,15 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         if (heldText == null) insert(lineReference(workspacePath, node.cwd, draft.path, draft.from, draft.to))
         else say("otro claude tiene esta sesión: la referencia no se escribió", error = true)
         spendDraft()
+    }
+
+    // A conversation of its own just made, resumed or promoted: the keyboard goes to the field, which has the summary in it when there is one.
+    val field = remember { FocusRequester() }
+    LaunchedEffect(focusField) {
+        if (!focusField) return@LaunchedEffect
+        if (fieldText != null && heldText == null) insert(fieldText)
+        runCatching { field.requestFocus() }
+        fieldDone()
     }
 
     // [temporary] is the photo the camera wrote: it goes once it has been read, so no photo is left in the cache.
@@ -490,7 +502,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 cursorBrush = SolidColor(Palette.blue),
                 visualTransformation = remember(node.commands) { CommandColours(node.commands) },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Default),
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically).focusRequester(field),
                 decorationBox = { inner ->
                     if (text.text.isEmpty()) Mono(
                         when {

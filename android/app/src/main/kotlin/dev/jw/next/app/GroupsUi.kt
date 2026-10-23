@@ -80,17 +80,6 @@ internal fun EmptyGroup() {
     )
 }
 
-/** The last line of the list: it makes a group, the first one included (REQ-698). */
-@Composable
-internal fun NewGroupLine(click: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = Gutter, vertical = 14.dp).defaultMinSize(minHeight = 48.dp)
-            .border(1.dp, Palette.line, RoundedCornerShape(10.dp)).clickable(onClick = click),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) { Mono("＋ grupo nuevo", Palette.dim, 13) }
-}
-
 /** The chips over the alerts of Avisos (REQ-699): all, each group with its count, and «sin grupo». */
 @Composable
 internal fun AvisoChips(chips: List<AvisoChip>, selected: Id?, pick: (Id?) -> Unit) {

@@ -3,6 +3,7 @@ package dev.jw.next.app
 import android.content.Context
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import dev.jw.next.client.Promoted
 import dev.jw.next.client.BinaryFile
 import dev.jw.next.client.CacheResult
 import dev.jw.next.client.FILE_WAIT_MS
@@ -194,6 +195,41 @@ abstract class ProtocolSource : AppSource() {
 
     override fun renameWorkspace(workspace: Id, name: String, reply: (Result<Unit>) -> Unit) {
         command(Cmd.RenameWorkspace(workspace, name)) { reply(it.done("el PC no pudo renombrar el workspace")) }
+    }
+
+    override fun chatNew(reply: (Result<Id>) -> Unit) {
+        command(Cmd.ChatNew) { reply(it.workspaceId("el PC no pudo hacer la conversación")) }
+    }
+
+    override fun archiveChat(workspace: Id, reply: (Result<Boolean>) -> Unit) {
+        command(Cmd.ArchiveChat(workspace)) { r ->
+            reply(
+                if (r.ok) Result.success((r.result?.get("discarded") as? JsonPrimitive)?.booleanOrNull == true)
+                else Result.failure(Exception(r.error?.message ?: "el PC no pudo archivar la conversación")),
+            )
+        }
+    }
+
+    override fun resumeChat(workspace: Id, reply: (Result<Id>) -> Unit) {
+        command(Cmd.ResumeChat(workspace)) { reply(it.made("pane", "el panel", "el PC no pudo reanudar la conversación")) }
+    }
+
+    override fun deleteChat(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.DeleteChat(workspace)) { reply(it.done("el PC no pudo borrar la conversación")) }
+    }
+
+    override fun promoteChat(chat: Id, to: Id, reply: (Result<Promoted>) -> Unit) {
+        command(Cmd.PromoteChat(chat, to)) { r ->
+            val pane = (r.result?.get("pane") as? JsonPrimitive)?.contentOrNull
+            val text = (r.result?.get("text") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            reply(
+                when {
+                    r.ok && pane != null -> Result.success(Promoted(pane, text))
+                    r.ok -> Result.failure(Exception("el PC no dio el panel"))
+                    else -> Result.failure(Exception(r.error?.message ?: "el PC no pudo llevar la conversación"))
+                },
+            )
+        }
     }
 
     override fun createGroup(name: String, reply: (Result<Id>) -> Unit) {
