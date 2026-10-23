@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** REQ-724 to REQ-726: the diff and the viewer are tabs after the panes, and a view the phone asked for is selected when it shows. */
+/** REQ-730 to REQ-732: the diff and the viewer are tabs after the panes, and a view the phone asked for is selected when it shows. */
 class ViewTabsTest {
     private val dir = File(System.getProperty("contract.dir"), "fixtures/daemon")
     private fun node(name: String) = (ContractJson.decodeFromString(DaemonMsg.serializer(), File(dir, name).readText()) as DaemonMsg.Snapshot).node

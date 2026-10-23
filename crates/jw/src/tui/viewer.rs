@@ -28,7 +28,7 @@ pub enum Source {
 pub enum Act {
     Nothing,
     Close,
-    /// `esc` with nothing to cancel: give the keys back to the client's commands (REQ-714); `q`
+    /// `esc` with nothing to cancel: give the keys back to the client's commands (REQ-720); `q`
     /// closes.
     Leave,
     /// Answer the plan with this key (`accept`, `manual` or `no`).

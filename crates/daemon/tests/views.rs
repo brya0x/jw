@@ -1,4 +1,4 @@
-//! N165a: the diff and the viewer are leaves of a workspace's layout (REQ-703 to REQ-711).
+//! N166a: the diff and the viewer are leaves of a workspace's layout (REQ-709 to REQ-717).
 
 mod common;
 
@@ -121,7 +121,7 @@ fn wait_layout(c: &mut Client, ws: &str, f: impl Fn(&Value) -> bool) {
     );
 }
 
-/// REQ-703, REQ-704, REQ-706: the diff is one, at the right edge with half; it is a leaf.
+/// REQ-709, REQ-710, REQ-712: the diff is one, at the right edge with half; it is a leaf.
 #[test]
 fn the_diff_is_one_view_at_the_edge_and_a_leaf_of_the_layout() {
     let (w, d, mut c, a, b) = world();
@@ -170,7 +170,7 @@ fn the_diff_is_one_view_at_the_edge_and_a_leaf_of_the_layout() {
     d.stop();
 }
 
-/// REQ-705, REQ-707: a viewer has up to 8 tabs, the oldest goes, a tab closes, the last closes it.
+/// REQ-711, REQ-713: a viewer has up to 8 tabs, the oldest goes, a tab closes, the last closes it.
 #[test]
 fn a_viewer_keeps_eight_tabs_and_closes_with_its_last() {
     let (w, d, mut c, a, _b) = world();
@@ -227,7 +227,7 @@ fn a_viewer_keeps_eight_tabs_and_closes_with_its_last() {
     d.stop();
 }
 
-/// REQ-708, REQ-709: closed and opened again, a view is where it was, with its share; also after
+/// REQ-714, REQ-715: closed and opened again, a view is where it was, with its share; also after
 /// it was swapped to the left and made narrower.
 #[test]
 fn a_view_comes_back_where_it_was_closed() {
@@ -287,7 +287,7 @@ fn a_view_comes_back_where_it_was_closed() {
     d.stop();
 }
 
-/// RISK of REQ-703: a pane made with no `beside` goes beside the last pane, not into the room of
+/// RISK of REQ-709: a pane made with no `beside` goes beside the last pane, not into the room of
 /// a view; a swap, a grow and a new pane do not drop a view's leaf.
 #[test]
 fn a_new_pane_a_swap_and_a_grow_keep_the_leaf_of_a_view() {
@@ -358,7 +358,7 @@ fn a_new_pane_a_swap_and_a_grow_keep_the_leaf_of_a_view() {
     d.stop();
 }
 
-/// REQ-711: views and their leaves are not saved; a restart gives the room to the panes.
+/// REQ-717: views and their leaves are not saved; a restart gives the room to the panes.
 #[test]
 fn a_restart_drops_the_views_and_the_session_file_never_names_one() {
     let (w, d, mut c, a, b) = world();
@@ -397,7 +397,7 @@ fn a_restart_drops_the_views_and_the_session_file_never_names_one() {
     d.stop();
 }
 
-/// REQ-710: a workspace that has no panes has no views.
+/// REQ-716: a workspace that has no panes has no views.
 #[test]
 fn closing_the_last_pane_takes_the_views_with_it() {
     let (w, d, mut c, a, b) = world();

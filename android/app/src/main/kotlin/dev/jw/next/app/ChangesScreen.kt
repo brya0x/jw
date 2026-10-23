@@ -61,8 +61,8 @@ private val DelBg = Color(0xFF40292D)
 
 /**
  * The changes of one workspace, as `docs/prototypes/mobile.html` draws them (REQ-113 to REQ-121), in the body of the diff's tab
- * of the workspace screen (REQ-724). [leave] is Back when there is nothing to go back to inside it; [openFile] asks the PC for a
- * viewer tab of a file (REQ-725).
+ * of the workspace screen (REQ-730). [leave] is Back when there is nothing to go back to inside it; [openFile] asks the PC for a
+ * viewer tab of a file (REQ-731).
  */
 @Composable
 fun ColumnScope.DiffPanel(source: AppSource, workspace: Id, leave: () -> Unit, openFile: (String) -> Unit) {

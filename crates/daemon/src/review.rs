@@ -420,7 +420,7 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
 }
 
 /// The review's diff is a leaf of its layout, at the right of the agent, once the agent's pane
-/// is there (REQ-710): the terminal client and the phone both see it.
+/// is there (REQ-716): the terminal client and the phone both see it.
 fn open_diff(shared: &Shared, workspace: &contract::Id) -> Result<(), ErrorBody> {
     crate::views::open_view(
         shared,

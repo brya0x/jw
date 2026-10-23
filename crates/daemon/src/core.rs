@@ -1280,7 +1280,7 @@ impl Core {
     }
 
     /// The model as the session file keeps it: the leaves of views are not saved, since the
-    /// views are not (REQ-711), so a restart finds the layout of the panes alone.
+    /// views are not (REQ-717), so a restart finds the layout of the panes alone.
     fn saved_text(&mut self) -> String {
         let mut layouts = Vec::new();
         for ws in &mut self.model.workspaces {

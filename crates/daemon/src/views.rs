@@ -1,4 +1,4 @@
-//! The diff and the viewer as leaves of a workspace's layout (N165, REQ-703 to REQ-711).
+//! The diff and the viewer as leaves of a workspace's layout (N166, REQ-709 to REQ-717).
 //!
 //! A view is not a pane: it has no process, so it lives in `Workspace::views`, which is not
 //! saved. Its leaf is in the workspace's layout beside the panes; what it draws a client reads
@@ -32,7 +32,7 @@ fn no_view(view: &str) -> crate::commands::ErrorBody {
     err(ErrorCode::NotFound, format!("no view {view}"))
 }
 
-/// Open the diff or a viewer (REQ-704, REQ-705, REQ-706).
+/// Open the diff or a viewer (REQ-710, REQ-711, REQ-712).
 pub fn open_view(
     shared: &Shared,
     workspace: &Id,
@@ -118,7 +118,7 @@ pub fn open_view(
     Ok(Some(json!({ "view": id })))
 }
 
-/// Close a view, or a tab of a viewer (REQ-707).
+/// Close a view, or a tab of a viewer (REQ-713).
 pub fn close_view(shared: &Shared, view: &Id, path: Option<String>) -> Done {
     let mut core = shared.lock();
     let ws = core

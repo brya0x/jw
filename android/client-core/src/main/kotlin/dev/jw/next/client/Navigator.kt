@@ -55,7 +55,7 @@ interface NodeSource {
 
     /**
      * Open the diff or a viewer of [workspace] as a tab: a viewer gets [path] as a file of it. [reply] gets the id of the
-     * view, which the workspace lists once the PC says so (REQ-725).
+     * view, which the workspace lists once the PC says so (REQ-731).
      */
     fun openView(workspace: Id, kind: ViewKind, path: String?, reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -379,7 +379,7 @@ class Navigator(private val source: NodeSource) {
 
     /**
      * Selects [pane] of [workspace] once the workspace's document lists it, as a pane or as a view: one the
-     * phone just asked for is not there until the daemon says so (REQ-235, REQ-725). Null until then.
+     * phone just asked for is not there until the daemon says so (REQ-235, REQ-731). Null until then.
      */
     fun selectWhenShown(s: ClientState, workspace: Id, pane: Id): ClientState? {
         val ws = source.node(workspace) as? Node.Workspace

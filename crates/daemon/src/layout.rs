@@ -6,7 +6,7 @@
 //! whose shell would not start after a restart), so `reconcile` brings any tree to agree with the
 //! panes there are instead of every place keeping it up to date.
 //!
-//! Since N165 a leaf is a pane or a view (the diff, a viewer): `reconcile_views` keeps both, and
+//! Since N166 a leaf is a pane or a view (the diff, a viewer): `reconcile_views` keeps both, and
 //! a pane that has no place goes beside the last *pane*, never inside a view's room.
 
 use std::collections::HashSet;

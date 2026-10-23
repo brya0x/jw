@@ -29,7 +29,7 @@ import dev.jw.next.contract.TextDoc
 import dev.jw.next.contract.ViewSummary
 
 /**
- * The files of a workspace's viewer, in the body of its tab (REQ-724): a chip for each file when there are several, and the
+ * The files of a workspace's viewer, in the body of its tab (REQ-730): a chip for each file when there are several, and the
  * one chosen read from the PC and shown with the same viewers the folder screen has. Back closes that file (the last closes
  * the tab). The tabs themselves are the PC's: a file the terminal client opened is a chip here too.
  */
