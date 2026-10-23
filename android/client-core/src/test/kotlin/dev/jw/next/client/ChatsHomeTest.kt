@@ -95,6 +95,19 @@ class ChatsHomeTest {
     }
 
     @Test
+    fun theScreenOfAChatThatIsArchivedGivesWayToHome() {
+        val nav = Navigator(source(session))
+        val open = ClientState(screen = Screen.Workspace(shelved.id, null), chatOpen = ChatOpen(shelved.id, null, "x"))
+        assertEquals(Screen.Home, nav.leaveArchivedChat(open).screen)
+        assertNull(nav.leaveArchivedChat(open).chatOpen)
+        // a live chat, a workspace and the other screens stay as they are
+        val live = ClientState(screen = Screen.Workspace(live.id, null))
+        assertEquals(live, nav.leaveArchivedChat(live))
+        assertEquals(Screen.Workspace(app.id, null), nav.leaveArchivedChat(ClientState(screen = Screen.Workspace(app.id, null))).screen)
+        assertEquals(Screen.Avisos, nav.leaveArchivedChat(ClientState(screen = Screen.Avisos)).screen)
+    }
+
+    @Test
     fun theFieldWaitsForTheOpenedChatAndDoesNotOutliveItsScreen() {
         val nav = Navigator(source(session))
         val opened = assertNotNull(nav.openChat(ClientState(), live.id, "p1", "resumen"))

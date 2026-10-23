@@ -401,6 +401,15 @@ class Navigator(private val source: NodeSource) {
     }
 
     /**
+     * A conversation of its own that is archived has no panel to show: its screen gives way to Home, whoever archived it, from here,
+     * from the terminal or by closing its last panel (REQ-823).
+     */
+    fun leaveArchivedChat(s: ClientState): ClientState {
+        val at = s.screen as? Screen.Workspace ?: return s
+        return if (source.session().workspaces.any { it.id == at.id && it.chat?.archived == true }) back(s) else s
+    }
+
+    /**
      * Opens [id] once the session shows it: a workspace the phone just asked for is not in the
      * session until the daemon says so. Null until then.
      */

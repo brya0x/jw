@@ -54,7 +54,7 @@ private const val CHAT_OPEN_WAIT_MS = 50_000L
 /** The row of a live conversation of its own in Home: `✦`, its name, its last line, the mark of what waits and when it was said (REQ-813). */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun ChatRow(row: HomeRow, current: Boolean, nowMs: Long, open: () -> Unit, hold: () -> Unit) {
+internal fun ChatRow(row: HomeRow, current: Boolean, open: () -> Unit, hold: () -> Unit) {
     val bar = Palette.blue
     Column(Modifier.fillMaxWidth().background(if (current) Palette.sel else Color.Transparent).drawBehind { if (current) drawRect(bar, size = Size(3.dp.toPx(), size.height)) }) {
         Row(
@@ -73,7 +73,8 @@ internal fun ChatRow(row: HomeRow, current: Boolean, nowMs: Long, open: () -> Un
                 if (row.unseen > 1) Mono("${row.unseen}", Palette.dim, 11)
             }
             if (row.working) CircularProgressIndicator(Modifier.size(14.dp), color = Palette.blue, strokeWidth = 2.dp)
-            else row.chatActive?.let { Mono(chatAgo(nowMs / 1000, it), Palette.dim, 11) }
+            // Home's clock only runs with a job, so the age reads the time itself: the session's ticks redraw the row.
+            else row.chatActive?.let { Mono(chatAgo(System.currentTimeMillis() / 1000, it), Palette.dim, 11) }
         }
     }
 }

@@ -390,7 +390,7 @@ private fun WorkspaceList(
                 HomeItem.Ungrouped -> Section("sin grupo")
                 is HomeItem.Chats -> Section("conversaciones · ${item.count}")
                 is HomeItem.Chat -> ChatRow(
-                    item.row, current = item.row.id == state.last, nowMs = now,
+                    item.row, current = item.row.id == state.last,
                     open = { set(nav.openWorkspace(state, item.row.id)) }, hold = { holdChat(item.row.id) },
                 )
                 HomeItem.NoChats -> NoChatsLine()
@@ -510,13 +510,13 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var moving by remember { mutableStateOf<MoveTo?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
-    // A conversation of its own: its sheet (`⋯`, or a long press on the title) and taking it to a project (REQ-817, REQ-818). One that is archived, or deleted, from here or from the PC, leaves this screen.
+    // A conversation of its own: its sheet (`⋯`, or a long press on the title) and taking it to a project (REQ-817, REQ-818). One that is archived, from here or from the PC, leaves this screen.
     var chatSheet by remember(screen.id) { mutableStateOf(false) }
     var promoting by remember(screen.id) { mutableStateOf(false) }
     var promoteError by remember(screen.id) { mutableStateOf<String?>(null) }
     var pendingChat by remember(screen.id) { mutableStateOf<ChatOpen?>(null) }
     val chat = ws?.chat
-    LaunchedEffect(chat?.archived) { if (chat?.archived == true) set(nav.back(state)) }
+    LaunchedEffect(version, screen) { nav.leaveArchivedChat(state).let { if (it != state) set(it) } }
     // A conversation just made, resumed or promoted: the panel the PC named (else the first) is the one shown, and its field takes the focus
     // once it has its conversation, with the summary in it (REQ-815, REQ-817); the wait ends after a while whatever happens.
     val chatOpen = state.chatOpen?.takeIf { it.workspace == screen.id }
