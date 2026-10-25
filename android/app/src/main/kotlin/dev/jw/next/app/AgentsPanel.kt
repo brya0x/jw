@@ -50,6 +50,20 @@ internal fun AgentsChip(running: Int, open: Boolean, toggle: () -> Unit) {
     }
 }
 
+/** The chip of an engine that runs another claude than the installed one: a tap opens its sheet (REQ-856). A touch target of 48 dp around a smaller pill. */
+@Composable
+internal fun EngineChip(text: String, open: () -> Unit) {
+    Box(
+        Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open)
+            .semantics { role = Role.Button; contentDescription = "$text: este motor es más viejo que el instalado" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.defaultMinSize(minHeight = 26.dp).background(Palette.sel, CircleShape).padding(horizontal = 9.dp), contentAlignment = Alignment.Center) {
+            Mono(text, Palette.yellow, 11)
+        }
+    }
+}
+
 /**
  * What runs, under the bar of the tab, never more than 300 dp: a small heading for each section (subagents, shells, monitors),
  * one row for each task, and a tap opens that row in place with what it is and a button to stop it (REQ-602).
