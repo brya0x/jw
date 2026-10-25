@@ -259,7 +259,7 @@ for line in sys.stdin:
         todo()
     elif "push" in text:
         push()
-    elif "edit" in text:
+    elif "edit" in text or text.startswith("Sí, adelante con Edit"):
         edits += 1
         say("Voy a editar.")
         edit(edits, "session" in text)

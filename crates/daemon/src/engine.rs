@@ -558,6 +558,8 @@ fn run_effects(core: &mut crate::core::Core, pane: &Id, fx: Vec<Effect>) {
                 pane,
                 Some(vec!["claude".into(), "--resume".into(), session]),
             ),
+            // `answer` starts an engine for it and sends the line: it is not run under the lock.
+            Effect::Resume(_) => {}
         }
     }
 }
@@ -1028,18 +1030,62 @@ pub fn answer(
 ) -> Done {
     let mut core = shared.lock();
     let pane = pane_of(&core, node)?;
-    let (fx, recorded) = {
+    let (mut fx, recorded, before) = {
         let c = core
             .convs
             .get_mut(&pane)
             .ok_or_else(|| no_conversation(node))?;
         c.dirty = true;
         let recorded = c.st.records_permission();
+        // An answer that cannot start its engine leaves everything as it was (REQ-854).
+        let before = c.st.is_restored_ask(ask).then(|| c.st.clone());
         let fx =
             c.st.answer(ask, key, text, by)
                 .map_err(|m| err(ErrorCode::Conflict, m))?;
-        (fx, recorded)
+        (fx, recorded, before)
     };
+    // The ask was waiting before a restart: its engine is gone, so one starts and the answer is its first message (REQ-850).
+    let resume = fx
+        .iter()
+        .position(|e| matches!(e, Effect::Resume(_)))
+        .and_then(|i| match fx.remove(i) {
+            Effect::Resume(line) => Some(line),
+            _ => None,
+        });
+    if let Some(line) = resume {
+        // A message sent while the ask was shown may have started the engine already: not a second one on the session.
+        let running = core.convs.get(&pane).is_some_and(|c| c.engine.is_some());
+        drop(core);
+        if !running && let Err(e) = start_engine(shared, &pane) {
+            let mut core = shared.lock();
+            if let (Some(c), Some(before)) = (core.convs.get_mut(&pane), before) {
+                c.st = before;
+            }
+            core.refresh();
+            return Err(e);
+        }
+        // The file stops saying the permission waits before the engine is told anything (REQ-848).
+        if recorded {
+            save_due(shared, true);
+        }
+        let mut core = shared.lock();
+        let said = {
+            let c = core
+                .convs
+                .get_mut(&pane)
+                .ok_or_else(|| no_conversation(node))?;
+            c.dirty = true;
+            c.st.send(&line, Vec::new(), now_ms())
+        };
+        fx.extend(said);
+        core.clear_agent(&pane);
+        run_effects(&mut core, &pane, fx);
+        crate::chats::said(&mut core, &pane, &line);
+        core.refresh();
+        drop(core);
+        save_due(shared, true);
+        return Ok(None);
+    }
     // The file stops saying the permission waits before the engine is told it was answered (REQ-848).
     if recorded {
         drop(core);

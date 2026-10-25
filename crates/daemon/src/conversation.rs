@@ -439,6 +439,9 @@ pub enum Effect {
     ClearAsk,
     /// The conversation can be resumed from now on: the pane brings it back after a restart.
     Resumable(String),
+    /// The answer to an ask that was waiting before a restart: no engine has the question any more, so
+    /// the daemon starts one and this is the first message it is sent (REQ-850 to REQ-852).
+    Resume(String),
 }
 
 /// What a local command of the engine (`/model`, `/effort`, `/rename`) changes once it answers.
@@ -566,6 +569,8 @@ pub struct State {
     pending: Option<Pending>,
     /// The permission the saved file kept, until the transcript says whether it still waits (REQ-847).
     saved_pending: Option<SavedPending>,
+    /// What a restored permission was answered yes to: the call Claude makes again for it is allowed once (REQ-852).
+    allow_once: Option<(String, Value)>,
     queue: VecDeque<Queued>,
     pub tasks: Vec<Task>,
     pub todos: Vec<Todo>,
@@ -798,6 +803,7 @@ impl State {
             since: None,
             pending: None,
             saved_pending: None,
+            allow_once: None,
             queue: VecDeque::new(),
             tasks: Vec::new(),
             todos: Vec::new(),
@@ -1141,6 +1147,29 @@ impl State {
         }
     }
 
+    #[cfg(test)]
+    fn restore_pending_for_test(&mut self, tool: &str, input: Value, id: &str) {
+        let mut text = json!({"type": "user", "message": {"role": "user", "content": "hola"}})
+            .to_string()
+            + "\n";
+        text += &json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":id,"name":tool,"input":input}]}}).to_string();
+        let parser = crate::transcript::parse(&text);
+        self.saved_pending = Some(SavedPending {
+            tool_use_id: id.into(),
+            tool: tool.into(),
+            input,
+            suggested: false,
+        });
+        self.restore_ask(Some(&parser));
+    }
+
+    /// Whether the ask `ask` waits from before a restart: no engine has it, so its answer starts one (REQ-850).
+    pub fn is_restored_ask(&self, ask: &str) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| p.ask.id == ask && p.ask.restored)
+    }
+
     /// Whether a permission waits that the saved file keeps: answering it takes it out of the file (REQ-848).
     pub fn records_permission(&self) -> bool {
         self.pending
@@ -1373,12 +1402,6 @@ impl State {
         let Some(p) = self.pending.as_ref().filter(|p| p.ask.id == ask) else {
             return Err("that question is not waiting".into());
         };
-        // Its engine is gone: the answer that starts another comes with N179b.
-        if p.ask.restored {
-            return Err(
-                "that question was waiting before a restart and cannot be answered yet".into(),
-            );
-        }
         // The keys of a question are the numbers of its options, many at once for a choice of several.
         if !matches!(p.kind, Kind::Question(_)) && !p.ask.options.iter().any(|o| o.key == key) {
             return Err(format!("{key} is not one of its answers"));
@@ -1388,6 +1411,9 @@ impl State {
             Kind::Question(_) => return self.answer_question(p, key, text, by),
             Kind::Plan => return Ok(self.answer_plan(&p, key, text, by)),
             Kind::Permission => {}
+        }
+        if p.ask.restored {
+            return Ok(self.answer_restored_permission(p, key, text, by));
         }
         let mut out = vec![Effect::ClearAsk];
         let tool_id = p.tool_use_id.clone();
@@ -1430,6 +1456,50 @@ impl State {
         }
         self.status = ConvStatus::Tool;
         Ok(out)
+    }
+
+    /// The answer to a permission that waited before a restart: what Claude is told, as a message (REQ-852).
+    fn answer_restored_permission(
+        &mut self,
+        p: Pending,
+        key: &str,
+        text: Option<&str>,
+        by: Option<&str>,
+    ) -> Vec<Effect> {
+        let what = format!("{} {}", p.ask.tool, tool_arg(&p.ask.tool, &p.input));
+        let refused = key == "no";
+        let line = if refused {
+            match text.map(str::trim).filter(|t| !t.is_empty()) {
+                Some(t) => format!("No, no ejecutes {what}: {t}"),
+                None => format!("No, no ejecutes {what}"),
+            }
+        } else {
+            if key == "session"
+                && let Some(rule) = p.session_rule
+            {
+                self.allowed.push(rule);
+            }
+            self.allow_once = Some((p.ask.tool.clone(), p.input.clone()));
+            format!("Sí, adelante con {what}")
+        };
+        if let Some(id) = &p.tool_use_id {
+            let by = by.map(str::to_owned);
+            if refused {
+                self.refused.push(id.clone());
+            }
+            if refused {
+                self.set_tool(id, |t| {
+                    t.0 = ToolState::Denied;
+                    t.1 = Some("Rechazado".into());
+                    t.2 = by;
+                });
+            } else {
+                // It did not run; Claude proposes it again as a new call, so this one is left without a result.
+                self.mark_lost(id, "aprobada · Claude la vuelve a proponer");
+            }
+        }
+        self.resuming();
+        vec![Effect::ClearAsk, Effect::Resume(line)]
     }
 
     /// The answer to one of the questions Claude asks: the number of the option (several, with commas, for a
@@ -1476,7 +1546,9 @@ impl State {
         let shown = joined(own.map(|t| format!("«{t}»")));
         qs.answered.push((q.question.clone(), told, shown));
         if qs.answered.len() < qs.all.len() {
+            let restored = p.ask.restored;
             p.ask = question_ask(&p.request, qs.answered.len(), &qs.all[qs.answered.len()]);
+            p.ask.restored = restored;
             p.kind = Kind::Question(qs);
             self.pending = Some(p);
             return Ok(Vec::new());
@@ -1496,11 +1568,27 @@ impl State {
             .join(" · ");
         if let Some(id) = &p.tool_use_id {
             let by = by.map(str::to_owned);
+            // A question of before a restart gets no result on the stream (Claude settles it in its own file): it ends here.
+            let state = if p.ask.restored {
+                ToolState::Ok
+            } else {
+                ToolState::Run
+            };
             self.set_tool(id, |t| {
-                t.0 = ToolState::Run;
+                t.0 = state;
                 t.1 = Some(clip(&format!("Respondida: {said}"), LINE_CHARS));
                 t.2 = by;
             });
+        }
+        if p.ask.restored {
+            let line = qs
+                .answered
+                .iter()
+                .map(|(q, told, _)| format!("Elegí «{told}» para «{q}»"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.resuming();
+            return Ok(vec![Effect::ClearAsk, Effect::Resume(line)]);
         }
         self.status = ConvStatus::Tool;
         Ok(vec![
@@ -1520,6 +1608,54 @@ impl State {
     ) -> Vec<Effect> {
         let mut out = vec![Effect::ClearAsk];
         let by = by.map(str::to_owned);
+        if p.ask.restored {
+            // No engine has the plan: the mode the answer means is the one the engine starts in.
+            let said = text.map(str::trim).filter(|t| !t.is_empty());
+            let (mode, line) = match key {
+                "no" => (
+                    Mode::Plan,
+                    said.map_or("No apruebo el plan; seguí planeando.".to_owned(), |t| {
+                        format!("No apruebo el plan; seguí planeando: {t}")
+                    }),
+                ),
+                "accept" => (
+                    Mode::AcceptEdits,
+                    "Aprobado: seguí con el plan y editá sin preguntar.".to_owned(),
+                ),
+                "auto" => (Mode::Auto, "Aprobado: seguí con el plan.".to_owned()),
+                _ => (Mode::Manual, "Aprobado: seguí con el plan.".to_owned()),
+            };
+            self.change_mode(mode);
+            if let Some(id) = &p.tool_use_id {
+                let refused = key == "no";
+                if refused {
+                    self.refused.push(id.clone());
+                }
+                self.set_tool(id, |t| {
+                    t.0 = if refused {
+                        ToolState::Denied
+                    } else {
+                        ToolState::Ok
+                    };
+                    t.1 = Some(
+                        if refused {
+                            "Plan rechazado"
+                        } else {
+                            "Plan aprobado"
+                        }
+                        .into(),
+                    );
+                    t.2 = by;
+                });
+            }
+            // The engine may be running already (a message sent meanwhile started it): it is told the mode too.
+            if key != "no" {
+                out.push(self.mode_request(mode));
+            }
+            self.resuming();
+            out.push(Effect::Resume(line));
+            return out;
+        }
         if key == "no" {
             let message = match text.map(str::trim).filter(|t| !t.is_empty()) {
                 Some(t) => format!("El usuario no aprobó el plan y dice: {t}"),
@@ -1578,6 +1714,18 @@ impl State {
 
     /// Stop what runs: a waiting question is refused first, so the engine is not left asking.
     pub fn interrupt(&mut self) -> Vec<Effect> {
+        // No engine has an ask of before a restart: dropping it is all there is to interrupt.
+        if self.pending.as_ref().is_some_and(|p| p.ask.restored) {
+            let p = self.pending.take().expect("checked above");
+            if let Some(id) = p.tool_use_id {
+                self.set_tool(&id, |t| {
+                    t.0 = ToolState::Denied;
+                    t.1 = Some("Interrumpido".into());
+                });
+            }
+            self.status = ConvStatus::Dead;
+            return vec![Effect::ClearAsk];
+        }
         if !self.busy() || self.interrupting {
             return Vec::new();
         }
@@ -2441,6 +2589,18 @@ impl State {
                 AttentionKind::Plan,
             );
         }
+        // The person said yes to this before a restart: Claude proposes the same call again (REQ-853).
+        if self
+            .allow_once
+            .as_ref()
+            .is_some_and(|(t, i)| *t == tool && *i == input)
+        {
+            self.allow_once = None;
+            if let Some(tid) = req["tool_use_id"].as_str() {
+                self.set_tool(tid, |t| t.2 = Some("aprobada antes de reiniciar".into()));
+            }
+            return vec![Effect::Write(permission_reply(&id, true, &input, ""))];
+        }
         let rule = rule_key(&tool, &input);
         // «Allow for this session» said yes to this once already.
         if self.allowed.contains(&rule) {
@@ -2505,6 +2665,7 @@ impl State {
 
     fn result(&mut self, msg: &Value, now: u64) -> Vec<Effect> {
         let mut out = Vec::new();
+        self.allow_once = None;
         if let Some(s) = msg["session_id"].as_str().filter(|s| !s.is_empty())
             && s != self.session
         {
@@ -2749,6 +2910,26 @@ impl State {
     }
 
     /// The tool item with this id: its state, summary, who answered, its output and its name.
+    /// A tool with no result that may have finished unseen: `failed` and `lost`, with what is known of it (REQ-858).
+    fn mark_lost(&mut self, id: &str, summary: &str) {
+        for item in self.items.iter_mut().rev() {
+            if let Item::Tool {
+                id: tid,
+                state,
+                summary: said,
+                lost,
+                ..
+            } = item
+                && tid == id
+            {
+                *state = ToolState::Failed;
+                *said = Some(summary.to_owned());
+                *lost = true;
+                return;
+            }
+        }
+    }
+
     fn set_tool(
         &mut self,
         id: &str,
@@ -3815,6 +3996,140 @@ mod tests {
             busy: false,
         }));
         assert!(held.restore_ask(Some(&parser)).is_empty() && held.pending.is_none());
+    }
+
+    fn restored(tool: &str, input: Value, id: &str) -> State {
+        let mut s = st();
+        s.restore_pending_for_test(tool, input, id);
+        s
+    }
+
+    /// REQ-850 to REQ-852: what a restored ask says when it is answered, and what it leaves for the next call.
+    #[test]
+    fn a_restored_ask_answers_with_a_message_and_the_mode_that_the_answer_means() {
+        let line = |fx: Vec<Effect>| {
+            assert!(matches!(fx[0], Effect::ClearAsk), "{fx:?}");
+            fx.iter()
+                .find_map(|e| match e {
+                    Effect::Resume(l) => Some(l.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{fx:?}"))
+        };
+        // two questions are answered one after the other and go as one message of two lines
+        let two = json!({"questions": [
+            {"question": "¿Uno?", "header": "U", "options": [{"label": "A", "description": ""}, {"label": "B", "description": ""}], "multiSelect": false},
+            {"question": "¿Dos?", "header": "D", "options": [{"label": "X", "description": ""}], "multiSelect": true}]});
+        let mut s = restored("AskUserQuestion", two, "q");
+        assert_eq!(s.answer("q:0", "1", None, None).unwrap(), Vec::new());
+        assert!(
+            s.pending
+                .as_ref()
+                .is_some_and(|p| p.ask.restored && p.ask.id == "q:1")
+        );
+        let said = line(s.answer("q:1", "0", Some("Z"), None).unwrap());
+        assert_eq!(said, "Elegí «B» para «¿Uno?»\nElegí «X, Z» para «¿Dos?»");
+        // a plan: the mode is the answer's, and the refusal keeps `plan` with what the person wrote
+        let plan = json!({"plan": "# Plan"});
+        for (key, text, mode, said) in [
+            (
+                "accept",
+                None,
+                Mode::AcceptEdits,
+                "Aprobado: seguí con el plan y editá sin preguntar.",
+            ),
+            ("manual", None, Mode::Manual, "Aprobado: seguí con el plan."),
+            (
+                "no",
+                Some(" usa i32 "),
+                Mode::Plan,
+                "No apruebo el plan; seguí planeando: usa i32",
+            ),
+            (
+                "no",
+                None,
+                Mode::Plan,
+                "No apruebo el plan; seguí planeando.",
+            ),
+        ] {
+            let mut s = restored("ExitPlanMode", plan.clone(), "p");
+            s.mode = Mode::Plan;
+            assert_eq!(line(s.answer("p", key, text, None).unwrap()), said);
+            assert_eq!(s.mode, mode);
+        }
+        // a permission: yes allows the same call once and no does not
+        let input = json!({"command": "touch probe-file"});
+        let mut s = restored("Bash", input.clone(), "b");
+        assert_eq!(
+            line(s.answer("b", "yes", None, None).unwrap()),
+            "Sí, adelante con Bash touch probe-file"
+        );
+        let again = |s: &mut State, input: Value| s.apply(&can_use("r2", "Bash", input, false), 1);
+        let other = again(&mut s, json!({"command": "rm -rf x"}));
+        assert!(
+            s.pending.is_some() && matches!(other.as_slice(), [Effect::Raise(_)]),
+            "another call is asked"
+        );
+        s.pending = None;
+        let same = again(&mut s, input.clone());
+        assert!(
+            s.pending.is_none() && matches!(same.as_slice(), [Effect::Write(_)]),
+            "the same call is allowed once"
+        );
+        assert!(s.allow_once.is_none());
+        let mut s = restored("Bash", input, "b");
+        assert_eq!(
+            line(s.answer("b", "no", Some("no"), None).unwrap()),
+            "No, no ejecutes Bash touch probe-file: no"
+        );
+        assert!(s.allow_once.is_none());
+    }
+
+    /// REQ-852: the tool of an ask of before a restart gets no result on the stream, so it ends when it is answered; `^C` on it drops it.
+    #[test]
+    fn the_tool_of_a_restored_ask_ends_when_it_is_answered_and_is_not_left_running() {
+        let state = |s: &State| match s.items.last() {
+            Some(Item::Tool { state, lost, .. }) => (*state, *lost),
+            other => panic!("{other:?}"),
+        };
+        let with_tool = |tool: &str, input: Value, id: &str| {
+            let mut s = st();
+            s.push(Item::Tool {
+                id: id.into(),
+                name: tool.into(),
+                arg: String::new(),
+                state: ToolState::Failed,
+                summary: None,
+                output: Vec::new(),
+                diff: Vec::new(),
+                url: None,
+                by: None,
+                lost: false,
+            });
+            s.restore_pending_for_test(tool, input, id);
+            s
+        };
+        let q = json!({"questions": [{"question": "¿Uno?", "header": "U", "options": [{"label": "A", "description": ""}], "multiSelect": false}]});
+        let mut s = with_tool("AskUserQuestion", q.clone(), "q");
+        assert_eq!(state(&s), (ToolState::Ask, false));
+        s.answer("q:0", "0", None, None).unwrap();
+        assert_eq!(state(&s), (ToolState::Ok, false));
+        let mut s = with_tool("ExitPlanMode", json!({"plan": "# P"}), "p");
+        s.answer("p", "accept", None, None).unwrap();
+        assert_eq!(state(&s), (ToolState::Ok, false));
+        let mut s = with_tool("Bash", json!({"command": "ls"}), "b");
+        s.answer("b", "yes", None, None).unwrap();
+        assert_eq!(
+            state(&s),
+            (ToolState::Failed, true),
+            "it did not run and has no result"
+        );
+        let mut s = with_tool("Bash", json!({"command": "ls"}), "b");
+        s.status = ConvStatus::Asking;
+        let fx = s.interrupt();
+        assert!(matches!(fx.as_slice(), [Effect::ClearAsk]), "{fx:?}");
+        assert!(s.pending.is_none() && !s.interrupting && s.status == ConvStatus::Dead);
+        assert_eq!(state(&s).0, ToolState::Denied);
     }
 
     /// REQ-605: a plan entered from `auto` offers to go back to it; from any other mode, or when the

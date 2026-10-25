@@ -2752,18 +2752,42 @@ fn a_question_or_a_plan_that_the_transcript_ends_with_comes_back_asked_with_no_e
             kinds(&r.client, &r.pane) == [kind]
         });
         assert!(log_lines(&r.log).is_empty(), "no engine starts to show it");
-        // Until what answers it exists, an answer is refused and the ask stays (N179b).
-        let e = r
-            .cmd(Cmd::ConversationAnswer {
-                node: node.clone(),
-                ask: id.into(),
-                key: if kind == "plan" { "accept" } else { "0" }.into(),
-                text: None,
-                by: None,
-            })
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::Conflict);
-        assert_eq!(r.conv(&node)["ask"]["restored"], true);
+        // Its answer starts an engine that resumes the session, in the mode the answer means, and is its first message (REQ-850, REQ-851).
+        let (key, mode, said) = if kind == "plan" {
+            (
+                "accept",
+                "acceptEdits",
+                "Aprobado: seguí con el plan y editá sin preguntar.",
+            )
+        } else {
+            ("1", "manual", "Elegí «B» para «¿Letra?»")
+        };
+        r.cmd(Cmd::ConversationAnswer {
+            node: node.clone(),
+            ask: id.into(),
+            key: key.into(),
+            text: None,
+            by: None,
+        })
+        .unwrap();
+        wait_for("the answer as the first message", || {
+            log_lines(&r.log)
+                .iter()
+                .any(|l| *l == format!("user {}", serde_json::to_string(said).unwrap()))
+        });
+        let started = log_lines(&r.log);
+        assert!(
+            started[0].contains("\"--resume\", \"old-session\"")
+                && started[0].contains(&format!("\"--permission-mode\", \"{mode}\"")),
+            "{started:?}"
+        );
+        let v = r.until(&node, "the ask gone", |v| v.get("ask").is_none());
+        assert!(items(&v, "user").iter().any(|u| u["text"] == said), "{v:#}");
+        assert_ne!(
+            items(&v, "tool").last().unwrap()["state"],
+            "run",
+            "the call of before the restart has no result on the stream: it ends with the answer"
+        );
         r.stop();
     }
     let mut r = rig();
@@ -2819,4 +2843,107 @@ fn a_permission_comes_back_only_with_its_record_and_a_call_with_no_result() {
         case(false, false).get("ask").is_none(),
         "no record: the call may be running, so it is not asked again"
     );
+}
+
+/// REQ-852, REQ-853: a permission that waited before a restart, answered yes, starts the engine with the
+/// message, and the call Claude makes again for it is allowed once, not asked a second time.
+#[test]
+fn a_restored_permission_answered_yes_is_allowed_when_claude_proposes_it_again() {
+    let mut r = rig();
+    let call = tool_call(
+        "Edit",
+        "toolu_e9",
+        r#"{"file_path":"src/auth.rs","old_string":"a < b","new_string":"a <= b"}"#,
+    );
+    let (_file, env) = old_session(&r, &[FIRST, REPLY, &call]);
+    let dir = r.sb.dir.join("state/conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = serde_json::json!({
+        "v": 1, "saved_at": 1, "name": "x", "named": false, "accent": "blue", "model": "claude",
+        "effort": "high", "mode": "manual", "session": "old-session", "has_transcript": true,
+        "first": 0, "items": [], "cost": 0,
+        "pending": {"tool_use_id": "toolu_e9", "tool": "Edit",
+            "input": {"file_path": "src/auth.rs", "old_string": "a < b", "new_string": "a <= b"}},
+    });
+    std::fs::write(dir.join(format!("{}.json", r.pane)), saved.to_string()).unwrap();
+    let (node, _) = r.open_with(Some("old-session"), Vec::new(), Some(env));
+    let v = r.conv(&node);
+    assert_eq!(v["ask"]["restored"], true, "{v:#}");
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: "toolu_e9".into(),
+        key: "yes".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    let v = r.idle_after(&node, 1);
+    assert!(v.get("ask").is_none(), "asked a second time: {v:#}");
+    assert!(
+        items(&v, "text").iter().any(|t| t["text"] == "Hecho."),
+        "the engine was told yes and the edit ran: {v:#}"
+    );
+    assert!(
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l == r#"user "Sí, adelante con Edit src/auth.rs""#)
+    );
+    r.stop();
+}
+
+/// REQ-854: an answer whose engine cannot start is refused and the ask stays as it was.
+#[test]
+fn an_answer_whose_engine_cannot_start_is_refused_and_the_ask_stays() {
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let (_file, mut env) = old_session(&r, &[FIRST, REPLY, &call]);
+    env.insert("PATH".into(), "/nonexistent".into());
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let e = r
+        .cmd(Cmd::ConversationAnswer {
+            node: node.clone(),
+            ask: "toolu_open:0".into(),
+            key: "0".into(),
+            text: None,
+            by: None,
+        })
+        .unwrap_err();
+    assert_ne!(e.code, ErrorCode::Conflict, "the answer was fine: {e:?}");
+    let v = r.conv(&node);
+    assert_eq!(v["ask"]["restored"], true, "{v:#}");
+    assert_eq!(v["status"], "asking");
+    r.stop();
+}
+
+/// A message sent while a restored ask is shown starts the engine; the answer then goes to that engine and
+/// does not start a second one on the same session.
+#[test]
+fn answering_a_restored_ask_after_a_message_started_the_engine_starts_no_second_one() {
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let (_file, env) = old_session(&r, &[FIRST, REPLY, &call]);
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    r.send(&node, "hola otra vez");
+    wait_for("the engine to start", || {
+        log_lines(&r.log).iter().any(|l| l.starts_with("start "))
+    });
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: "toolu_open:0".into(),
+        key: "0".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    wait_for("the answer as a message", || {
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l.starts_with("user \"Elegí"))
+    });
+    let starts = log_lines(&r.log)
+        .iter()
+        .filter(|l| l.starts_with("start "))
+        .count();
+    assert_eq!(starts, 1, "{:?}", log_lines(&r.log));
+    r.stop();
 }
