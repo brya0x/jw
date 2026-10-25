@@ -633,6 +633,7 @@ fn parse_hunk_head(rest: &str) -> Option<Hunk> {
 
 /// One round of reads for the nodes being watched, each off the hub's lock.
 fn poll(shared: &Shared) {
+    crate::tasklists::poll(shared);
     let jobs = shared.lock().diff_jobs();
     for job in jobs {
         match read(&job.dir, &job.scope) {

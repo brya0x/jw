@@ -480,6 +480,7 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
         run_effects(&mut core, pane, fx);
         if result {
             crate::chats::answered(&mut core, pane);
+            core.task_look_pane(pane);
         }
         if delta {
             feed.dirty.store(true, Ordering::Relaxed);

@@ -152,6 +152,13 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             commit,
         } => changes::open_diff(shared, &workspace, scope, commit.as_deref()),
         Cmd::OpenCommits { workspace } => changes::open_commits(shared, &workspace),
+        Cmd::OpenTasks { workspace } => crate::tasklists::open_tasks(shared, &workspace),
+        Cmd::TasksEdit {
+            workspace,
+            op,
+            id,
+            text,
+        } => crate::tasklists::edit(shared, &workspace, op, &id, text.as_deref()),
         Cmd::ArtifactPublish {
             workspace,
             name,

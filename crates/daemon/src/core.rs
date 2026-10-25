@@ -22,7 +22,7 @@ use crate::persist;
 use crate::pty::{self, Event, Term};
 
 /// The node document versions this daemon can serve.
-pub const SUPPORTED: [(&str, &[u32]); 8] = [
+pub const SUPPORTED: [(&str, &[u32]); 9] = [
     ("session", &[1]),
     ("workspace", &[1]),
     ("pane", &[1]),
@@ -30,6 +30,7 @@ pub const SUPPORTED: [(&str, &[u32]); 8] = [
     ("diff", &[1]),
     ("commits", &[1]),
     ("artifacts", &[1]),
+    ("tasks", &[1]),
     ("conversation", &[1]),
 ];
 
@@ -137,6 +138,12 @@ pub struct Core {
     pub(crate) artifacts_dir: Option<PathBuf>,
     pub(crate) artifact_items: HashMap<Id, Vec<contract::artifacts::ArtifactItem>>,
     pub(crate) artifact_nodes: HashMap<Id, crate::artifacts::ArtifactsEntry>,
+    /// What was last read of each workspace's task list, the `tasks` nodes clients asked for, the
+    /// workspaces looked at once and the ones to look at at the next poll (N180).
+    pub(crate) task_lists: HashMap<Id, crate::tasklists::Cached>,
+    pub(crate) task_nodes: HashMap<Id, crate::tasklists::NodeEntry>,
+    pub(crate) task_seen: HashSet<Id>,
+    pub(crate) task_look: HashSet<Id>,
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
     pub convs: HashMap<Id, crate::engine::Conv>,
     pub conv_dir: Option<PathBuf>,
@@ -197,6 +204,10 @@ impl Core {
             artifacts_dir: None,
             artifact_items: HashMap::new(),
             artifact_nodes: HashMap::new(),
+            task_lists: HashMap::new(),
+            task_nodes: HashMap::new(),
+            task_seen: HashSet::new(),
+            task_look: HashSet::new(),
             convs: HashMap::new(),
             conv_dir: None,
             chrome: false,
@@ -909,15 +920,19 @@ impl Core {
         Ok(())
     }
 
+    /// The ids of the nodes some client has open.
+    pub(crate) fn watched_nodes(&self) -> HashSet<Id> {
+        self.clients
+            .values()
+            .flat_map(|c| c.open.iter().cloned())
+            .collect()
+    }
+
     /// The `uncommitted` nodes a client has open, to be read again by the poll. Nodes nobody
     /// has had open for `IDLE` go (REQ-102).
     pub fn diff_jobs(&mut self) -> Vec<DiffJob> {
         let now = Instant::now();
-        let watched: HashSet<Id> = self
-            .clients
-            .values()
-            .flat_map(|c| c.open.iter().cloned())
-            .collect();
+        let watched = self.watched_nodes();
         for (id, e) in &mut self.diffs {
             if watched.contains(id) {
                 e.idle_since = now;
@@ -933,14 +948,24 @@ impl Core {
                 e.idle_since = now;
             }
         }
-        let before = self.diffs.len() + self.commit_lists.len() + self.artifact_nodes.len();
+        let before = self.diffs.len()
+            + self.commit_lists.len()
+            + self.artifact_nodes.len()
+            + self.task_nodes.len();
+        self.task_nodes
+            .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
         self.diffs
             .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
         self.commit_lists
             .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
         self.artifact_nodes
             .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
-        if self.diffs.len() + self.commit_lists.len() + self.artifact_nodes.len() != before {
+        if self.diffs.len()
+            + self.commit_lists.len()
+            + self.artifact_nodes.len()
+            + self.task_nodes.len()
+            != before
+        {
             self.refresh();
         }
         self.diffs
@@ -1195,6 +1220,9 @@ impl Core {
         self.artifact_nodes
             .retain(|_, e| live.contains(&e.workspace));
         self.artifact_items.retain(|ws, _| live.contains(ws));
+        self.task_lists.retain(|ws, _| live.contains(ws));
+        self.task_nodes.retain(|_, e| live.contains(&e.workspace));
+        self.task_seen.retain(|ws| live.contains(ws));
         self.model
             .viewed
             .retain(|key, _| key.split('|').next().is_some_and(|w| live.contains(w)));
@@ -1437,6 +1465,7 @@ impl Core {
                 removing: self.removing.contains(&ws.id),
                 group,
                 chat: ws.chat.as_ref().map(crate::model::Chat::info),
+                tasks: self.task_summary(&ws.id),
             });
             nodes.push(Node::Workspace(Workspace {
                 head: head(&ws.id, attention),
@@ -1532,6 +1561,11 @@ impl Core {
                 items: self.artifact_items_of(&e.workspace),
             }));
         }
+        for (id, e) in &self.task_nodes {
+            if let Some(doc) = self.tasks_node(id, e, head(id, Vec::new())) {
+                nodes.push(Node::Tasks(doc));
+            }
+        }
         (nodes, kept)
     }
 }
@@ -1618,6 +1652,40 @@ mod tests {
             chat: None,
         });
         (model, ws, pane)
+    }
+
+    /// REQ-893, REQ-894: a workspace is looked at once, and with no list anywhere nothing is read again
+    /// until an agent moves.
+    #[test]
+    fn with_no_task_list_anywhere_the_poll_has_nothing_to_look_at() {
+        let (model, ws, pane) = model_with_pane();
+        let mut core = test_core(model);
+        assert_eq!(
+            core.task_jobs().len(),
+            1,
+            "a workspace nobody looked at yet"
+        );
+        core.tasks_seen(&ws, crate::tasklists::Look::Gone);
+        for _ in 0..3 {
+            assert!(core.task_jobs().is_empty());
+        }
+        core.task_look_pane(&pane);
+        assert_eq!(core.task_jobs().len(), 1, "its agent moved");
+        assert!(core.task_jobs().is_empty(), "and only once");
+        // a workspace that has a list is looked at again only when it is due or asked for
+        let dir = std::env::temp_dir().join(format!("jw-core-tasks-{}", std::process::id()));
+        let path = identity::tasks_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "- [ ] a x\n").unwrap();
+        let found = crate::tasklists::look(&dir, None);
+        assert!(matches!(found, crate::tasklists::Look::New(_)));
+        core.tasks_seen(&ws, found);
+        assert_eq!(
+            core.task_summary(&ws).map(|s| (s.done, s.total)),
+            Some((0, 2))
+        );
+        assert!(core.task_jobs().is_empty(), "looked at a moment ago");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn attention_of(core: &Core, id: &str) -> Vec<Value> {

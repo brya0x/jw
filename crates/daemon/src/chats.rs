@@ -429,6 +429,7 @@ mod tests {
                 active,
                 last: None,
             }),
+            tasks: None,
         }
     }
 

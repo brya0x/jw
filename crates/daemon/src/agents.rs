@@ -83,6 +83,7 @@ pub fn event(
             });
         }
     }
+    core.task_look_pane(pane);
     core.refresh();
     Ok(None)
 }

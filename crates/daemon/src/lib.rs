@@ -42,6 +42,7 @@ mod settings;
 mod start;
 mod sync;
 mod tail;
+pub mod tasklists;
 pub mod tasks;
 mod textfile;
 mod transcript;

@@ -1,0 +1,31 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d8",
+    "type": "tasks",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b2",
+    "path": "/home/u/code/app-wt/api-v2/.jw/tasks.md",
+    "tasks": [
+      { "id": "t1", "title": "schema", "after": [], "status": "done", "state": "done", "level": 1 },
+      { "id": "t2", "title": "models", "after": ["t1"], "status": "done", "state": "done", "level": 2 },
+      { "id": "t3", "title": "endpoints", "after": ["t1", "t2"], "status": "todo", "state": "ready", "level": 3 },
+      { "id": "t4", "title": "docs", "after": ["t3", "t9"], "status": "todo", "state": "waiting", "level": 4 },
+      {
+        "id": "fin",
+        "title": "tests: run the project's tests and CI, note the result and the evidence under this line, and ask the advisor to review before marking it done",
+        "after": ["*"],
+        "status": "todo",
+        "state": "waiting",
+        "level": 5,
+        "final": true,
+        "auto": true
+      }
+    ],
+    "problems": [{ "line": 6, "text": "t4 waits for t9, which is not in the list" }],
+    "loop": { "on": false, "laps": 0, "max": 20 }
+  }
+}

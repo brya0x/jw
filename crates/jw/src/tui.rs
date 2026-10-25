@@ -1373,6 +1373,8 @@ impl View {
                 }
                 // The terminal client does not open artifacts: the phone is where they are seen (OPEN-57).
                 Node::Artifacts(_) => {}
+                // The tasks view of the terminal client is N180f; until then the node is not asked for.
+                Node::Tasks(_) => {}
                 Node::Conversation(c) => {
                     // The older items that were asked for stay before the node's (REQ-567).
                     let ui = self.conv_ui.entry(id.clone()).or_default();

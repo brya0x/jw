@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 /// The id the final task gets when it is written (REQ-888).
 pub const FINAL_ID: &str = "fin";
@@ -52,7 +53,7 @@ pub struct Problem {
     pub text: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct List {
     pub tasks: Vec<Task>,
     pub problems: Vec<Problem>,
@@ -647,6 +648,22 @@ pub fn write_keeping_mode(path: &Path, text: &str) -> io::Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// What the daemon looks at to know a list changed without reading it: its size and its time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sig {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+/// The size and time of the file; `None` when it is not there.
+pub fn signature(path: &Path) -> Option<Sig> {
+    let meta = fs::metadata(path).ok().filter(|m| m.is_file())?;
+    Some(Sig {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+    })
 }
 
 /// Reads the file again, makes one change and writes it back (REQ-881).
