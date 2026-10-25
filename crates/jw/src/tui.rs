@@ -53,6 +53,7 @@ mod settings;
 mod shell;
 mod side;
 mod split;
+mod tasks;
 mod tree;
 mod viewer;
 
@@ -448,6 +449,8 @@ pub enum Key {
     Review,
     /// Open the diff of the highlighted workspace.
     Changes,
+    /// The tasks of the highlighted workspace, in place of its panels (`T`, REQ-926).
+    Tasks,
     /// Close what the level is about: the highlighted workspace, or the focused panel.
     Close,
     /// The focused panel fills the area.
@@ -881,6 +884,9 @@ pub struct View {
     prs_asks: Vec<PrsAsk>,
     /// The diff of the shown workspace while it has a diff view: a panel of its layout (N167b).
     diff: Option<Changes>,
+    /// The tasks view that takes the place of the workspace's panels, and the `tasks` nodes read (N180f2).
+    tasks: Option<tasks::TasksView>,
+    task_docs: HashMap<String, contract::tasks::Tasks>,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
     /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
@@ -989,6 +995,8 @@ impl View {
             prs: None,
             prs_asks: Vec::new(),
             diff: None,
+            tasks: None,
+            task_docs: HashMap::new(),
             project: None,
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
@@ -1190,6 +1198,92 @@ impl View {
             diffs: &self.diffs,
             commits: &self.commit_lists,
         }
+    }
+
+    /// The `tasks` node read for a workspace.
+    fn task_doc(&self, workspace: &str) -> Option<&contract::tasks::Tasks> {
+        self.task_docs.values().find(|t| t.workspace == workspace)
+    }
+
+    /// Whether the row of a workspace says it has a task list (REQ-936: the summary alone).
+    fn has_task_list(&self, workspace: &str) -> bool {
+        self.session.as_ref().is_some_and(|s| {
+            s.workspaces
+                .iter()
+                .any(|w| w.id == workspace && w.tasks.is_some())
+        })
+    }
+
+    /// `T`: the tasks of the highlighted workspace in place of its panels, or the panels back (REQ-926).
+    fn toggle_tasks(&mut self) -> After {
+        if self.tasks.take().is_some() {
+            return After::Continue;
+        }
+        match self.selected_summary() {
+            Some(w) if w.tasks.is_some() => {
+                let id = w.id.clone();
+                self.tasks = Some(tasks::TasksView::new(&id));
+            }
+            Some(_) => self.flash("este workspace no tiene lista de tareas"),
+            None => {}
+        }
+        After::Continue
+    }
+
+    /// The view is not for a workspace that is not the highlighted one, nor for one whose row has no list.
+    fn drop_stale_tasks(&mut self) {
+        let stale = self.tasks.as_ref().is_some_and(|v| {
+            self.selected_id().as_deref() != Some(v.workspace())
+                || !self.has_task_list(v.workspace())
+        });
+        if stale {
+            self.tasks = None;
+        }
+    }
+
+    /// A key while the tasks view is shown: every key is the view's, a chord with Ctrl or Alt is none (REQ-928).
+    fn tasks_key(&mut self, ev: KeyEvent) -> After {
+        let Some(mut view) = self.tasks.take() else {
+            return After::Continue;
+        };
+        if ev
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            self.tasks = Some(view);
+            return After::Continue;
+        }
+        let doc = self.task_doc(view.workspace()).cloned();
+        match view.press(doc.as_ref(), ev.code) {
+            tasks::Outcome::Stay => {
+                self.tasks = Some(view);
+                After::Continue
+            }
+            tasks::Outcome::Close => After::Continue,
+            tasks::Outcome::File(path) => self.open_file(&path, None),
+        }
+    }
+
+    /// What the tasks view wants the daemon to do, for the loop to send (REQ-941 included).
+    pub fn take_task_asks(&mut self) -> Vec<tasks::Ask> {
+        self.drop_stale_tasks();
+        let Some(workspace) = self.tasks.as_ref().map(|v| v.workspace().to_owned()) else {
+            return Vec::new();
+        };
+        let (have, listed, now) = (
+            self.task_doc(&workspace).is_some(),
+            self.has_task_list(&workspace),
+            self.now_ms,
+        );
+        let Some(view) = self.tasks.as_mut() else {
+            return Vec::new();
+        };
+        view.want(have, listed, now);
+        view.take_asks()
+    }
+
+    pub fn tasks_flash(&mut self, text: &str) {
+        self.flash = text.to_owned();
     }
 
     /// What the diff wants the daemon to do, for the loop to send.
@@ -1407,8 +1501,9 @@ impl View {
                 }
                 // The terminal client does not open artifacts: the phone is where they are seen (OPEN-57).
                 Node::Artifacts(_) => {}
-                // The tasks view of the terminal client is N180f; until then the node is not asked for.
-                Node::Tasks(_) => {}
+                Node::Tasks(t) => {
+                    self.task_docs.insert(id, t);
+                }
                 Node::Conversation(c) => {
                     // The older items that were asked for stay before the node's (REQ-567).
                     let ui = self.conv_ui.entry(id.clone()).or_default();
@@ -1433,10 +1528,12 @@ impl View {
             self.conv_ui.remove(id);
             self.diffs.remove(id);
             self.commit_lists.remove(id);
+            self.task_docs.remove(id);
             if self.session.as_ref().is_some_and(|s| s.head.id == *id) {
                 self.session = None;
             }
         }
+        self.drop_stale_tasks();
         self.watch_jobs();
         self.note_painted();
         self.note_left_alt();
@@ -3669,6 +3766,9 @@ impl View {
         if self.pick_swap {
             return self.swap_pick_key(ev);
         }
+        if self.tasks.is_some() {
+            return self.tasks_key(ev);
+        }
         if self.diff_typing() {
             return self.diff_key(ev);
         }
@@ -4070,6 +4170,9 @@ impl View {
                 Level::Terminal => {}
             },
             (Mode::Workspaces, Key::Changes) => return self.toggle_diff(),
+            (Mode::Workspaces, Key::Tasks) if level != Level::Terminal => {
+                return self.toggle_tasks();
+            }
             (Mode::Workspaces, Key::NewPane | Key::SplitRow | Key::SplitCol)
                 if level == Level::Panels =>
             {
@@ -4788,6 +4891,10 @@ impl View {
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        // The tasks view covers the panels: a click does not reach what it hides (REQ-934).
+        if self.tasks.is_some() {
+            return After::Continue;
+        }
         if self.help {
             self.help = false;
             return After::Continue;
@@ -4953,6 +5060,9 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if self.tasks.is_some() {
+            return After::Continue;
+        }
         if self.viewer_gets(x, y)
             && let Some(v) = self.viewer.as_mut()
         {
@@ -6437,6 +6547,22 @@ impl View {
             );
         }
 
+        // The tasks view takes the place of the panels, and the whole screen when it is narrow (REQ-926, REQ-930).
+        if let Some(tv) = &self.tasks {
+            let rect = if cols >= SINGLE_BELOW {
+                (
+                    SIDEBAR + 1,
+                    1,
+                    (cols - SIDEBAR - 1).saturating_sub(self.tree_w()),
+                    rows.saturating_sub(2),
+                )
+            } else {
+                (0, 0, cols, rows.saturating_sub(1))
+            };
+            g.clear_box(rect);
+            tv.draw(&mut g, self.task_doc(tv.workspace()), rect, self.now_ms);
+        }
+
         // The status bar.
         for x in 0..cols {
             g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(look::panel()));
@@ -6453,7 +6579,13 @@ impl View {
             .as_ref()
             .filter(|_| self.viewer_overlay() || self.viewer_typing())
             .map(Viewing::hint);
+        let tasks_hint = self.tasks.as_ref().map(tasks::TasksView::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
+            _ if tasks_hint.is_some() => (
+                " TAREAS ",
+                look::blue(),
+                tasks_hint.as_deref().unwrap_or_default(),
+            ),
             _ if viewer_hint.is_some() => (
                 " LEER ",
                 look::cyan(),
@@ -7251,6 +7383,10 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
         "bajar o subir el grupo, o el repositorio del workspace dentro de su grupo",
     ),
     ("d", "ver sus cambios"),
+    (
+        "T",
+        "sus tareas: el orden, el bucle del agente y la evidencia",
+    ),
     ("a", "avisos"),
     ("m", "enlace con el teléfono"),
     (",", "ajustes"),
@@ -7281,6 +7417,10 @@ const PANEL_KEYS: &[(&str, &str)] = &[
         "abrir una carpeta · worktree nuevo · subir el worktree · archivos",
     ),
     ("d", "los cambios como un panel: abre, enfoca o cierra"),
+    (
+        "T",
+        "las tareas en lugar de los paneles (j k d b u L e, esc vuelve)",
+    ),
     ("a m ,", "avisos · teléfono · ajustes"),
     ("esc", "volver a los workspaces"),
 ];
@@ -7690,6 +7830,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('n') => Key::NewPane,
         KeyCode::Char('N') => Key::NewProgram,
         KeyCode::Char('d') => Key::Changes,
+        KeyCode::Char('T') => Key::Tasks,
         KeyCode::Char('x') => Key::Close,
         KeyCode::Char('X') => Key::DismissAll,
         KeyCode::Char('f') => Key::Full,
@@ -7923,6 +8064,56 @@ fn serve_views(view: &mut View, client: &mut Client) {
                 "No se pudo abrir el panel del visor: {}",
                 e.message
             ));
+        }
+    }
+}
+
+/// Send what the tasks view asked for: its node, a change of a task, the loop on or off. What fails is
+/// said in the footer; the node and the patches that follow are what the view draws.
+fn serve_tasks(view: &mut View, client: &mut Client) {
+    for ask in view.take_task_asks() {
+        let reply = match ask {
+            tasks::Ask::Open(workspace) => {
+                match client.cmd_within(Cmd::OpenTasks { workspace }, ASK_WAIT) {
+                    Ok(Ok(Some(r))) => {
+                        if let Some(node) = r["node"].as_str() {
+                            let _ = client.open(node);
+                        }
+                        continue;
+                    }
+                    other => other,
+                }
+            }
+            tasks::Ask::Edit {
+                workspace,
+                op,
+                id,
+                text,
+            } => client.cmd_within(
+                Cmd::TasksEdit {
+                    workspace,
+                    op,
+                    id,
+                    text,
+                },
+                ASK_WAIT,
+            ),
+            tasks::Ask::LoopOn { workspace, max } => client.cmd_within(
+                Cmd::TasksLoopOn {
+                    workspace,
+                    max: Some(max),
+                    pane: None,
+                },
+                ASK_WAIT,
+            ),
+            tasks::Ask::LoopOff(workspace) => {
+                client.cmd_within(Cmd::TasksLoopOff { workspace }, ASK_WAIT)
+            }
+        };
+        match reply {
+            Ok(Err(e)) => view.tasks_flash(&format!("✗ {}", e.message)),
+            Err(e) => view.tasks_flash(&format!("✗ {e}")),
+            Ok(Ok(_)) => {}
         }
     }
 }
@@ -8705,6 +8896,7 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        serve_tasks(&mut view, &mut client);
         serve_views(&mut view, &mut client);
         for repo in view.take_worktree_asks() {
             let reply = client.cmd_within(
@@ -8786,6 +8978,8 @@ pub fn run() -> Result<(), String> {
             let after = match event::read().map_err(|e| e.to_string())? {
                 Event::Key(ev) if ev.kind == KeyEventKind::Press => view.press_key(ev),
                 Event::Paste(text) => view.paste(&text),
+                // what the tasks view covers is not reached by the mouse either (selecting, dragging)
+                Event::Mouse(_) if view.tasks.is_some() => After::Continue,
                 Event::Mouse(m) => {
                     let (cols, rows) = (cols as usize, rows as usize);
                     let (x, y) = (m.column as usize, m.row as usize);
@@ -9763,6 +9957,200 @@ mod tests {
             "{text}"
         );
         assert_eq!(until, 8000 + NOTICE_MS);
+    }
+
+    /// The fixture session with a list in its first workspace's row, and the `tasks` node of that list when asked.
+    fn tasks_docs(with_node: bool) -> Vec<serde_json::Value> {
+        let mut docs = fixture_docs();
+        docs[0]["workspaces"][0]["tasks"] = serde_json::json!({"done": 2, "total": 5});
+        if with_node {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../contract/fixtures/daemon/snapshot-tasks.json");
+            let mut node =
+                serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap())
+                    .unwrap()["node"]
+                    .clone();
+            node["workspace"] = docs[0]["workspaces"][0]["id"].clone();
+            docs.push(node);
+        }
+        docs
+    }
+
+    fn tasks_view(with_node: bool) -> View {
+        let mut v = View::new("fixtures");
+        v.set_size(120, 30);
+        v.sync(tasks_docs(with_node).iter());
+        v
+    }
+
+    /// REQ-926, REQ-934: `T` shows the tasks of the highlighted workspace in place of its panels and `esc` brings
+    /// them back; a workspace with no list says so; nothing of the daemon's layout is touched.
+    #[test]
+    fn t_shows_the_tasks_of_the_workspace_in_place_of_its_panels_and_esc_brings_them_back() {
+        let mut v = tasks_view(true);
+        let panels = v.plain(120, 30);
+        assert_eq!(v.press_key(plain(KeyCode::Char('T'))), After::Continue);
+        assert!(v.tasks.is_some());
+        let rows: Vec<String> = v.plain(120, 30).lines().map(str::to_owned).collect();
+        let at = |s: &str| {
+            rows.iter()
+                .position(|r| r.contains(s))
+                .unwrap_or_else(|| panic!("{s} in {rows:#?}"))
+        };
+        assert!(
+            rows[1]
+                .chars()
+                .skip(SIDEBAR + 1)
+                .collect::<String>()
+                .contains("tareas"),
+            "in the place of the panels: {}",
+            rows[1]
+        );
+        assert!(at(" t3 ") > 1 && rows[at(" t3 ")].contains("← t1, t2"));
+        assert!(
+            rows.last().unwrap().contains("TAREAS"),
+            "{}",
+            rows.last().unwrap()
+        );
+        assert!(
+            rows[2..6].iter().any(|r| r.contains("feat/login")),
+            "the sidebar stays beside it: {rows:#?}"
+        );
+        assert_ne!(v.plain(120, 30), panels);
+        // the view's keys are its own: `x` does not close the workspace, `d` does not open the diff
+        let before = v.session.as_ref().unwrap().workspaces.len();
+        assert_eq!(v.press_key(plain(KeyCode::Char('x'))), After::Continue);
+        assert_eq!(v.press_key(plain(KeyCode::Char('d'))), After::Continue);
+        assert_eq!(v.session.as_ref().unwrap().workspaces.len(), before);
+        assert!(v.diff.is_none() && v.manage.is_none() && v.tasks.is_some());
+        // a chord with Ctrl is none of the view's
+        assert_eq!(
+            v.take_task_asks().len(),
+            1,
+            "`d` is the view's: it asks to mark the task done"
+        );
+        assert_eq!(
+            v.press_key(key(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            After::Continue
+        );
+        assert!(v.take_task_asks().is_empty(), "no ask from a chord");
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.tasks.is_none());
+        assert_eq!(v.plain(120, 30), panels, "the panels are back as they were");
+        // the second workspace has no list
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('T')));
+        assert!(
+            v.tasks.is_none() && v.flash.contains("no tiene lista"),
+            "{}",
+            v.flash
+        );
+    }
+
+    /// REQ-934: the view covers the panels, and a click or the wheel does not reach what it hides: the
+    /// keyboard does not end up in a shell nobody can see.
+    #[test]
+    fn a_click_or_the_wheel_on_the_tasks_view_does_not_reach_the_panels_under_it() {
+        let mut v = tasks_view(true);
+        v.press_key(plain(KeyCode::Char('T')));
+        let (focus, typing, selected) = (v.focus, v.typing, v.selected);
+        for (x, y) in [(SIDEBAR + 5, 4), (SIDEBAR + 40, 10), (SIDEBAR + 2, 1)] {
+            assert_eq!(v.click(x, y, 120, 30), After::Continue);
+            assert_eq!(v.scroll(true, x, y, 120, 30), After::Continue);
+            assert_eq!(v.scroll(false, x, y, 120, 30), After::Continue);
+        }
+        assert_eq!((v.focus, v.typing, v.selected), (focus, typing, selected));
+        assert!(v.tasks.is_some() && !v.typing);
+        // after `esc` the keys are the workspace's again, not a shell's
+        v.press_key(plain(KeyCode::Esc));
+        assert!(!v.typing);
+    }
+
+    /// REQ-930: under 64 columns the view takes the screen.
+    #[test]
+    fn on_a_narrow_screen_the_tasks_view_takes_the_whole_screen() {
+        let mut v = tasks_view(true);
+        v.set_size(60, 20);
+        v.press_key(plain(KeyCode::Char('T')));
+        let rows: Vec<String> = v.plain(60, 20).lines().map(str::to_owned).collect();
+        assert!(rows[0].trim_start().starts_with("tareas"), "{}", rows[0]);
+        assert!(rows.iter().all(|r| r.chars().count() <= 60));
+        assert!(rows[2..8].iter().any(|r| r.contains(" t1 ")), "{rows:#?}");
+        assert!(
+            !rows[1..].iter().any(|r| r.contains("permiso")),
+            "no sidebar legend over it"
+        );
+        v.press_key(plain(KeyCode::Esc));
+        assert!(v.tasks.is_none());
+    }
+
+    /// REQ-928, REQ-936: the keys ask the daemon for what they say, and `e` leaves for the viewer with the list's file.
+    #[test]
+    fn the_keys_of_the_tasks_view_become_commands_and_e_reads_the_file() {
+        let mut v = tasks_view(true);
+        let ws = v.selected_id().unwrap();
+        v.press_key(plain(KeyCode::Char('T')));
+        v.press_key(plain(KeyCode::Char('d')));
+        v.press_key(plain(KeyCode::Char('L')));
+        v.press_key(plain(KeyCode::Enter));
+        assert_eq!(
+            v.take_task_asks(),
+            [
+                tasks::Ask::Edit {
+                    workspace: ws.clone(),
+                    op: contract::tasks::TaskOp::Done,
+                    id: "t1".into(),
+                    text: None
+                },
+                tasks::Ask::LoopOn {
+                    workspace: ws.clone(),
+                    max: 20
+                },
+            ]
+        );
+        // `e` closes the view and reads the file in the viewer, as a file of the tree is read
+        match v.press_key(plain(KeyCode::Char('e'))) {
+            After::ReadMarkdown { workspace, path } => {
+                assert_eq!(workspace, ws);
+                assert_eq!(
+                    Path::new(&path).file_name(),
+                    identity::tasks_path(Path::new("")).file_name(),
+                    "{path}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(v.tasks.is_none());
+    }
+
+    /// REQ-941: when the node goes while the row says there is a list it is asked for again, not at every frame;
+    /// a row with no list closes the view.
+    #[test]
+    fn the_tasks_node_is_asked_for_again_when_it_goes_and_a_row_with_no_list_ends_the_view() {
+        let mut v = tasks_view(true);
+        let ws = v.selected_id().unwrap();
+        v.press_key(plain(KeyCode::Char('T')));
+        assert!(v.take_task_asks().is_empty(), "the node is there");
+        // the daemon dropped it (a list that was gone for a moment)
+        v.sync(tasks_docs(false).iter());
+        assert!(v.tasks.is_some() && v.task_doc(&ws).is_none());
+        v.set_now(10_000);
+        assert_eq!(v.take_task_asks(), [tasks::Ask::Open(ws.clone())]);
+        assert!(v.take_task_asks().is_empty(), "not at every frame");
+        assert!(v.plain(120, 30).contains("leyendo la lista"));
+        v.set_now(13_000);
+        assert_eq!(v.take_task_asks(), [tasks::Ask::Open(ws.clone())]);
+        // it came back, and the row says there is no list any more: the view ends
+        v.sync(tasks_docs(true).iter());
+        assert!(v.take_task_asks().is_empty());
+        let mut none = fixture_docs();
+        none[0]["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("tasks");
+        none[0]["rev"] = serde_json::json!(99);
+        v.sync(none.iter());
+        assert!(v.tasks.is_none(), "the row has no list");
     }
 
     fn prs_list() -> serde_json::Value {
