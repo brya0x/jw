@@ -1057,7 +1057,7 @@ What a restored answer sends (`engine::answer` starts the engine as `send` does,
 - REQ-856 WHEN the daemon stops, THE daemon SHALL, after the save of REQ-638's order, end at once the process group of every engine that has an `ask` waiting, without closing its input or waiting, and SHALL close the others as REQ-638 says.
 - REQ-857 WHEN an engine ends by itself with an `ask` waiting, THE daemon SHALL keep the `ask` as restored, with its attention, instead of clearing it, and the next answer SHALL start the engine as REQ-850 to REQ-852.
 - REQ-858 WHEN the transcript has a `tool_use` with no `tool_result` in a turn that is over, or a `tool_result` with `toolDenialKind: "interrupted"`, THE daemon SHALL set the tool `failed` with `lost` true and the summary «sin resultado · pudo terminar»; IF the engine of the daemon ends by itself, THEN its running tools SHALL be `failed`, without `lost`, with «El motor se detuvo» as today.
-- REQ-859 THE daemon SHALL NOT draw what Claude writes to settle an orphan: the `assistant` line of `model: "<synthetic>"` and the `tool_result` with `toolDenialKind: "interrupted"` of a tool whose answer the person gave.
+- REQ-859 THE daemon SHALL NOT draw what Claude writes to settle an orphan as lines of the conversation: the `assistant` line of `model: "<synthetic>"` (which also names no model) is dropped, and the `tool_result` with `toolDenialKind: "interrupted"` is not what the tool said but the `lost` mark of REQ-858, never a failure with Claude's text.
 - REQ-860 THE terminal client and the phone SHALL draw a tool with `lost` with `⏸`, dim, and its summary, not as a failure; a client that does not know `lost` SHALL draw it as `failed`.
 - REQ-861 THE contract SHALL gain `Ask.restored` and the tool's `lost` as optional booleans, and no node's `v` SHALL change (REQ-7).
 
@@ -1961,7 +1961,7 @@ REQ-855, REQ-860 by N179e and N179f: `crates/jw/src/tui/conversation.rs` tests (
 | N179a ✓ | `Ask.restored`, tool `lost`, `Saved.pending`, the restore at open of a question, a plan and a permission, the marks | 846-849, 861 | `contract/`, `crates/contract`, `android/contract`, `crates/daemon/src/{conversation,engine,transcript}.rs` |
 | N179b ✓ | the answers of a restored `ask` as a message, the mode, the allowance | 850-854 | `crates/daemon/src/{conversation,engine}.rs` |
 | N179c ✓ | `jw stop` ends the group of an engine with something pending; an engine that ends by itself keeps its `ask` | 856, 857 | `crates/daemon/src/{engine,core,conversation}.rs` |
-| N179d | a tool without result is `lost`; the lines that settle an orphan are not drawn | 858, 859 | `crates/daemon/src/transcript.rs` |
+| N179d ✓ | a tool without result is `lost`; the lines that settle an orphan are not drawn | 858, 859 | `crates/daemon/src/transcript.rs` |
 | N179e | the terminal client: the note above a restored `ask` and `⏸` | 855, 860 | `crates/jw/src/tui/conversation.rs` |
 | N179f | the phone: the row of the card and `⏸` | 855, 860 | `android/{client-core,app}/` |
 | N174 | the file tree picks files for `@`: `space` marks, `@` writes `@path` in the agent's field; spec + prototype `mention-from-tree.html` (approved by the user 2026-10-23); version 0.0.43 | 837-843 | `docs/spec.md`, `docs/prototypes/mention-from-tree.html` |

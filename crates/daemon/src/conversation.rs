@@ -962,11 +962,17 @@ impl State {
     /// were interrupted.
     fn settle_running(&mut self) {
         for item in &mut self.items {
-            if let Item::Tool { state, summary, .. } = item
+            if let Item::Tool {
+                state,
+                summary,
+                lost,
+                ..
+            } = item
                 && *state == ToolState::Run
             {
                 *state = ToolState::Failed;
-                *summary = Some("sin resultado".into());
+                *summary = Some(crate::transcript::LOST.into());
+                *lost = true;
             }
         }
     }
@@ -3658,7 +3664,7 @@ mod tests {
         assert!(s.expire_follow(1_001 + FOLLOW_SILENCE_MS));
         assert!(!s.expire_follow(2_000 + FOLLOW_SILENCE_MS), "once");
         assert_eq!(node_of(&s).following, None);
-        assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Failed, summary: Some(x), .. } if x == "sin resultado")));
+        assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Failed, summary: Some(x), lost: true, .. } if x == crate::transcript::LOST)));
     }
 
     #[test]
