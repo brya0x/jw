@@ -216,7 +216,7 @@ fn the_engine_is_started_with_the_stop_hook_alone_and_its_panes_id() {
             .unwrap()
             .keys()
             .collect::<Vec<_>>(),
-        ["Stop"]
+        ["Stop", "UserPromptSubmit"]
     );
 }
 

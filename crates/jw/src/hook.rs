@@ -31,6 +31,16 @@ pub fn run(event: &str) -> ExitCode {
         // Not in a pane of ours: nothing to tell.
         return ExitCode::SUCCESS;
     };
+    // The nudge needs no daemon (REQ-917): one line that names the skill, when it is installed.
+    if event == AgentEvent::UserPromptSubmit && crate::agent::tasks_skill_installed() {
+        println!(
+            "{}",
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": crate::agent::tasks_nudge(),
+            }})
+        );
+    }
     let body = payload();
     let field = |name: &str| body[name].as_str().map(str::to_owned);
     let Ok(mut client) = wire::Client::connect(&identity::socket_path(), &identity::peer("hook"))

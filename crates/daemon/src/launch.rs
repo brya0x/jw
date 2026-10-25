@@ -121,12 +121,16 @@ fn hook_group(exe: &str, event: &str, matcher: Option<&str>) -> serde_json::Valu
     json!([group])
 }
 
-/// The hooks an engine is started with (REQ-913): only `Stop`, which is what a task loop answers.
-/// A conversation takes its attention from the engine's own events, so the rest of `hook_settings`
-/// would raise each one twice.
+/// The hooks an engine is started with (REQ-913): `Stop`, which a task loop answers, and
+/// `UserPromptSubmit`, whose answer names the skill of the task lists (REQ-917). A conversation takes its
+/// attention from the engine's own events, so the rest of `hook_settings` would raise each one twice.
 pub fn loop_hook_settings(exe: &Path) -> String {
     let exe = quote("/bin/sh", &exe.to_string_lossy());
-    json!({"hooks": {"Stop": hook_group(&exe, "stop", None)}}).to_string()
+    json!({"hooks": {
+        "Stop": hook_group(&exe, "stop", None),
+        "UserPromptSubmit": hook_group(&exe, "user_prompt_submit", None),
+    }})
+    .to_string()
 }
 
 /// Write the engine's hooks to `<state>/claude-loop-hooks.json`, beside the agent's.
@@ -205,13 +209,20 @@ mod tests {
 
     /// REQ-913: the engine is given the hook of a task loop and no other.
     #[test]
-    fn the_engines_hooks_are_the_stop_hook_alone() {
+    fn the_engines_hooks_are_the_stop_and_the_prompt_hooks_alone() {
         let v: serde_json::Value =
             serde_json::from_str(&loop_hook_settings(Path::new("/bin/jw"))).unwrap();
         let hooks = v["hooks"].as_object().unwrap();
-        assert_eq!(hooks.keys().collect::<Vec<_>>(), ["Stop"]);
+        assert_eq!(
+            hooks.keys().collect::<Vec<_>>(),
+            ["Stop", "UserPromptSubmit"]
+        );
         let command = hooks["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
         assert!(command.ends_with(" hook stop"), "{command}");
+        let nudge = hooks["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(nudge.ends_with(" hook user_prompt_submit"), "{nudge}");
         assert_eq!(hooks["Stop"][0]["hooks"][0]["timeout"], 5);
         // the panes' own file is a different one, with the rest
         let all: serde_json::Value =

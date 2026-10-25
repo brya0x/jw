@@ -27,6 +27,8 @@ impl Env {
         c.env(identity::env_var("STATE_DIR"), self.dir.join("state"))
             .env(identity::env_var("SOCKET"), self.dir.join("s.sock"))
             .env("SHELL", "/bin/sh")
+            // never the person's own `~/.claude`: a skill is looked for and written here (N180e)
+            .env("CLAUDE_CONFIG_DIR", self.dir.join("claude-config"))
             .stdin(Stdio::null());
         c
     }
