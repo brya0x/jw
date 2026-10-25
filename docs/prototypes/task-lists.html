@@ -48,6 +48,8 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 .row1.cur{background:var(--sel);border-left-color:var(--blue)}
 .emp{color:var(--dim);font-size:12px;padding:6px 14px 6px 28px;font-style:italic}
 .lnk{display:block;width:100%;text-align:left;background:none;border:0;color:var(--dim);font:inherit;font-size:12px;padding:8px 14px;cursor:pointer;min-height:40px}
+.tabs2{display:flex;gap:6px;padding:0 14px 6px}.tabs2 button{flex:1;min-height:36px;background:#222630;border:1px solid var(--line);border-radius:10px;color:var(--dim);font:inherit;font-size:12.5px}
+.tabs2 button[aria-selected="true"]{color:#e6e9ef;border-color:var(--blue);background:var(--sel)}
 .card{margin:6px 14px 8px;padding:10px 12px;background:#232830;border:1px solid var(--line);border-radius:10px}
 .card .l1{display:flex;align-items:center;gap:8px}.card .l1 b{color:#e6e9ef;flex:1}
 .card .l2{color:var(--dim);font-size:11.5px;margin-top:4px}
@@ -72,7 +74,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 #push.on{display:block}#push b{display:block;color:#e6e9ef;font-size:11px;font-weight:700;margin-bottom:2px}
 </style></head><body>
 <h1>jw · listas de tareas</h1>
-<p class="note">Prototipo para aprobar antes del spec (N180). El objetivo: <b>el agente de un worktree trabaja su lista de tareas en bucle hasta terminar todo el proceso</b>, y la persona lo revisa en una sección de jw. <b>Siempre hay una tarea de pruebas al final</b>, añadida sola aunque la persona no la escriba: corre los tests y el CI del proyecto y recoge el resultado y la evidencia. <b>jw avisa a la persona cuando esa tarea termina o el bucle se detiene.</b> jw da capacidades, no un flujo: la lista es <b>un archivo de texto</b> que se edita a mano, <code>jw tasks</code> es el CLI que el agente llama (como <code>jw ls</code> o <code>jw prompt</code>) y el bucle es <b>el gancho de parada que jw ya instala</b>, activado por workspace y nunca por defecto. Abajo hay cuatro workspaces con lista: <b>sales-assist</b> sin activar y sin la tarea de pruebas escrita (se añade al activar), <b>api-v2</b> con el bucle en marcha, <b>checkout</b> parado por una tarea bloqueada y <b>export-pdf</b> terminado con su evidencia. Prueba <b>salta a las pruebas</b> y luego <b>termina la tarea</b> o <b>las pruebas fallan</b> en api-v2: el aviso sale en la barra de la terminal, en un banner del teléfono y en <code>avisos N</code>. La terminal, el teléfono, el CLI y el archivo leen el mismo estado.</p>
+<p class="note">Prototipo para aprobar antes del spec (N180). El objetivo: <b>el agente de un worktree trabaja su lista de tareas en bucle hasta terminar todo el proceso</b>, y la persona lo revisa en jw, <b>dentro de ese workspace</b> (las tareas son del worktree o carpeta, no una entidad aparte). <b>Siempre hay una tarea de pruebas al final</b>, añadida sola aunque la persona no la escriba: corre los tests y el CI del proyecto y recoge el resultado y la evidencia. <b>jw avisa a la persona cuando esa tarea termina o el bucle se detiene.</b> jw da capacidades, no un flujo: la lista es <b>un archivo de texto</b> que se edita a mano, <code>jw tasks</code> es el CLI que el agente llama (como <code>jw ls</code> o <code>jw prompt</code>) y el bucle es <b>el gancho de parada que jw ya instala</b>, activado por workspace y nunca por defecto. Abajo hay cuatro workspaces con lista: <b>sales-assist</b> sin activar y sin la tarea de pruebas escrita (se añade al activar), <b>api-v2</b> con el bucle en marcha, <b>checkout</b> parado por una tarea bloqueada y <b>export-pdf</b> terminado con su evidencia. Prueba <b>salta a las pruebas</b> y luego <b>termina la tarea</b> o <b>las pruebas fallan</b> en api-v2: el aviso sale en la barra de la terminal, en un banner del teléfono y en <code>avisos N</code>. La terminal, el teléfono, el CLI y el archivo leen el mismo estado.</p>
 
 <div class="ctl">
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde vive el archivo</legend>
@@ -85,9 +87,9 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
     <label><input type="radio" name="fmt" data-o="fmt" value="json"> <span>JSON, una tarea por línea</span></label>
   </fieldset>
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde está la sección</legend>
-    <label><input type="radio" name="sec" data-o="sec" value="zone" checked> <span><b class="rec">zona TAREAS</b> bajo los workspaces, como CONVERSACIONES (recomendado)</span></label>
-    <label><input type="radio" name="sec" data-o="sec" value="screen"> <span>pantalla aparte (<kbd>T</kbd>; ☑ en el teléfono)</span></label>
-    <label><input type="radio" name="sec" data-o="sec" value="row"> <span>sin sección: una marca <code>3/7</code> en la fila del workspace</span></label>
+    <label><input type="radio" name="sec" data-o="sec" value="ws" checked> <span><b class="rec">dentro del workspace</b>: marca <code>3/8</code> en su fila y una vista «tareas» junto al agente (recomendado)</span></label>
+    <label><input type="radio" name="sec" data-o="sec" value="zone"> <span>zona TAREAS aparte bajo los workspaces</span></label>
+    <label><input type="radio" name="sec" data-o="sec" value="screen"> <span>pantalla resumen de todas (<kbd>T</kbd>; ☑ en el teléfono)</span></label>
   </fieldset>
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>máximo de vueltas por defecto</legend>
     <label><input type="radio" name="max" data-o="max" value="20" checked> <span><b class="rec">20</b> (recomendado)</span></label>
@@ -131,7 +133,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 <div class="row">
   <div>
     <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
-    <p class="note" style="max-width:800px">Teclas (la terminal tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · <kbd>↵</kbd> o <kbd>l</kbd> entrar en la lista · <kbd>T</kbd> ir a las tareas · <kbd>L</kbd> activa o detiene el bucle (pide el máximo de vueltas) · dentro de la lista: <kbd>j</kbd><kbd>k</kbd> elegir tarea, <kbd>d</kbd> hecha, <kbd>b</kbd> bloquear (pide el motivo), <kbd>u</kbd> reabrir o desbloquear, <kbd>e</kbd> abrir el archivo en el visor, <kbd>esc</kbd> vuelve. Ninguna lleva Alt.</p>
+    <p class="note" style="max-width:800px">Teclas (la terminal tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · <kbd>T</kbd> abre las tareas del workspace (con la zona, <kbd>↵</kbd> entra en la lista) · <kbd>L</kbd> activa o detiene el bucle (pide el máximo de vueltas) · dentro de la lista: <kbd>j</kbd><kbd>k</kbd> elegir tarea, <kbd>d</kbd> hecha, <kbd>b</kbd> bloquear (pide el motivo), <kbd>u</kbd> reabrir o desbloquear, <kbd>e</kbd> abrir el archivo en el visor, <kbd>esc</kbd> vuelve. Ninguna lleva Alt.</p>
   </div>
   <div>
     <div class="phone" id="phone">
@@ -141,7 +143,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
       <div id="push" data-pushgo="1"></div>
       <div id="toast"></div>
     </div>
-    <p class="note" style="max-width:390px">Teléfono: toca una lista para entrar; toca una tarea para su hoja (hecha, bloquear, reabrir); el botón de la tarjeta activa o detiene el bucle.</p>
+    <p class="note" style="max-width:390px">Teléfono: toca un workspace con lista para entrar (pestaña «tareas»); toca una tarea para su hoja (hecha, bloquear, reabrir); el botón de la tarjeta activa o detiene el bucle.</p>
   </div>
 </div>
 
@@ -167,9 +169,9 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>Probar y recolectar.</b> El agente corre lo que el proyecto ya tiene (sus tests y el CI de la rama, que jw ya vigila con <code>ci_failed</code>) y lo anota con <code>jw tasks note fin "cargo test: 214 ok"</code>. La evidencia se guarda <b>bajo la tarea en el archivo</b> o en <code>.jw/evidence.md</code> (decisión) y la sección la muestra debajo de la tarea. Si las pruebas fallan, el agente no pregunta: bloquea <code>fin</code> con el motivo y el bucle se detiene. Marcarla hecha <b>sin ninguna nota</b> no se impide (jw no juzga las pruebas), pero la sección lo dice en amarillo: «sin evidencia anotada».</li>
   <li><b>Revisión con el advisor (decisión).</b> Con «sí», el texto de <code>fin</code> añade <i>«antes de marcarla, pide revisión al advisor»</i> y el agente anota su veredicto como una nota más. <b>jw no implementa nada para esto</b>: es texto de la tarea, que el agente cumple con la herramienta que ya tiene; con «no», el texto no lo menciona. Se ve en el archivo y en lo que lee el agente.</li>
   <li><b>Avisos (la persona se entera).</b> Mientras el bucle corre no hay «terminó» por turno: hoy cada parada levanta <code>AgentDone</code> y durante el bucle <code>jw hook stop</code> lo retiene hasta el final. Cuando el bucle <b>termina</b> (la tarea final hecha) se levanta <span class="c-green">✓</span> (<code>AgentDone</code>); cuando <b>se detiene</b> (bloqueada, sin avance, máximo de vueltas, nada listo) se levanta <span class="c-yellow">?</span>; mientras espera un permiso, <span class="c-red">!</span> (el <code>Permission</code> de siempre). Cuentan en <code>avisos N</code> y en la campana, y en el instante de levantarse salen en la barra de la terminal y en un banner del teléfono que lleva a la lista. <b>Fuera de la app no hay notificación</b>: jw no tiene push (ni en <code>crates/web</code> ni en Android); el teléfono se entera con la app abierta. Un aviso por parada, nunca uno por vuelta.</li>
-  <li><b>La sección:</b> por workspace con lista. Cada fila: la marca de estado (⠋ corre, ✓, ?, ! o ○), el nombre y el progreso <code>3/7</code>. Al entrar: el orden con los niveles y las dependencias, la tarea que corre y en qué panel («panel 2 · claude»), las bloqueadas con su motivo y la línea del bucle (vuelta 4/20, o por qué paró). Es de revisión: marcar hecha, bloquear y reabrir escriben el archivo, igual que a mano. <b>Sin ninguna lista no cambia nada</b>: la zona no aparece.</li>
+  <li><b>Las tareas son del workspace</b> (un worktree, o una carpeta): su archivo está en ese worktree, su bucle lo recorre <b>el agente de ese workspace</b> y la lista no tiene identidad propia, así que no hay un lugar aparte donde «viven las listas». En su fila, la marca de estado (⠋ corre, ✓, ?, ! o ○) y el progreso <code>3/8</code>; dentro, una vista <b>tareas</b> junto al agente y la shell (<kbd>T</kbd>; en el teléfono, una pestaña). Ahí: el orden con los niveles y las dependencias, la tarea que corre y en qué panel («panel 2 · claude»), las bloqueadas con su motivo, la evidencia de las pruebas y la línea del bucle (vuelta 4/20, o por qué paró). Es de revisión: marcar hecha, bloquear y reabrir escriben el archivo, igual que a mano. <b>Sin lista no cambia nada</b>: ninguna fila lleva marca. Una vista de resumen de todos los workspaces (decisión) es solo una forma de verlas juntas, no otro lugar donde están.</li>
   <li><b>Terminal estrecha (&lt; 64 columnas):</b> como el resto (REQ-738): un panel a la vez; la lista ocupa la pantalla y <kbd>esc</kbd> vuelve.</li>
-  <li><b>Teléfono:</b> la zona TAREAS al final de Home (o ☑ en la cabecera con la otra opción); entrar muestra la tarjeta del bucle y las tareas con su nivel. Mismas filas, mismos estados.</li>
+  <li><b>Teléfono:</b> la fila del workspace en Home lleva la misma marca y el progreso; al entrar, la pestaña «tareas» (junto a «agente» y «shell») muestra la tarjeta del bucle y las tareas con su nivel. Con las otras opciones: la zona TAREAS al final de Home o ☑ en la cabecera.</li>
 </ul>
 
 <h2>Lo medido con un claude real (2.1.309, 2026-10-25, detalle en <code>docs/claude-engine.md</code>)</h2>
@@ -192,7 +194,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 <ul class="note">
   <li><b>Dónde vive el archivo.</b> <span class="rec">Recomiendo <code>.jw/tasks.md</code> en el repo del workspace.</span> Se versiona, el agente lo edita como cualquier archivo y se lee en git. Consecuencias: <b>cada worktree tiene su copia</b> (la lista de <code>feat/api-v2</code> viaja con su rama) y las casillas marcadas salen en el diff del PR (útil para revisar; ruido si no lo quieres, se pone en <code>.gitignore</code>). Alternativa: el estado de jw (<code>~/.local/state/jw/tasks/&lt;workspace&gt;.md</code>): no ensucia el repo, pero no se versiona y un agente de otro worktree no la ve.</li>
   <li><b>Formato.</b> <span class="rec">Recomiendo casillas de Markdown.</span> Se lee sin herramienta, el visor de Markdown de jw ya la dibuja y es lo que la persona ya escribe. TOML y JSON son más estrictos pero nadie los escribe a mano a gusto.</li>
-  <li><b>Dónde está la sección.</b> <span class="rec">Recomiendo la zona TAREAS bajo los workspaces</span>, aparece solo si hay alguna lista y sigue el patrón de CONVERSACIONES (chats-area). La pantalla aparte (<kbd>T</kbd>) deja la barra limpia pero esconde los avisos tras una tecla; la marca en la fila no tiene sitio para el orden ni los motivos.</li>
+  <li><b>Dónde está la sección.</b> <span class="rec">Recomiendo dentro del workspace</span>: la lista es de ese worktree y de su agente, y su revisión está donde ya estás trabajando (marca en la fila, vista junto al agente). La zona aparte (como CONVERSACIONES) es el patrón de lo que <i>no</i> es un workspace: aquí repetiría el mismo workspace en otra fila. La pantalla resumen (<kbd>T</kbd>) sirve para ver todas juntas y puede añadirse después sin cambiar nada, porque lee lo mismo.</li>
   <li><b>¿Revisión con el advisor en la tarea final?</b> <span class="rec">Recomiendo sí</span>, como una frase del texto de la tarea y nada más: es la herramienta que los agentes ya usan antes de dar algo por hecho, jw no tiene que implementarla ni conocerla, y quien no la quiera borra la frase del archivo. Con «no» la tarea es solo pruebas y evidencia.</li>
   <li><b>Dónde se anota la evidencia.</b> <span class="rec">Recomiendo en la lista</span> (líneas con sangría bajo la tarea): un solo archivo, se ve en el diff del PR junto a lo que se hizo. Un archivo aparte (<code>.jw/evidence.md</code>) es mejor si la evidencia es larga (salidas completas de tests); la tarea final lo enlaza.</li>
   <li><b>El aviso de «bucle detenido».</b> <span class="rec">Recomiendo reutilizar <code>Question</code></span> (arriba, sin contrato). Un tipo nuevo da una marca propia, pero rompe a los clientes cerrados.</li>
@@ -219,7 +221,7 @@ const clip=(s,n)=>{s=[...String(s)];return n<=0?'':s.length<=n?s.join(''):s.slic
 const wrap=(s,n)=>{const out=[];String(s).split('\n').forEach(p=>{let l='';p.split(' ').forEach(w=>{if(l&&[...(l+' '+w)].length>n){out.push(l);l=w}else l=l?l+' '+w:w});out.push(l)});return out};
 const spin=()=>SPIN[Math.floor(performance.now()/110)%SPIN.length];
 const KINDS={perm:{g:'!',c:'c-red'},ask:{g:'?',c:'c-yellow'},done:{g:'✓',c:'c-green'}};
-const opt={loc:'repo',fmt:'md',sec:'zone',max:'20',blk:'stop',par:'later',adv:'yes',evi:'list'};
+const opt={loc:'repo',fmt:'md',sec:'ws',max:'20',blk:'stop',par:'later',adv:'yes',evi:'list'};
 const fx={cols:100};
 
 /* ---------- the model: pure, no drawing */
@@ -377,6 +379,13 @@ function markPut(S,y,x,L,w){
   const m=markOf(L);
   if(m.g==='spin')S.put(y,x,spin(),m.c);else S.put(y,x,m.g,m.c);
 }
+// the views of a workspace, as its panels: the agent, the shell and (new) its tasks
+function tabsPut(S,x,y,L,active){
+  const p=doneN(L)+'/'+L.tasks.length,m=markOf(L),tl=' tareas '+p+' ';
+  S.put(y,x,' agente ',active==='a'?'c-chip':'c-dim');S.put(y,x+9,' shell ','c-dim');
+  S.put(y,x+16,tl,active==='t'?'c-chip':'c-dim');
+  S.put(y,x+16+tl.length,m.g==='spin'?spin():m.g,m.c);
+}
 function drawSide(S,x0,w,y0){
   const cur=keyOf(ui.sel);let y=y0;
   S.put(y,x0+1,'WORKSPACES','c-dim');y++;
@@ -384,7 +393,7 @@ function drawSide(S,x0,w,y0){
     const on=cur==='w:'+wk.id,L=listOf(wk.id);
     S.put(y,x0+1,wk.panes?'●':'○',wk.panes?'c-green':'c-dim');
     let right=0;
-    if(opt.sec==='row'&&L){const p=doneN(L)+'/'+L.tasks.length;S.put(y,x0+w-3-p.length-1,p,'c-dim');markPut(S,y,x0+w-3,L);right=p.length+3}
+    if(opt.sec==='ws'&&L){const p=doneN(L)+'/'+L.tasks.length;S.put(y,x0+w-3-p.length-1,p,'c-dim');markPut(S,y,x0+w-3,L);right=p.length+3}
     S.put(y,x0+3,clip(wk.name+(wk.branch&&wk.branch!=='main'?' ⎇ '+wk.branch:''),w-8-right),on?'c-blue c-bold':'');
     if(on)S.tint(y,x0,w-1,'c-sel');y++});
   if(opt.sec==='zone'&&withList().length){
@@ -398,7 +407,7 @@ function drawSide(S,x0,w,y0){
   }
   y++;S.put(y,x0+1,'CONVERSACIONES','c-dim');S.put(y,x0+w-3,'2','c-dim');
   S.put(ROWS-4,x0+1,clip('● workspace  ▪ lista de tareas',w-2),'c-dim');
-  S.put(ROWS-3,x0+1,clip(opt.sec==='screen'?'T tareas · L bucle':opt.sec==='row'?'T entra · L bucle':'↵ entra · L bucle',w-2),'c-dim');
+  S.put(ROWS-3,x0+1,clip(opt.sec==='screen'?'T tareas · L bucle':opt.sec==='ws'?'T entra · L bucle':'↵ entra · L bucle',w-2),'c-dim');
 }
 function taskLine(S,x0,w,y,L,r,on){
   const {t,lv}=r,st=stateOf(L,t),[g,gc]=G[st];
@@ -417,7 +426,9 @@ function taskLine(S,x0,w,y,L,r,on){
 }
 function drawList(S,x0,w,y0,id){
   const wk=wsById(id),L=listOf(id),lp=L.loop,n=doneN(L),tot=L.tasks.length;
-  S.put(y0,x0+1,clip(wk.name+(wk.repo?' · '+wk.repo:'')+(wk.branch?' ⎇ '+wk.branch:''),w-3),'c-bold');
+  const tabs=opt.sec==='ws'&&w>=60;
+  S.put(y0,x0+1,clip(wk.name+(wk.repo?' · '+wk.repo:'')+(wk.branch?' ⎇ '+wk.branch:''),w-3-(tabs?30:0)),'c-bold');
+  if(tabs)tabsPut(S,x0+w-30,y0,L,'t');
   S.put(y0+1,x0+1,clip(filePath(wk)+' · '+n+'/'+tot+' ',w-3),'c-dim');
   S.put(y0+1,x0+1+[...(filePath(wk)+' · '+n+'/'+tot+' ')].length,bar(n,tot,Math.max(0,Math.min(14,w-30))),n===tot?'c-green':'c-blue');
   const lc=lp.on?(lp.waiting?'c-red':'c-blue'):lp.stop&&lp.stop.k==='done'?'c-green':lp.stop&&lp.stop.k==='person'?'c-dim':'c-yellow';
@@ -482,7 +493,14 @@ function drawTui(){
     if(ui.mode==='over')drawOver(S,mx,mw,y0);
     else if(L)drawList(S,mx,mw,y0,detId());
     else{const w=wsById(ui.sel.id);if(w){S.put(y0,mx+1,clip(w.name,mw-3),'c-bold');
-      S.put(y0+2,mx+1,clip(listOf(w.id)?'tiene una lista · '+(opt.sec==='row'?'T la abre':'↵ la abre'):'un workspace, como hoy: shell | claude',mw-3),'c-dim')}}
+      const WL=listOf(w.id);
+      if(WL&&opt.sec==='ws'){
+        tabsPut(S,mx+1,y0+1,WL,'a');
+        S.put(y0+3,mx+1,clip('(el panel del agente, como hoy)',mw-3),'c-dim');
+        S.put(y0+5,mx+1,clip(loopLine(WL),mw-3),WL.loop.on?'c-blue':'c-dim');
+        const rl=runLine(WL);if(rl)S.put(y0+6,mx+1,clip('corre ahora: '+rl,mw-3),'c-blue');
+        S.put(y0+8,mx+1,clip('T abre las tareas de este workspace · L bucle',mw-3),'c-dim');
+      }else S.put(y0+2,mx+1,clip(WL?'tiene una lista · ↵ la abre':'un workspace, como hoy: shell | claude',mw-3),'c-dim')}}
   }
   const bx=narrow?0:mx,bw=narrow?COLS:mw,tl=target();
   if(ui.mode==='box'){drawBox(S,bx,8,bw,[['activar el bucle en '+clip(wsById(ui.boxId).name,22),'c-bold'],['máximo de vueltas:',''],[ui.buf+'▏','c-yellow'],['el agente empieza por la primera tarea lista','c-dim']])}
@@ -494,7 +512,7 @@ function drawBar(S){
   const COLS=fx.cols,y=ROWS-1;S.fill(y,0,COLS,'c-sel');
   const chips={nav:ui.sel.t==='t'?' TAREAS ':' WORKSPACE ',list:' LISTA ',over:' TAREAS ',box:' BUCLE ',input:' BLOQUEAR '};
   const chip=chips[ui.mode];S.put(y,0,chip,ui.mode==='nav'||ui.mode==='list'||ui.mode==='over'?'c-chip':'c-chipy');
-  const hints={nav:'j k · ↵ entra · L bucle'+(opt.sec==='screen'?' · T tareas':opt.sec==='row'?' · T abre':''),
+  const hints={nav:'j k · ↵ entra · L bucle'+(opt.sec==='screen'?' · T tareas':opt.sec==='ws'?' · T abre':''),
     list:'j k · d hecha · b bloquea · u reabre · L bucle · e archivo · esc',over:'j k · ↵ entra · L bucle · esc',box:'↵ activa · esc cancela',input:'↵ bloquea · esc cancela'};
   const av=attTotal(),right=av?'avisos '+av:'',room=COLS-chip.length-(right?right.length+2:0)-3;
   const pu=livePush();
@@ -519,7 +537,7 @@ function onTermKey(e){
   if(m==='nav'){
     const L=listOf(ui.sel.id);
     if(k==='j'||k==='ArrowDown')move(1);else if(k==='k'||k==='ArrowUp')move(-1);
-    else if(k==='Enter'||k==='l'||k==='Tab'){if(L&&ui.sel.t==='t')enterList(ui.sel.id);else say(L&&opt.sec==='row'?'T abre su lista':'entra al workspace, como hoy','c-dim')}
+    else if(k==='Enter'||k==='l'||k==='Tab'){if(L&&ui.sel.t==='t')enterList(ui.sel.id);else say(L&&opt.sec==='ws'?'T abre su lista':'entra al workspace, como hoy','c-dim')}
     else if(k==='T'){
       if(opt.sec==='zone'){const t=withList()[0];if(t)ui.sel={t:'t',id:t.id};else say('ninguna lista','c-dim')}
       else if(opt.sec==='screen'){ui.mode='over';ui.oi=0}
@@ -568,7 +586,7 @@ function homeHtml(){
   const av=attTotal(),W=withList();
   let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span>${opt.sec==='screen'&&W.length?`<button class="ib" data-go="over" aria-label="tareas">☑${av?`<span class="bdg">${av}</span>`:''}</button>`:''}<button class="ib">🔔${av?`<span class="bdg">${av}</span>`:''}</button></div><div class="list">`;
   h+=`<div class="sec"><span>WORKSPACES · ${M.ws.length}</span></div>`;
-  M.ws.forEach(w=>{const L=listOf(w.id),chip=opt.sec==='row'&&L?`<span class="mk">${mk(L)} <span class="c-dim">${doneN(L)}/${L.tasks.length}</span></span>`:'';
+  M.ws.forEach(w=>{const L=listOf(w.id),chip=opt.sec==='ws'&&L?`<span class="mk">${mk(L)} <span class="c-dim">${doneN(L)}/${L.tasks.length}</span></span>`:'';
     h+=`<button class="row1" data-ws="${w.id}"><span class="o ${w.panes?'c-green':'c-dim'}">●</span><span class="nm"><b>${esc(w.name)}</b><span>${esc(w.branch||'carpeta')} · ${w.panes} panel${w.panes>1?'es':''}</span></span>${chip}</button>`});
   if(opt.sec==='zone'&&W.length){h+=`<div class="sec"><span>TAREAS · ${W.length}</span></div>`;W.forEach(w=>{h+=listRow(w)})}
   h+=`<div class="sec"><span>CONVERSACIONES · 2</span></div>`;
@@ -582,7 +600,7 @@ function detHtml(){
   const L=listOf(ph.id);if(!L)return homeHtml();
   const w=wsById(ph.id),lp=L.loop,n=doneN(L),tot=L.tasks.length;
   seen(L);
-  let h=`<div class="hd"><button class="ib" data-go="${opt.sec==='screen'?'over':'home'}">‹</button><div class="tt"><b>${esc(w.name)}</b><span class="sub">${esc(filePath(w))}</span></div><button class="ib" data-act="file">⋯</button></div><div class="list">`;
+  let h=`<div class="hd"><button class="ib" data-go="${opt.sec==='screen'?'over':'home'}">‹</button><div class="tt"><b>${esc(w.name)}</b><span class="sub">${esc(filePath(w))}</span></div><button class="ib" data-act="file">⋯</button></div>${opt.sec==='ws'?`<div class="tabs2"><button data-act="agent">agente</button><button data-act="shell">shell</button><button aria-selected="true">tareas ${n}/${tot}</button></div>`:''}<div class="list">`;
   const lc=lp.on?(lp.waiting?'c-red':'c-blue'):lp.stop&&lp.stop.k==='done'?'c-green':lp.stop&&lp.stop.k==='person'?'c-dim':'c-yellow';
   h+=`<div class="card"><div class="l1"><span class="${lc}">${lp.on&&!lp.waiting?`<span class="sp">${SPIN[0]}</span>`:lp.on?'!':lp.stop&&lp.stop.k==='done'?'✓':lp.stop&&lp.stop.k!=='person'?'?':'○'}</span><b>${esc(lp.on?'vuelta '+lp.laps+'/'+lp.max:lp.stop?'parado':'bucle apagado')}</b>`
     +`<span class="bar ${n===tot?'c-green':'c-blue'}">${bar(n,tot,8)}</span><span class="c-dim">${n}/${tot}</span></div>`
@@ -633,12 +651,13 @@ function onPhoneClick(t){
     else if(a==='reopen'){reopen(L,tById(L,ph.tid));ph.sheet=null;toast(ph.tid+' reabierta')}
     else if(a==='block'){ph.sheet='block'}
     else if(a==='doblock'){setBlocked(L,tById(L,ph.tid),$('why').value);ph.sheet=null;toast(ph.tid+' bloqueada')}
+    else if(a==='agent'||a==='shell')toast('el panel del '+(a==='agent'?'agente':'shell')+', como hoy');
     else if(a==='file')toast('abre '+filePath(wsById(ph.id))+' en el visor');
   }
   else if((el=q('[data-list]'))){ph.id=el.dataset.list;ph.screen='det'}
   else if((el=q('[data-task]'))){ph.tid=el.dataset.task;ph.sheet='task'}
   else if((el=q('[data-go]'))){ph.screen=el.dataset.go;ph.sheet=null}
-  else if((el=q('[data-ws]'))){const w=el.dataset.ws;if(opt.sec==='row'&&listOf(w)){ph.id=w;ph.screen='det'}else toast('entra al workspace, como hoy')}
+  else if((el=q('[data-ws]'))){const w=el.dataset.ws;if(opt.sec==='ws'&&listOf(w)){ph.id=w;ph.screen='det'}else toast('entra al workspace, como hoy')}
   drawAll();
 }
 
