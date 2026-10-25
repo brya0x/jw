@@ -870,7 +870,7 @@ pub fn open_conversation(
         return Err(e);
     }
     if let Some(message) = parsed.message {
-        send(shared, &node, &message, Vec::new())?;
+        send(shared, &node, &message, Vec::new(), false)?;
     }
     Ok(Some(json!({ "node": node, "session": session })))
 }
@@ -896,7 +896,7 @@ fn check_images(images: &[Image]) -> Result<(), crate::commands::ErrorBody> {
     Ok(())
 }
 
-pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done {
+pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>, first: bool) -> Done {
     check_images(&images)?;
     let line = text.trim();
     if line.is_empty() && images.is_empty() {
@@ -943,7 +943,7 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
                 return if arg.is_empty() {
                     Ok(None)
                 } else {
-                    send(shared, node, arg, images)
+                    send(shared, node, arg, images, first)
                 };
             }
             "cost" => {
@@ -998,7 +998,11 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
             .get_mut(&pane)
             .ok_or_else(|| no_conversation(node))?;
         c.dirty = true;
-        c.st.send(line, images, now_ms())
+        if first {
+            c.st.send_first(line, images, now_ms())
+        } else {
+            c.st.send(line, images, now_ms())
+        }
     };
     // Sending is moving on: what the last turn asked of the person is over.
     core.clear_agent(&pane);

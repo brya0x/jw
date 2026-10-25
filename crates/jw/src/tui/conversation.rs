@@ -37,6 +37,8 @@ pub enum Act {
         /// what the daemon's history needs (REQ-716).
         folds: Vec<[usize; 2]>,
         private: bool,
+        /// `ctrl` `enter`: a turn that runs is interrupted and this goes first (REQ-963).
+        now: bool,
     },
     Answer {
         node: String,
@@ -2654,7 +2656,9 @@ impl Ui {
                 self.editor.insert("\n");
                 None
             }
-            KeyCode::Enter => self.submit(conv),
+            // `ctrl` `enter` (a terminal with the kitty protocol, REQ-963): send now.
+            KeyCode::Enter if ctrl => self.submit(conv, true),
+            KeyCode::Enter => self.submit(conv, false),
             KeyCode::Char('j') if ctrl => {
                 self.editor.insert("\n");
                 None
@@ -3033,11 +3037,11 @@ impl Ui {
     fn run_command(&mut self, conv: &Conversation, c: &ConvCommand) -> Option<Act> {
         self.menu_at = 0;
         self.editor.set(&c.name);
-        self.submit(conv)
+        self.submit(conv, false)
     }
 
-    /// `↵`: send the line, or open the list a bare command stands for.
-    fn submit(&mut self, conv: &Conversation) -> Option<Act> {
+    /// `↵` (`now`: `^↵`): send the line, or open the list a bare command stands for.
+    fn submit(&mut self, conv: &Conversation, now: bool) -> Option<Act> {
         if let Some(h) = &conv.held {
             self.says = Ui::held_why(h).1;
             return None;
@@ -3109,6 +3113,7 @@ impl Ui {
             images,
             folds: sent.folds.iter().map(|&(from, to)| [from, to]).collect(),
             private,
+            now,
         })
     }
 
@@ -3723,7 +3728,7 @@ impl Ui {
         }
         let first_text = geo.band.0 + Field::FIRST_TEXT;
         if y == first_text && x == field::send_at(ix, iw) {
-            return self.submit(conv);
+            return self.submit(conv, false);
         }
         if y == first_text
             && self.working(conv)
@@ -5231,6 +5236,36 @@ mod tests {
         row_of(&rows, "escribe un mensaje");
     }
 
+    /// REQ-963: `ctrl` `enter` is the same line with `now`; `shift` `enter` is still a line break and
+    /// an empty field sends nothing. A terminal without the protocol gives `^J` (REQ-577), not this.
+    #[test]
+    fn ctrl_enter_sends_the_line_now_and_only_with_something_to_send() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(ui.key(&conv, &ctrl_enter), None, "an empty field");
+        type_in(&mut ui, &conv, "ya");
+        ui.key(&conv, &KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        type_in(&mut ui, &conv, "mismo");
+        assert_eq!(
+            ui.key(&conv, &ctrl_enter),
+            Some(Act::Send {
+                node: conv.head.id.clone(),
+                text: "ya\nmismo".into(),
+                images: vec![],
+                folds: vec![],
+                private: false,
+                now: true,
+            })
+        );
+        assert_eq!(ui.editor.text(), "");
+        type_in(&mut ui, &conv, "hola");
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { now: false, .. })
+        ));
+    }
+
     #[test]
     fn enter_sends_the_line_and_a_line_of_many_rows_goes_as_one_message() {
         let conv = idle();
@@ -5249,6 +5284,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
         );
         assert_eq!(ui.editor.text(), "");
@@ -5357,6 +5393,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
         );
         type_in(&mut ui, &conv, "/model");
@@ -7011,6 +7048,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             }),
             "enter runs it"
         );
@@ -7072,6 +7110,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
         );
         conv.commands = (0..20)

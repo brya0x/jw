@@ -40,7 +40,8 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
 - `{bin} prompt <workspace> [--pane P] [--tag] [--now] [--wait [--timeout SECONDS]] [--] <text>`
   gives the text to the agent that runs in the pane. To a `claude` conversation it is a message,
   as if the person had typed it: it never answers a question the agent has waiting, and when the
-  agent is busy the message waits its turn. To any other agent it types the text and presses
+  agent is busy the message waits its turn (with `--now` the turn is interrupted, as the person's
+  `esc` does, and the message goes first, ahead of what waited). To any other agent it types the text and presses
   Enter, after the agent's screen has been still for a second, so a task sent to an agent that
   has just started is not lost (`--now` writes at once). `--tag` starts the text with who sent
   it, so the other agent can answer you. Anything that follows `--` is the text, even if it

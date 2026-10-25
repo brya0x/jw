@@ -432,6 +432,8 @@ sealed interface Cmd {
         val folds: List<List<Int>> = emptyList(),
         /** The line began with a space or a tab: it is not kept in the history. */
         val private: Boolean = false,
+        /** Interrupt the turn that runs and send this first. */
+        val now: Boolean = false,
     ) : Cmd
 
     /** The messages sent from the repository of the conversation's folder, oldest first. The result is a [SentList]. */

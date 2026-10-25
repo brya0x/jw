@@ -526,6 +526,9 @@ pub enum Cmd {
         /// type it, as what `prompt` sends (REQ-716).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         private: bool,
+        /// Send now (REQ-963): a turn that runs is interrupted and this goes first (REQ-966).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        now: bool,
     },
     /// The messages sent from the repository of the conversation's folder, oldest first, at most
     /// 100 (REQ-716). The result is a `conversation::SentList`.

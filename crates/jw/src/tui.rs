@@ -8128,12 +8128,14 @@ fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
             images,
             folds,
             private,
+            now,
         } => Cmd::ConversationSend {
             node,
             text,
             images,
             folds,
             private,
+            now,
         },
         ConvAct::Answer {
             node,
@@ -14886,7 +14888,28 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
+        );
+        // `ctrl` `enter` is the same line with `now` (REQ-963); the leader and the panel level leave it alone
+        for c in "ya".chars() {
+            v.press_key(plain(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            v.press_key(key(KeyCode::Enter, KeyModifiers::CONTROL)),
+            After::Conv(ConvAct::Send {
+                node: CONV.into(),
+                text: "ya".into(),
+                images: vec![],
+                folds: vec![],
+                private: false,
+                now: true,
+            })
+        );
+        assert_eq!(
+            v.press_key(key(KeyCode::Enter, KeyModifiers::CONTROL)),
+            After::Continue,
+            "an empty field sends nothing"
         );
         // the leader gives the keyboard back
         assert_eq!(

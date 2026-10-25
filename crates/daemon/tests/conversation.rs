@@ -159,12 +159,17 @@ impl Rig {
     }
 
     fn send(&mut self, node: &str, text: &str) {
+        self.send_with(node, text, false);
+    }
+
+    fn send_with(&mut self, node: &str, text: &str, now: bool) {
         self.cmd(Cmd::ConversationSend {
             node: node.into(),
             text: text.into(),
             images: Vec::new(),
             folds: Vec::new(),
             private: false,
+            now,
         })
         .unwrap();
     }
@@ -378,6 +383,7 @@ fn the_messages_sent_are_kept_for_the_repository_and_come_back_with_their_folds(
             images: Vec::new(),
             folds,
             private,
+            now: false,
         })
         .unwrap();
     };
@@ -414,6 +420,7 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
             images: vec![],
             folds: Vec::new(),
             private: false,
+            now: false,
         })
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::BadRequest);
@@ -431,6 +438,7 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
             images: vec![],
             folds: Vec::new(),
             private: false,
+            now: false,
         })
         .unwrap_err();
     assert!(e.message.contains("command claude"), "{}", e.message);
@@ -442,6 +450,7 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
             images: vec![],
             folds: Vec::new(),
             private: false,
+            now: false,
         })
         .unwrap_err();
     assert!(e.message.contains("lista"), "{}", e.message);
@@ -1357,6 +1366,47 @@ fn what_is_sent_while_a_turn_runs_waits_in_the_queue_and_goes_when_it_ends() {
     r.stop();
 }
 
+/// REQ-966: `now` in the middle of a turn interrupts it and the message goes before what waited.
+#[test]
+fn send_now_in_the_middle_of_a_turn_interrupts_it_and_goes_first() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "slow first");
+    r.until(&node, "the turn to run", |v| v["status"] != "idle");
+    r.send(&node, "second");
+    r.send_with(&node, "urgent", true);
+    let v = r.conv(&node);
+    assert_eq!(v["queue"], serde_json::json!(["urgent", "second"]));
+    let v = r.idle_after(&node, 3);
+    assert_eq!(v["queue"], serde_json::json!([]));
+    let sent: Vec<String> = log_lines(&r.log)
+        .into_iter()
+        .filter(|l| l.starts_with("user"))
+        .collect();
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(sent[0].contains("slow first"), "{sent:?}");
+    assert!(sent[1].contains("urgent"), "{sent:?}");
+    assert!(sent[2].contains("second"), "{sent:?}");
+    r.stop();
+}
+
+/// REQ-965: with nothing running `now` is a plain send.
+#[test]
+fn send_now_with_nothing_running_is_a_plain_send() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send_with(&node, "plain", true);
+    let v = r.idle_after(&node, 1);
+    assert_eq!(v["queue"], serde_json::json!([]));
+    let sent: Vec<String> = log_lines(&r.log)
+        .into_iter()
+        .filter(|l| l.starts_with("user"))
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].contains("plain"));
+    r.stop();
+}
+
 #[test]
 fn a_turn_the_engine_starts_by_itself_is_a_turn_like_any_other() {
     let mut r = rig();
@@ -1941,6 +1991,7 @@ fn a_session_that_another_claude_has_open_is_read_and_not_written() {
             images: Vec::new(),
             folds: Vec::new(),
             private: false,
+            now: false,
         })
         .unwrap_err();
     assert_eq!(refused.code, contract::ErrorCode::Conflict);
@@ -1958,6 +2009,7 @@ fn a_session_that_another_claude_has_open_is_read_and_not_written() {
         images: Vec::new(),
         folds: Vec::new(),
         private: false,
+        now: false,
     })
     .unwrap();
     r.stop();
@@ -2147,6 +2199,7 @@ fn closing_ends_the_engine_and_the_pane_stops_naming_the_conversation() {
             images: Vec::new(),
             folds: Vec::new(),
             private: false,
+            now: false,
         })
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
@@ -2213,6 +2266,7 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
         images: Vec::new(),
         folds: Vec::new(),
         private: false,
+        now: false,
     })
     .unwrap()
     .unwrap();
@@ -2473,6 +2527,7 @@ fn a_daemon_stopped_in_the_first_turn_resumes_the_conversation_at_the_next_messa
         images: Vec::new(),
         folds: Vec::new(),
         private: false,
+        now: false,
     })
     .unwrap()
     .unwrap();
