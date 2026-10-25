@@ -87,6 +87,7 @@ import dev.jw.next.client.HomeKind
 import dev.jw.next.client.HomeRow
 import dev.jw.next.client.MoveTo
 import dev.jw.next.client.Navigator
+import dev.jw.next.client.TASKS_TAB
 import dev.jw.next.client.Need
 import dev.jw.next.client.RemoveSheet
 import dev.jw.next.client.Screen
@@ -448,11 +449,14 @@ private fun WorkspaceRow(row: HomeRow, number: Int, grouped: Boolean, current: B
                 }
             }
             if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
+            // A list says how far it is; `○` stands where no mark and no loop is (REQ-948).
+            row.tasks?.let { Mono(it, Palette.dim, 11) }
             row.mark?.let { m ->
                 Mono(m.glyph, m.tone.color(), 14, bold = true)
                 if (row.unseen > 1) Mono("${row.unseen}", Palette.dim, 11)
             }
-            if (row.working) CircularProgressIndicator(Modifier.size(14.dp), color = Palette.blue, strokeWidth = 2.dp)
+            if (row.mark == null && row.tasks != null && !row.loopOn) Mono("○", Palette.dim, 14)
+            if (row.working || row.loopOn) CircularProgressIndicator(Modifier.size(14.dp), color = Palette.blue, strokeWidth = 2.dp)
         }
     }
 }
@@ -639,8 +643,11 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val tabPane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
         val convId = tabPane?.conversation
         val tabConv = remember(version, convId) { convId?.let { source.node(it) as? Node.Conversation } }
+        val listed = remember(version, screen.id) { source.session().workspaces.firstOrNull { it.id == screen.id }?.tasks != null }
+        // The list gone from the summary takes its tab with it: the first pane is shown again (REQ-949).
+        LaunchedEffect(listed) { if (!listed && screen.pane == TASKS_TAB) set(nav.settle(state)) }
         PaneTabs(
-            ws.panes, ws.views, screen.pane, state, adding = asking || waitingPane != null,
+            ws.panes, ws.views, screen.pane, state, listed, adding = asking || waitingPane != null,
             closeView = { v -> source.closeView(v.id, null) { r -> r.onFailure { addError = it.message ?: "el PC no pudo cerrar el panel" } } },
             select = { id -> if (id == screen.pane && tabConv != null) settingsAsked++ else set(nav.selectPane(state, id)) },
             hold = { paneMenu = it },
@@ -656,6 +663,10 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         }
         addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         referenceNote?.let { Mono(it, Palette.yellow, 12, lines = 2, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
+        if (screen.pane == TASKS_TAB) {
+            TasksPanel(source, screen.id, listed)
+            return@Column
+        }
         // The diff or a viewer is a tab like a pane, after the panes (REQ-740).
         val tabView = ws.views.firstOrNull { it.id == screen.pane }
         if (tabView != null) {
@@ -991,7 +1002,7 @@ private fun Composer(
 /** Open pane underlined in blue; an unseen mark sits beside the name. */
 @Composable
 private fun PaneTabs(
-    panes: List<PaneSummary>, views: List<ViewSummary>, current: String?, state: ClientState, adding: Boolean, closeView: (ViewSummary) -> Unit,
+    panes: List<PaneSummary>, views: List<ViewSummary>, current: String?, state: ClientState, tasks: Boolean, adding: Boolean, closeView: (ViewSummary) -> Unit,
     select: (String) -> Unit, hold: (PaneSummary) -> Unit, named: Pair<String, String>?, underline: Color?, add: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
@@ -1029,6 +1040,13 @@ private fun PaneTabs(
                         Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                     }
                 }
+            }
+            // The tasks of the workspace, while it has a list (REQ-949).
+            if (tasks) Column(Modifier.clickable { select(TASKS_TAB) }) {
+                Box(Modifier.defaultMinSize(minHeight = 44.dp).padding(horizontal = Gutter), contentAlignment = Alignment.Center) {
+                    Mono("☰ tareas", if (current == TASKS_TAB) Palette.fg else Palette.dim, 13, bold = current == TASKS_TAB)
+                }
+                Box(Modifier.fillMaxWidth().height(2.dp).background(if (current == TASKS_TAB) Palette.blue else Color.Transparent))
             }
             // A shell more (REQ-234): fixed at the end, so it is there however many tabs there are.
             Box(

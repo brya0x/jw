@@ -333,6 +333,8 @@ fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engi
             cmd.envs(plan.cfg_env.iter().cloned());
         }
     }
+    // What the hook finds its pane by, in either case (REQ-930).
+    cmd.env(identity::env_var("PANE_ID"), pane);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start {}: {e}", plan.exe.display()))?;
@@ -480,6 +482,7 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
         run_effects(&mut core, pane, fx);
         if result {
             crate::chats::answered(&mut core, pane);
+            core.task_look_pane(pane);
         }
         if delta {
             feed.dirty.store(true, Ordering::Relaxed);
@@ -604,7 +607,7 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
         None => cfg_env.clone(),
     };
     let found = crate::launch::transcript_exists(&lookup, &session);
-    let (launch, generation) = {
+    let (launch, generation, loop_hooks) = {
         let mut core = shared.lock();
         let c = core
             .convs
@@ -615,13 +618,23 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
         let fx = c.st.transcript_found(found);
         let launch = (launch_of(c), c.generation);
         run_effects(&mut core, pane, fx);
-        launch
+        (launch.0, launch.1, core.loop_hooks.clone())
     };
     let exe = resolve_claude(launch.env.as_ref(), &cfg_env)
         .ok_or_else(|| err(ErrorCode::Io, "claude is not on the PATH it was typed in"))?;
+    // The hook of a task loop, unless the person started the engine with settings of their own
+    // (then there is no loop for this conversation, RISK-151).
+    let mut args = launch.args;
+    if let Some(file) = loop_hooks.filter(|_| {
+        !args
+            .iter()
+            .any(|a| a == "--settings" || a.starts_with("--settings="))
+    }) {
+        args.extend(["--settings".to_owned(), file.to_string_lossy().into_owned()]);
+    }
     let plan = Plan {
         exe,
-        args: launch.args,
+        args,
         env: launch.env,
         cfg_env,
         cwd: launch.cwd,

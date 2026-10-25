@@ -571,11 +571,23 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
         .unwrap();
     assert!(out.status.success());
     let path = config.join(format!("skills/{name}/SKILL.md"));
+    let tasks = config.join(format!("skills/{name}-tasks/SKILL.md"));
+    // both skills are written (REQ-932)
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("installed {}\n", path.display())
+        format!(
+            "installed {}\ninstalled {}\n",
+            path.display(),
+            tasks.display()
+        )
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text_out);
+    let second = std::fs::read_to_string(&tasks).unwrap();
+    assert!(
+        second.starts_with(&format!("---\nname: {name}-tasks\n")),
+        "{second}"
+    );
+    assert!(second.contains(&format!("{name} tasks loop on")) && !second.contains("{bin}"));
     // Again: it is written over, whole.
     assert!(
         env.jw()

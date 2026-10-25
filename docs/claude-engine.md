@@ -111,6 +111,60 @@ So the unanswered `tool_use` at the end of the transcript is what a crash or a k
 
 Through a private daemon: a turn (text streamed, its cost), `Write` asking permission with `permission_suggestions` (so «for this session» is offered), allowed from another client, the file written; an interrupt in the middle of a long turn («aborted_streaming», the process stays); `/effort low` (the engine answers with text as an `assistant` message, which is the command's output and not Claude's); the mode changed to `plan` while the engine ran; the daemon stopped and started again; `--resume` of the session answered from the first message of the conversation. A turn costs what it costs in Claude's own screen: with the author's plugins and skills a turn with a cold cache is about 0.1 USD even on `haiku`, and a new process after `--resume` pays that cache again once.
 
+## The Stop hook, as a way to keep an agent going (N180, measured 2026-10-25, claude 2.1.309)
+
+Four runs of a real `claude --model haiku` in a private temp directory (`--setting-sources project --settings <file>` with one `Stop` command hook; nothing of the person's daemon or conversations; the processes were killed only by their own pid, and the directory and the sessions it made were deleted afterwards). The hook logged its stdin and, for the first *n* calls, answered `{"decision":"block","reason":"…"}`.
+
+| Question | Measured |
+|---|---|
+| Does `{"decision":"block","reason":"…"}` on stdout (exit 0) keep the agent going? | Yes. The same turn goes on: a synthetic `user` line `[{"type":"text","text":"Stop hook feedback:\n<reason>"}]` appears in the stream, then a `system/notification`, and the agent does what the reason says (it wrote the file the reason named). The agent sees it labelled as a stop hook's feedback, and says so in its text. *tested* |
+| What does the hook get on stdin? | One JSON object: `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `effort`, `hook_event_name: "Stop"`, **`stop_hook_active`**, `last_assistant_message` (the text of the turn that is ending), `background_tasks`, `session_crons`. *tested* |
+| What is `stop_hook_active`? | `false` the first time a turn tries to stop, `true` on every stop that follows a block of the same turn (it did not go back to `false` over six blocks in a row). It is a flag, not a counter, and **claude does not cap the loop**: a hook that blocked six times in a row was obeyed six times (seven `Stop` calls, ten model turns, one `result`). Whatever stops the loop (no ready task, a blocked one, a maximum of laps) is the hook's own business. *tested* |
+| A new person's message? | The flag is `false` for the first stop of a turn, so a lap counter has to live outside the process (a file or the daemon), not in `stop_hook_active`. That it resets at the next message was not seen: the two messages of the run were queued together and claude took them as one turn. *unverified* |
+| Does it arrive in the headless engine (`-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio`)? | Yes, with `--settings` on the command line: `Stop` fired, the block was honoured, and the stream carried **one** `result` for the whole continued turn (`num_turns` counted the extra model turns), so the reducer sees one turn that is longer, not two. *tested* |
+| Does the daemon's engine pass that file today? | No. `launch.rs` writes `claude-hooks.json` and only terminal panes get `--settings` (`panes.rs`); `engine.rs` adds `--settings` only when the person put one in the arguments. `jw hook` also routes by `JW_PANE_ID` (`hook.rs:29`, a silent exit without it), which only `pty.rs:101` puts in a child's environment; the engine's child gets `cfg_env` and no pane id (`engine.rs:321-333`). So for the engine to loop it needs **both** the same `--settings` file and the pane id in its environment (`--settings` is additive with the person's own hooks). *read in code, not run through the daemon* |
+| How does the model take the `reason`? | haiku read it as «Stop hook feedback», said so, and followed it because it matched what the person had asked. A bare order from a hook may be refused by a stronger model, so the `reason` should name the person's file and the task («next ready task in `.jw/tasks.md`: t2 endpoints»), not just command. *unverified for sonnet and opus* |
+| A permission waiting? | With `--permission-mode default` and the permission request (`control_request`/`can_use_tool`) left unanswered for 30 s, `Stop` did not fire: the turn has not ended. A permission, an `AskUserQuestion` and an `ExitPlanMode` plan are `can_use_tool` requests, so the hook is never reached while one waits. *tested for a permission; the other two follow from the same request, unverified* |
+| A question asked in plain text? | `Stop` fires like any other end of turn, and `last_assistant_message` is the only thing the hook could read to guess it. That is a guess, not a signal: the way out is to say in the `reason` what to do instead of asking («if you need the person, run `jw tasks block <id> "why"`»). *by design, unverified* |
+
+Not measured: the interactive terminal (the same `Stop` hook jw already installs for attention; the block was not tried there), `exit 2` with stderr as the other way to block, `--resume` of a session that was kept going by a hook, and the cost of the extra turns (they pay the cache again like any turn).
+
+### Getting the agent to use a skill after its plan (N180, 2026-10-25, claude 2.1.309)
+
+Three runs of `claude -p --model haiku` in a private temp directory, with `JW_PANE_ID` set and one project skill `jw-tasks` (it shows in the `system/init` skills). The prompt asked for a plan of three steps and then to run it. One run each, so these are first readings, not rates.
+
+| Question | Measured |
+|---|---|
+| Does the agent invoke the skill on its own, by its `description` («use right after you have made a plan, whenever you run inside jw»)? | **No.** It made the plan in text and did the work; no `Skill` call. *tested, one run* |
+| With a louder description («MANDATORY — invoke this skill … before doing any step»)? | **No**, the same. *tested, one run* |
+| With a `UserPromptSubmit` hook that returns `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"You run inside jw. After you make a plan, use the jw-tasks skill (Skill tool) before doing any step of it."}}`? | **Yes.** The agent called `Skill` right after its plan, wrote `.jw/tasks.md` with the closing `fin` task the skill asked for, and ticked `[x]` as it worked (it also wrote `(after: none)`, a slip the format has to tolerate). So `additionalContext` reaches the model and moves it. *tested, one run* |
+| Does the nudge fire for a message written to the engine's stdin (`--input-format stream-json`), the engine's way? | **Yes** (2026-10-25, one haiku run in a private temp dir with `--setting-sources project`): the `UserPromptSubmit` hook ran once for the one message, and the agent called `Skill` for the project skill before doing the work and wrote the list. So the nudge reaches a conversation. *tested, one run* |
+| Can the daemon say something to the agent when the person approves a plan in the engine? | No text channel: approval is `{behavior:"allow", updatedInput}` with the input unchanged (`conversation.rs` `answer_plan`, `permission_reply`); only a refusal carries text. *read in code* |
+| Is the nudge available in the engine? | Same as the Stop hook: the engine gets no hooks `--settings` and no `JW_PANE_ID` today. *read in code* |
+
+**When the person calls the skill** (`/jw-tasks …` as the message; haiku, `-p`, one run each, with a `package.json` of three dependencies and nothing installed):
+
+| Question | Measured |
+|---|---|
+| A goal in one sentence, `/jw-tasks actualizar las dependencias del proyecto`? | The skill ran as a normal turn (the path the engine already has for skills typed as a message). The agent read the project, drafted seven tasks with `after:` plus the closing `fin`, wrote `.jw/tasks.md` and, as the skill said, **stopped to ask the person to review it**. *tested, one run* |
+| A list pasted after the command (four bullets)? | The agent **kept the wording and the order**, numbered them `t1…`, added `fin`, and — as the skill said — went on to work the list. Where npm was refused it did what it could, ticked three tasks and, for the one it could not do, wrote `(bloqueado: …)` in free text instead of using `[!]`; it also added notes in parentheses to the lines it finished. So the agent edits the file by hand and writes free text: the parser has to tolerate it (and `jw tasks block`/`note` are what give it structure). *tested, one run* |
+| Name | `/tasks` is claude's own command (answered «isn't available in this environment» in the engine, see above), so a skill called `tasks` would collide with it; `jw-tasks` does not. *read in this doc* |
+
+Not measured: the same with sonnet or opus; a plan made in plan mode (`ExitPlanMode`) and a `PostToolUse` hook on it answering with `additionalContext`; the interactive terminal; how many runs out of ten take the nudge.
+
+### The task loop in the engine (N180d2, 2026-10-25, claude 2.1.309)
+
+One run of the stage `loop` of `scripts/claude-path.py` (haiku, a private daemon, a throwaway repository, the person's own `~/.claude`; the transcript it made was deleted): a list of two small tasks (`create uno.txt`, `create dos.txt`), the final task written by `tasks_loop_on`, and a conversation started in `acceptEdits` whose permissions the stage answers yes.
+
+| Question | Measured |
+|---|---|
+| Does the engine run the hook? | Yes, started with `--settings <state>/claude-loop-hooks.json` (only `Stop`) and `<PREFIX>_PANE_ID` in its environment: `jw hook stop` found its pane and the daemon's socket. *tested, one run* |
+| Does the loop go on until the list ends? | Yes: the loop ended on its own with «all 3 tasks done in 4 laps», every task `[x]` in the file and both files made. Four laps for three tasks means one task was handed out twice; which one, and whether the agent ticked the tasks with `jw tasks done` or edited the file, was not recorded (the transcript was deleted). *tested, one run* |
+| How many `result` lines for the whole loop? | **One**, as measured with `-p` before (a turn that is longer, not four turns); the conversation shows a note for each lap. *tested* |
+| Did the agent do the final task? | The final task is `[x]` and has a note under it that begins «No test suite…», so it looked for checks and noted that it found none. The advisor sentence was in the task's text and whether the agent followed it was not checked. *tested, one run* |
+
+Not measured: sonnet and opus following the reason (OPEN-78); an interrupt by the person (RISK-143); a permission asked in the middle of a lap (the stage answers it; the loop paused until then by design, REQ-925).
+
 ## Cost and limits
 
 A turn costs what the same turn costs in Claude's own screen, through the person's account; a call of about a dozen tokens of output cost about 0.06 USD, almost all cache creation. `total_cost_usd` in `result` is cumulative for the process.

@@ -1,5 +1,6 @@
 //! The commands an agent in a pane uses: what there is (`ls`, `pane ls`), what a pane shows
-//! (`read`), what to do (`prompt`, `worktree`, `pane open`, `pane close`, `group`) and the skill that
+//! (`read`), what to do (`prompt`, `worktree`, `pane open`, `pane close`, `group`), the task list of the
+//! workspace (`tasks`, N180) and the skill that
 //! teaches an agent all this (`skill`). They are clients of the daemon like the terminal
 //! client, over nodes and commands that exist (spec N80, REQ-353 to REQ-370).
 
@@ -31,8 +32,10 @@ const TURN_WAIT: Duration = Duration::from_secs(600);
 const CONVERSATION_WAIT: Duration = Duration::from_secs(10);
 
 mod artifact;
+mod tasks;
 
 const SKILL: &str = include_str!("../skill/SKILL.md");
+const TASKS_SKILL: &str = include_str!("../skill/TASKS.md");
 
 /// Why a command ended.
 #[derive(Debug, PartialEq, Eq)]
@@ -41,6 +44,8 @@ enum Fail {
     Usage(String),
     /// Anything else: exit 1.
     Error(String),
+    /// Nothing to do: the message goes to stderr and the exit is 3 (REQ-940).
+    Idle(String),
     /// The agent waits for an answer: what it asks goes to stdout and the exit is 3 (REQ-454).
     Waiting(String),
     /// The person asked for changes to an artifact: what to change goes to stdout and the exit is 4 (REQ-772).
@@ -88,6 +93,7 @@ fn usage_of(cmd: &str) -> String {
         "pane" => format!(
             "usage: {b} pane ls <workspace> [--json]\n       {b} pane open <workspace> [--split right|down] [--of <pane>] [--] [<program words>...]\n       {b} pane close <workspace> <pane> [--force]"
         ),
+        "tasks" => tasks::usage(),
         _ => format!("usage: {b} skill [install]"),
     }
 }
@@ -102,6 +108,7 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("prompt", rest) => prompt(rest),
         ("worktree", rest) => worktree(rest),
         ("artifact", rest) => artifact::run(rest),
+        ("tasks", rest) => tasks::run(rest),
         ("group", ["ls", rest @ ..]) => group_ls(rest),
         ("group", ["new", rest @ ..]) => group_new(rest),
         ("group", ["rename", rest @ ..]) => group_rename(rest),
@@ -134,6 +141,10 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         Err(Fail::Error(why)) => {
             eprintln!("{} {cmd}: {why}", bin());
             ExitCode::FAILURE
+        }
+        Err(Fail::Idle(why)) => {
+            eprintln!("{} {cmd}: {why}", bin());
+            ExitCode::from(3)
         }
         Err(Fail::Waiting(asks)) => {
             println!("{asks}");
@@ -1263,32 +1274,92 @@ fn skill_text() -> String {
         .replace("{pane_env}", &identity::env_var("PANE_ID"))
 }
 
-/// Where the skill goes: `skills/<name>/SKILL.md` under the Claude configuration (REQ-370).
-fn skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
-    let base = match config_dir.filter(|d| !d.is_empty()) {
-        Some(d) => PathBuf::from(d),
-        None => PathBuf::from(home.filter(|h| !h.is_empty())?).join(".claude"),
-    };
-    Some(base.join("skills").join(bin()).join("SKILL.md"))
+/// The skill of the task lists (N180e, REQ-933): the binary's name, the pane variable and the list's
+/// file as the product's identity says them.
+fn tasks_skill_text() -> String {
+    TASKS_SKILL
+        .replace("{bin}", bin())
+        .replace("{pane_env}", &identity::env_var("PANE_ID"))
+        .replace(
+            "{tasks_file}",
+            &identity::tasks_path(Path::new("")).to_string_lossy(),
+        )
 }
 
-fn skill_install() -> Out {
-    let Some(path) = skill_path(
+/// The Claude configuration the skills go under: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
+fn claude_base(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
+    match config_dir.filter(|d| !d.is_empty()) {
+        Some(d) => Some(PathBuf::from(d)),
+        None => Some(PathBuf::from(home.filter(|h| !h.is_empty())?).join(".claude")),
+    }
+}
+
+/// Where the skill goes: `skills/<name>/SKILL.md` under the Claude configuration (REQ-370).
+fn skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
+    Some(
+        claude_base(config_dir, home)?
+            .join("skills")
+            .join(bin())
+            .join("SKILL.md"),
+    )
+}
+
+/// Where the skill of the task lists goes: `skills/<name>-tasks/SKILL.md` (REQ-932). The name is never
+/// `tasks`, which is a command of claude's own (REQ-955).
+fn tasks_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
+    Some(
+        claude_base(config_dir, home)?
+            .join("skills")
+            .join(format!("{}-tasks", bin()))
+            .join("SKILL.md"),
+    )
+}
+
+/// Whether the skill of the task lists is installed, which is what lets a hook name it (REQ-934).
+pub(crate) fn tasks_skill_installed() -> bool {
+    tasks_skill_path(
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
         std::env::var("HOME").ok(),
-    ) else {
-        return fail("no HOME and no CLAUDE_CONFIG_DIR to install into");
-    };
+    )
+    .is_some_and(|p| p.is_file())
+}
+
+/// The one line the `UserPromptSubmit` hook adds to what the agent reads (REQ-934).
+pub(crate) fn tasks_nudge() -> String {
+    let b = bin();
+    format!(
+        "You run inside {b}. After you make a plan, use the {b}-tasks skill before doing any step of it."
+    )
+}
+
+/// Write a skill whole, through a rename, and say where.
+fn write_skill(path: &Path, text: &str) -> Out {
     let dir = path
         .parent()
         .ok_or_else(|| Fail::Error("no folder".into()))?;
     std::fs::create_dir_all(dir).map_err(|e| Fail::Error(format!("{}: {e}", dir.display())))?;
     let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, skill_text())
-        .and_then(|()| std::fs::rename(&tmp, &path))
+    std::fs::write(&tmp, text)
+        .and_then(|()| std::fs::rename(&tmp, path))
         .map_err(|e| Fail::Error(format!("{}: {e}", path.display())))?;
     println!("installed {}", path.display());
     Ok(())
+}
+
+/// `skill install` writes the skill of the session and the one of the task lists (REQ-932).
+fn skill_install() -> Out {
+    let (config, home) = (
+        std::env::var("CLAUDE_CONFIG_DIR").ok(),
+        std::env::var("HOME").ok(),
+    );
+    let (Some(skill), Some(tasks)) = (
+        skill_path(config.clone(), home.clone()),
+        tasks_skill_path(config, home),
+    ) else {
+        return fail("no HOME and no CLAUDE_CONFIG_DIR to install into");
+    };
+    write_skill(&skill, &skill_text())?;
+    write_skill(&tasks, &tasks_skill_text())
 }
 
 #[cfg(test)]
@@ -1315,6 +1386,7 @@ mod tests {
             removing: false,
             group: None,
             chat: None,
+            tasks: None,
         }
     }
 
@@ -1605,6 +1677,61 @@ mod tests {
             )))
         );
         assert_eq!(skill_path(None, None), None);
+    }
+
+    /// REQ-933, REQ-935: what the skill of the task lists says, by the words the loop and the commands use.
+    #[test]
+    fn the_tasks_skill_says_the_steps_with_the_words_of_the_commands() {
+        let text = tasks_skill_text();
+        let b = bin();
+        assert!(
+            !text.contains('{')
+                || !text.contains("{bin}")
+                    && !text.contains("{pane_env}")
+                    && !text.contains("{tasks_file}")
+        );
+        assert!(
+            text.starts_with(&format!("---\nname: {b}-tasks\n")),
+            "{text}"
+        );
+        assert!(text.contains(&identity::env_var("PANE_ID")));
+        // the file is named by the identity and not spelled in the skill
+        let file = identity::tasks_path(Path::new(""))
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            text.contains(&format!("`{file}`")) && !TASKS_SKILL.contains(&file),
+            "{text}"
+        );
+        for word in [
+            "right after you have made a plan",
+            "- [ ] t1 title (after: t0)",
+            &format!("{b} tasks ls"),
+            &format!("{b} tasks loop on"),
+            &format!("{b} tasks done <id>"),
+            &format!("{b} tasks block <id> \"why\""),
+            &format!("{b} tasks note fin"),
+            "do not\n   ask",
+            "run the project's tests and CI",
+            "ask the advisor",
+            "keep the\nperson's wording and order",
+            "wait for the person's OK",
+            "never replace it",
+            "never rewrite the list while a loop is on",
+        ] {
+            assert!(text.contains(word), "the skill does not say {word:?}");
+        }
+        // never `tasks` alone, which is a command of claude's own (REQ-955)
+        let path = tasks_skill_path(Some("/cfg".into()), None).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from(format!("/cfg/skills/{b}-tasks/SKILL.md"))
+        );
+        assert!(!path.to_string_lossy().contains("/tasks/"));
+        assert_eq!(tasks_skill_path(None, None), None);
+        assert!(
+            tasks_nudge().contains(&format!("{b}-tasks skill")) && !tasks_nudge().contains('\n')
+        );
     }
 
     #[test]

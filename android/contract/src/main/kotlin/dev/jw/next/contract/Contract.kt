@@ -331,6 +331,22 @@ sealed interface Cmd {
     @Serializable @SerialName("open_commits")
     data class OpenCommits(val workspace: Id) : Cmd
 
+    /** Make (or find) the `tasks` node of [workspace] (N180). The result is `{node}`; no list is `not_found`. */
+    @Serializable @SerialName("open_tasks")
+    data class OpenTasks(val workspace: Id) : Cmd
+
+    /** Change one task of the workspace's list: [text] is the reason of `block` and the note of `note`. */
+    @Serializable @SerialName("tasks_edit")
+    data class TasksEdit(val workspace: Id, val op: TaskOp, val id: String, val text: String? = null) : Cmd
+
+    /** Turn on the loop over the workspace's list (N180): [max] laps (1 to 99, 20 when absent); [pane] is the agent's own. */
+    @Serializable @SerialName("tasks_loop_on")
+    data class TasksLoopOn(val workspace: Id, val max: Int? = null, val pane: Id? = null) : Cmd
+
+    /** Turn the loop off. */
+    @Serializable @SerialName("tasks_loop_off")
+    data class TasksLoopOff(val workspace: Id) : Cmd
+
     /**
      * Publish an artifact (N171): the next version of the one named [name] in [workspace]. The result is
      * `{id, n, hash, new}`. Only the CLI sends it: the bridge refuses it from a phone.
@@ -691,6 +707,8 @@ data class WorkspaceSummary(
     val group: Id? = null,
     /** The workspace is a conversation of its own. */
     val chat: ChatInfo? = null,
+    /** The workspace has a task list (N180). */
+    val tasks: TasksSummary? = null,
 )
 
 /** What makes a workspace a conversation of its own, and what Home draws of it without opening it. */
@@ -978,6 +996,21 @@ sealed interface Node {
         val commits: List<CommitInfo>,
     ) : Node
 
+    /** The task list of a workspace (N180): its tasks, what is wrong in the file, and the loop. */
+    @Serializable @SerialName("tasks")
+    data class Tasks(
+        override val id: Id,
+        override val v: Int,
+        override val epoch: String,
+        override val rev: Long,
+        override val attention: List<Attention>,
+        val workspace: Id,
+        val path: String,
+        val tasks: List<TaskItem>,
+        val problems: List<TaskProblem> = emptyList(),
+        @SerialName("loop") val loop: LoopInfo,
+    ) : Node
+
     /** The artifacts a workspace has (N171), each with its versions. */
     @Serializable @SerialName("artifacts")
     data class Artifacts(
@@ -1008,6 +1041,92 @@ enum class DiffScope {
     @SerialName("general") General,
     @SerialName("commit") Commit,
 }
+
+/** What the list's file says of a task: `[ ]`, `[x]`, `[!]`. */
+@Serializable
+enum class TaskStatus {
+    @SerialName("todo") Todo,
+    @SerialName("done") Done,
+    @SerialName("blocked") Blocked,
+}
+
+/** What a task is at the moment; `running` is the loop's and is never in the file. */
+@Serializable
+enum class TaskPhase {
+    @SerialName("waiting") Waiting,
+    @SerialName("ready") Ready,
+    @SerialName("running") Running,
+    @SerialName("done") Done,
+    @SerialName("blocked") Blocked,
+}
+
+/** What `tasks_edit` changes. */
+@Serializable
+enum class TaskOp {
+    @SerialName("done") Done,
+    @SerialName("block") Block,
+    @SerialName("reopen") Reopen,
+    @SerialName("note") Note,
+}
+
+/** Why a loop is not running. */
+@Serializable
+enum class StopKind {
+    @SerialName("done") Done,
+    @SerialName("blocked") Blocked,
+    @SerialName("idle") Idle,
+    @SerialName("max") Max,
+    @SerialName("stuck") Stuck,
+    @SerialName("person") Person,
+    @SerialName("pane") Pane,
+}
+
+/** One task. [after] is the ids it waits for, or `["*"]` for every other task. */
+@Serializable
+data class TaskItem(
+    val id: String,
+    val title: String,
+    val after: List<String>,
+    val status: TaskStatus,
+    val state: TaskPhase,
+    val level: Int,
+    val why: String? = null,
+    val notes: List<String> = emptyList(),
+    /** The last task, which waits for every other: the tests and their evidence. */
+    @SerialName("final") val isFinal: Boolean = false,
+    /** The final task is not in the file yet. */
+    val auto: Boolean = false,
+)
+
+/** Something wrong in the file, which the daemon reports and does not mend. */
+@Serializable
+data class TaskProblem(val line: Int? = null, val text: String)
+
+@Serializable
+data class LoopStop(val kind: StopKind, val text: String)
+
+/** The loop of a workspace's agent over the list (it lives in the daemon's memory). */
+@Serializable
+data class LoopInfo(
+    val on: Boolean,
+    val laps: Int,
+    val max: Int,
+    /** The id of the task handed out now. */
+    val task: String? = null,
+    val pane: Id? = null,
+    /** The agent waits for the person. */
+    val waiting: Boolean = false,
+    val stop: LoopStop? = null,
+)
+
+/** What a workspace's row says of its list; [total] counts the final task even while it is not in the file. */
+@Serializable
+data class TasksSummary(
+    val done: Int,
+    val total: Int,
+    val on: Boolean = false,
+    val stop: LoopStop? = null,
+)
 
 @Serializable
 enum class DiffState {

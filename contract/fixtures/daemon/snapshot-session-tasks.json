@@ -1,0 +1,45 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000a1",
+    "type": "session",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 14,
+    "attention": [],
+    "name": "work",
+    "workspaces": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000b1",
+        "name": "app",
+        "kind": "folder",
+        "path": "/home/u/code/app",
+        "project": "/home/u/code/app",
+        "pane_count": 1,
+        "attention": []
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000b2",
+        "name": "api-v2",
+        "kind": "worktree",
+        "path": "/home/u/code/app-wt/api-v2",
+        "project": "/home/u/code/app",
+        "branch": "feat/api-v2",
+        "pane_count": 2,
+        "attention": [],
+        "tasks": { "done": 3, "total": 8, "on": true }
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000b3",
+        "name": "checkout",
+        "kind": "worktree",
+        "path": "/home/u/code/app-wt/checkout",
+        "project": "/home/u/code/app",
+        "branch": "feat/checkout",
+        "pane_count": 1,
+        "attention": [],
+        "tasks": { "done": 2, "total": 6, "stop": { "kind": "blocked", "text": "t3 blocked: needs STRIPE_KEY in .env" } }
+      }
+    ]
+  }
+}

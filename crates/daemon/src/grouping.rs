@@ -73,6 +73,7 @@ mod tests {
             removing: false,
             group: None,
             chat: None,
+            tasks: None,
         }
     }
 
