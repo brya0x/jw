@@ -56,6 +56,14 @@ pub struct Conversation {
     /// REQ-631); absent while the conversation has not been opened from a pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// The version of `claude` its engine says it is (`claude_code_version` of `system/init`);
+    /// absent while no engine runs or none has said it (REQ-852).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    /// The version of `claude` that is installed, while it is not `engine_version` and the update
+    /// is not `off` (REQ-852): the clients say that the conversation runs an older engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_newer: Option<String>,
     /// What Claude proposes the person writes next, while the engine is stopped and nothing waits
     /// (REQ-572): the clients draw it grey in the empty field.
     #[serde(default, skip_serializing_if = "Option::is_none")]

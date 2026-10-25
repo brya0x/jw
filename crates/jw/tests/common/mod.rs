@@ -26,6 +26,8 @@ impl Env {
         let mut c = Command::new(JW);
         c.env(identity::env_var("STATE_DIR"), self.dir.join("state"))
             .env(identity::env_var("SOCKET"), self.dir.join("s.sock"))
+            // The daemon of a test never runs the person's `claude update` (REQ-847).
+            .env(identity::env_var("CLAUDE_UPDATE"), "0")
             .env("SHELL", "/bin/sh")
             .stdin(Stdio::null());
         c

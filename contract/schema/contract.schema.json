@@ -374,11 +374,11 @@
         "name": { "type": "string" }
       }
     },
-    "JobKind": { "enum": ["remove_workspace", "sync_workspace"] },
+    "JobKind": { "enum": ["remove_workspace", "sync_workspace", "update_claude"] },
     "JobState": { "enum": ["running", "done", "failed"] },
     "Job": {
       "type": "object",
-      "required": ["id", "kind", "workspace", "name", "state", "started_at"],
+      "required": ["id", "kind", "name", "state", "started_at"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
         "kind": { "$ref": "#/$defs/JobKind" },
@@ -603,6 +603,8 @@
               "description": "Another claude that has this session open."
             },
             "cwd": { "type": "string", "minLength": 1, "description": "The folder the engine runs in: the folder its @ references are written from." },
+            "engine_version": { "type": "string", "minLength": 1, "description": "The version of claude its engine says it is." },
+            "engine_newer": { "type": "string", "minLength": 1, "description": "The version of claude that is installed, while it is not the engine's." },
             "suggestion": { "type": "string", "minLength": 1, "maxLength": 400, "description": "What Claude proposes the person writes next." },
             "following": { "type": "integer", "minimum": 0, "description": "When the turn began that another claude runs in the transcript this conversation follows." },
             "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }

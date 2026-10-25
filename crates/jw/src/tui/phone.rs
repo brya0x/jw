@@ -501,6 +501,7 @@ mod tests {
                 conversation: false,
                 projects: dir.join("projects"),
                 chrome: false,
+                claude_update: None,
             };
             Pc {
                 dir,

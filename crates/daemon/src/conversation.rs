@@ -604,6 +604,9 @@ pub struct State {
     advisor: Option<String>,
     /// Another `claude` that has this session open, while the conversation has no engine (REQ-575).
     held: Option<Held>,
+    /// What the engine that runs says its version is (`claude_code_version` of `system/init`),
+    /// not saved (REQ-852).
+    engine_version: Option<String>,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -804,6 +807,7 @@ impl State {
             cwd: None,
             advisor: None,
             held: None,
+            engine_version: None,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -1158,6 +1162,8 @@ impl State {
             following: self.followed.map(|f| f.since),
             held: self.held.clone(),
             cwd: self.cwd.clone(),
+            engine_version: self.engine_version.clone(),
+            engine_newer: None,
             suggestion: self.shown_suggestion(),
             older: self.older_cursor(),
         }
@@ -1706,6 +1712,12 @@ impl State {
                 }
                 if msg["skills"].is_array() {
                     self.learn_skills(&msg["skills"]);
+                }
+                if let Some(v) = msg["claude_code_version"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                {
+                    self.engine_version = Some(v.to_owned());
                 }
                 self.begin_auto(now);
             }
@@ -2538,6 +2550,7 @@ impl State {
 
     /// The engine's process ended while the conversation was open.
     pub fn engine_gone(&mut self, reason: &str) -> Vec<Effect> {
+        self.engine_version = None;
         let had_ask = self.pending.take().is_some();
         self.suggestion = None;
         self.inflight = None;
@@ -4106,6 +4119,35 @@ mod tests {
         assert_eq!(short_model("claude-sonnet-5-5"), "sonnet-5.5");
         assert_eq!(short_model("claude-opus-4-1-20250805"), "opus-4.1");
         assert_eq!(short_model("fable"), "fable");
+    }
+
+    #[test]
+    fn the_engines_version_is_what_init_says_and_goes_with_the_engine() {
+        let mut s = st();
+        let head = || Head {
+            id: "c".into(),
+            v: 1,
+            epoch: "e".into(),
+            rev: 1,
+            attention: Vec::new(),
+        };
+        assert_eq!(s.node(head(), &"p".into()).engine_version, None);
+        s.apply(&json!({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "claude_code_version": "2.1.309"}), 0);
+        assert_eq!(
+            s.node(head(), &"p".into()).engine_version.as_deref(),
+            Some("2.1.309")
+        );
+        // An init that does not say it keeps what the engine said before.
+        s.apply(
+            &json!({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5"}),
+            1,
+        );
+        assert_eq!(
+            s.node(head(), &"p".into()).engine_version.as_deref(),
+            Some("2.1.309")
+        );
+        s.engine_gone("el motor terminó");
+        assert_eq!(s.node(head(), &"p".into()).engine_version, None);
     }
 
     #[test]

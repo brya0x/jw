@@ -1740,7 +1740,7 @@ impl View {
         self.session.iter().flat_map(|s| s.jobs.iter()).any(|j| {
             j.kind == JobKind::RemoveWorkspace
                 && j.state == JobState::Failed
-                && j.workspace == workspace
+                && j.workspace.as_deref() == Some(workspace)
         })
     }
 
@@ -4079,7 +4079,7 @@ impl View {
                 match job {
                     Some(j) if j.state == JobState::Running && j.cancellable => {
                         return After::CancelOp {
-                            workspace: j.workspace.clone(),
+                            workspace: j.workspace.clone().unwrap_or_default(),
                         };
                     }
                     Some(j) if j.state == JobState::Running => {
@@ -4092,7 +4092,7 @@ impl View {
                 let ws = self
                     .jobs_listed()
                     .get(self.jobs_selected)
-                    .map(|j| j.workspace.clone());
+                    .and_then(|j| j.workspace.clone());
                 let at = ws.as_ref().and_then(|ws| {
                     self.session
                         .as_ref()
@@ -7382,6 +7382,7 @@ fn job_title(j: &Job) -> String {
     match j.kind {
         JobKind::RemoveWorkspace => format!("quitar {}", j.name),
         JobKind::SyncWorkspace => format!("subir {}", j.name),
+        JobKind::UpdateClaude => format!("actualizar {}", j.name),
     }
 }
 
@@ -7407,6 +7408,13 @@ fn job_said(j: &Job) -> (String, Rgb) {
             ("quitado · la rama se queda".into(), look::dim())
         }
         (JobState::Done, JobKind::SyncWorkspace) => (format!("subido {}", j.name), look::dim()),
+        (JobState::Done, JobKind::UpdateClaude) => (
+            format!(
+                "{} · las conversaciones abiertas siguen en la anterior",
+                j.name
+            ),
+            look::dim(),
+        ),
         (JobState::Failed, _) => (
             j.detail
                 .clone()
@@ -11684,7 +11692,7 @@ mod tests {
         Job {
             id: id.into(),
             kind,
-            workspace: workspace.into(),
+            workspace: (!workspace.is_empty()).then(|| workspace.into()),
             name: name.into(),
             state,
             started_at: 1_000_000,
@@ -12108,6 +12116,7 @@ mod tests {
             conversation: false,
             projects: dir.join("projects"),
             chrome: false,
+            claude_update: None,
         };
         let socket = config.socket.clone();
         let daemon = daemon::Daemon::start(config).unwrap();
@@ -14390,6 +14399,7 @@ mod tests {
             conversation: false,
             projects: dir.join("projects"),
             chrome: false,
+            claude_update: None,
         };
         let d = daemon::Daemon::start(config.clone()).unwrap();
         let c = Client::connect(&config.socket, "test").unwrap();

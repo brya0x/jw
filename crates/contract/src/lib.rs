@@ -696,6 +696,8 @@ pub enum JobKind {
     RemoveWorkspace,
     /// A branch is being pushed (`sync_workspace`).
     SyncWorkspace,
+    /// The daemon updated `claude`, or tried to and failed (REQ-849, REQ-850); it has no workspace.
+    UpdateClaude,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -711,9 +713,12 @@ pub enum JobState {
 pub struct Job {
     pub id: Id,
     pub kind: JobKind,
-    /// The workspace it is about; it is gone from the session when a removal ended well.
-    pub workspace: Id,
-    /// What to call it: the workspace's name for a removal, the branch for a push.
+    /// The workspace it is about; it is gone from the session when a removal ended well. Absent
+    /// for a job that is about none (`update_claude`, REQ-851).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Id>,
+    /// What to call it: the workspace's name for a removal, the branch for a push, `claude <before> → <after>`
+    /// for an update that went well and `claude` for one that failed.
     pub name: String,
     pub state: JobState,
     /// When it began, in milliseconds since the epoch of the daemon's machine.
