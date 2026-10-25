@@ -103,6 +103,20 @@ Four runs of a real `claude --model haiku` in a private temp directory (`--setti
 
 Not measured: the interactive terminal (the same `Stop` hook jw already installs for attention; the block was not tried there), `exit 2` with stderr as the other way to block, `--resume` of a session that was kept going by a hook, and the cost of the extra turns (they pay the cache again like any turn).
 
+### Getting the agent to use a skill after its plan (N180, 2026-10-25, claude 2.1.309)
+
+Three runs of `claude -p --model haiku` in a private temp directory, with `JW_PANE_ID` set and one project skill `jw-tasks` (it shows in the `system/init` skills). The prompt asked for a plan of three steps and then to run it. One run each, so these are first readings, not rates.
+
+| Question | Measured |
+|---|---|
+| Does the agent invoke the skill on its own, by its `description` («use right after you have made a plan, whenever you run inside jw»)? | **No.** It made the plan in text and did the work; no `Skill` call. *tested, one run* |
+| With a louder description («MANDATORY — invoke this skill … before doing any step»)? | **No**, the same. *tested, one run* |
+| With a `UserPromptSubmit` hook that returns `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"You run inside jw. After you make a plan, use the jw-tasks skill (Skill tool) before doing any step of it."}}`? | **Yes.** The agent called `Skill` right after its plan, wrote `.jw/tasks.md` with the closing `fin` task the skill asked for, and ticked `[x]` as it worked (it also wrote `(after: none)`, a slip the format has to tolerate). So `additionalContext` reaches the model and moves it. *tested, one run* |
+| Can the daemon say something to the agent when the person approves a plan in the engine? | No text channel: approval is `{behavior:"allow", updatedInput}` with the input unchanged (`conversation.rs` `answer_plan`, `permission_reply`); only a refusal carries text. *read in code* |
+| Is the nudge available in the engine? | Same as the Stop hook: the engine gets no hooks `--settings` and no `JW_PANE_ID` today. *read in code* |
+
+Not measured: the same with sonnet or opus; a plan made in plan mode (`ExitPlanMode`) and a `PostToolUse` hook on it answering with `additionalContext`; the interactive terminal; how many runs out of ten take the nudge.
+
 ## Cost and limits
 
 A turn costs what the same turn costs in Claude's own screen, through the person's account; a call of about a dozen tokens of output cost about 0.06 USD, almost all cache creation. `total_cost_usd` in `result` is cumulative for the process.

@@ -74,7 +74,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 #push.on{display:block}#push b{display:block;color:#e6e9ef;font-size:11px;font-weight:700;margin-bottom:2px}
 </style></head><body>
 <h1>jw · listas de tareas</h1>
-<p class="note">Prototipo para aprobar antes del spec (N180). El objetivo: <b>el agente de un worktree trabaja su lista de tareas en bucle hasta terminar todo el proceso</b>, y la persona lo revisa en jw, <b>dentro de ese workspace</b> (las tareas son del worktree o carpeta, no una entidad aparte). <b>Siempre hay una tarea de pruebas al final</b>, añadida sola aunque la persona no la escriba: corre los tests y el CI del proyecto y recoge el resultado y la evidencia. <b>jw avisa a la persona cuando esa tarea termina o el bucle se detiene.</b> jw da capacidades, no un flujo: la lista es <b>un archivo de texto</b> que se edita a mano, <code>jw tasks</code> es el CLI que el agente llama (como <code>jw ls</code> o <code>jw prompt</code>) y el bucle es <b>el gancho de parada que jw ya instala</b>, activado por workspace y nunca por defecto. Abajo hay cuatro workspaces con lista: <b>sales-assist</b> sin activar y sin la tarea de pruebas escrita (se añade al activar), <b>api-v2</b> con el bucle en marcha, <b>checkout</b> parado por una tarea bloqueada y <b>export-pdf</b> terminado con su evidencia. Prueba <b>salta a las pruebas</b> y luego <b>termina la tarea</b> o <b>las pruebas fallan</b> en api-v2: el aviso sale en la barra de la terminal, en un banner del teléfono y en <code>avisos N</code>. La terminal, el teléfono, el CLI y el archivo leen el mismo estado.</p>
+<p class="note">Prototipo para aprobar antes del spec (N180). El objetivo: <b>el agente de un worktree trabaja su lista de tareas en bucle hasta terminar todo el proceso</b>, y la persona lo revisa en jw, <b>dentro de ese workspace</b> (las tareas son del worktree o carpeta, no una entidad aparte). <b>Siempre hay una tarea de pruebas al final</b>, añadida sola aunque la persona no la escriba: corre los tests y el CI del proyecto y recoge el resultado y la evidencia. <b>jw avisa a la persona cuando esa tarea termina o el bucle se detiene.</b> jw da capacidades, no un flujo: la lista es <b>un archivo de texto</b> que se edita a mano, <code>jw tasks</code> es el CLI que el agente llama (como <code>jw ls</code> o <code>jw prompt</code>) y el bucle es <b>el gancho de parada que jw ya instala</b>, activado por workspace (por el skill del agente tras un plan, o por la persona), nunca sin una lista armada. <b>La entrada es un skill</b>: el agente lo usa después de armar un plan, siempre que corra dentro de jw, y el skill convierte el plan en la lista (prueba <b>el agente arma un plan</b> en dotfiles). Abajo hay cuatro workspaces con lista: <b>sales-assist</b> sin activar y sin la tarea de pruebas escrita (se añade al activar), <b>api-v2</b> con el bucle en marcha, <b>checkout</b> parado por una tarea bloqueada y <b>export-pdf</b> terminado con su evidencia. Prueba <b>salta a las pruebas</b> y luego <b>termina la tarea</b> o <b>las pruebas fallan</b> en api-v2: el aviso sale en la barra de la terminal, en un banner del teléfono y en <code>avisos N</code>. La terminal, el teléfono, el CLI y el archivo leen el mismo estado.</p>
 
 <div class="ctl">
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde vive el archivo</legend>
@@ -104,6 +104,18 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
     <label><input type="radio" name="adv" data-o="adv" value="yes" checked> <span><b class="rec">sí</b>, como una instrucción del texto de esa tarea (recomendado)</span></label>
     <label><input type="radio" name="adv" data-o="adv" value="no"> <span>no: solo pruebas y evidencia</span></label>
   </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el skill del agente</legend>
+    <label><input type="radio" name="skill" data-o="skill" value="own" checked> <span><b class="rec">un skill propio</b> <code>jw-tasks</code> (recomendado)</span></label>
+    <label><input type="radio" name="skill" data-o="skill" value="section"> <span>una sección más del skill <code>jw</code> que ya existe</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>cómo se asegura el «siempre tras un plan»</legend>
+    <label><input type="radio" name="trg" data-o="trg" value="nudge" checked> <span><b class="rec">descripción del skill + una línea del gancho</b> <code>UserPromptSubmit</code> (recomendado)</span></label>
+    <label><input type="radio" name="trg" data-o="trg" value="desc"> <span>solo la descripción del skill</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>quién activa el bucle</legend>
+    <label><input type="radio" name="act" data-o="act" value="agent" checked> <span><b class="rec">el agente</b>, como último paso del skill (recomendado)</span></label>
+    <label><input type="radio" name="act" data-o="act" value="person"> <span>la persona (<kbd>L</kbd> o el botón)</span></label>
+  </fieldset>
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde se anota la evidencia</legend>
     <label><input type="radio" name="evi" data-o="evi" value="list" checked> <span><b class="rec">en la lista</b>: líneas bajo la tarea final (recomendado)</span></label>
     <label><input type="radio" name="evi" data-o="evi" value="file"> <span>en un archivo junto a ella</span></label>
@@ -121,6 +133,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   </fieldset>
   <fieldset><legend>simular lo que hace el agente en la lista elegida (la de la terminal)</legend>
     <button data-b="finish">termina la tarea y acaba el turno</button>
+    <button data-b="plan">el agente arma un plan (skill)</button>
     <button data-b="skip">salta a las pruebas (hace las demás)</button>
     <button data-b="fail">las pruebas fallan</button>
     <button data-b="idle">acaba el turno sin marcarla hecha</button>
@@ -153,6 +166,9 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 <h2>El archivo</h2>
 <div class="term"><pre id="file"></pre></div>
 <p class="note" id="file-note"></p>
+<h2>El skill que usa el agente tras armar un plan (borrador del texto; no se implementa aún)</h2>
+<div class="term"><pre id="skill"></pre></div>
+<p class="note">En el producto <code>{bin}</code> y <code>{pane_env}</code> los rellena <code>jw</code> al instalar, como hoy hace con su skill (<code>agent.rs</code>); aquí se ve con <code>jw</code>. Cambia con las decisiones de arriba.</p>
 <h2>Lo que lee el agente cuando el gancho lo deja seguir</h2>
 <div class="term"><pre id="hook"></pre></div>
 
@@ -161,10 +177,13 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>La lista es un archivo; el bucle es del daemon.</b> El archivo dice la <i>intención</i> (hecha, bloqueada, qué espera a qué). Lo que corre ahora (la tarea actual, la vuelta, el panel) no se escribe en el archivo: lo sabe el daemon. Si el daemon se reinicia, el bucle queda apagado (seguro) y el archivo sigue intacto.</li>
   <li><b>Formato de una tarea:</b> <code>- [ ] t3 endpoints (after: t1, t2)</code>. El id (<code>t3</code>) es lo primero; <code>after:</code> es opcional; <code>[x]</code> hecha, <code>[!]</code> bloqueada con <code>blocked: motivo</code> dentro del mismo paréntesis. Una línea que no es tarea (títulos, notas) se respeta tal cual al escribir. Un id repetido o un <code>after</code> que no existe se dice en <code>jw tasks ls</code>, no se arregla solo.</li>
   <li><b>El orden de ejecución</b> sale de las dependencias: cada tarea tiene un <b>nivel</b> (1 + el mayor de sus <code>after</code>); las del mismo nivel pueden ir en cualquier orden y <code>next</code> elige la primera del archivo. Estados: <span class="c-green">✓</span> hecha · <span class="c-blue">▶</span> corre ahora · ○ lista · <span class="c-dim">◌</span> espera a otra · <span class="c-yellow">✗</span> bloqueada. Un ciclo se detecta y se dice.</li>
-  <li><b>Activar:</b> <code>jw tasks loop on --max 20</code> o <kbd>L</kbd> / el botón del teléfono, <b>por workspace y nunca por defecto</b>. Empieza mandando al agente a la primera tarea lista (vuelta 1). Detener: <code>loop off</code>, <kbd>L</kbd> otra vez o el botón. Cada vez que el agente acaba un turno, el gancho <code>jw hook stop</code> decide en menos de su tiempo límite (5 s) y devuelve <code>{"decision":"block","reason":"…"}</code> con la tarea siguiente, o nada (y el agente para).</li>
+  <li><b>Activar:</b> <code>jw tasks loop on --max 20</code> o <kbd>L</kbd> / el botón del teléfono, <b>por workspace</b>, y solo cuando hay una lista armada: el último paso del skill (decisión) o la persona; nada arranca sin lista. Empieza mandando al agente a la primera tarea lista (vuelta 1). Detener: <code>loop off</code>, <kbd>L</kbd> otra vez o el botón. Cada vez que el agente acaba un turno, el gancho <code>jw hook stop</code> decide en menos de su tiempo límite (5 s) y devuelve <code>{"decision":"block","reason":"…"}</code> con la tarea siguiente, o nada (y el agente para).</li>
   <li><b>El bucle se detiene</b> (y lo dice en la fila y en el aviso): la tarea final hecha, y con ella todas (✓, un solo aviso al final); una tarea bloqueada (con la otra opción sigue con las que no dependen de ella); ninguna lista (lo que queda espera a una bloqueada o hay un ciclo); el <b>máximo de vueltas</b>; <b>sin avance</b> (la misma tarea 3 vueltas seguidas sin marcarla hecha); o tú.</li>
   <li><b>Nunca contesta por la persona.</b> Un permiso, una pregunta (<code>AskUserQuestion</code>) o un plan son peticiones que dejan el turno sin terminar: <b>el gancho de parada ni se llama</b> (medido, <code>docs/claude-engine.md</code>). El bucle queda en pausa y la fila marca <span class="c-red">!</span>; la vuelta no cuenta. Una pregunta escrita en texto sí acaba el turno y no se distingue; por eso la <i>razón</i> que lee el agente le dice qué hacer en vez de preguntar: <code>jw tasks block t3 "motivo"</code>.</li>
   <li><b>Vueltas:</b> las cuenta el daemon, no el campo <code>stop_hook_active</code> (que es solo «este fin de turno viene de un bloqueo»); Claude Code <b>no pone ningún tope propio</b> (medido: seis bloqueos seguidos, obedecidos). Por defecto 20, ajustable al activar.</li>
+  <li><b>La entrada es un skill, no un comando de la persona.</b> Tras armar un plan, dentro de jw, el agente lo usa: escribe el plan como el archivo de tareas, <code>jw tasks ls</code> lo valida y le añade la tarea final, y (decisión) activa el bucle. La persona no tiene que pedirlo ni teclear nada; revisa en la vista del workspace. El texto del skill se ve abajo y cambia con las decisiones.</li>
+  <li><b>«Siempre» no se consigue con la descripción sola (medido).</b> Un skill se elige por su descripción, y haiku <b>no lo invocó</b> tras su plan ni con una descripción que decía «MANDATORY» (<code>docs/claude-engine.md</code>); con <b>una línea de contexto del gancho <code>UserPromptSubmit</code></b> que jw ya instala sí lo invocó y armó la lista. Por eso se recomienda descripción más esa línea. Es una lectura de una sola prueba con haiku; con sonnet y opus no se ha medido.</li>
+  <li><b>Hoy el skill de jw no se instala solo.</b> <code>jw skill install</code> lo escribe en <code>~/.claude/skills/&lt;bin&gt;/SKILL.md</code> y solo ese comando (nada lo hace al abrir un panel), y el código admite un único skill (la ruta lleva el nombre del binario); sus palabras las fijan pruebas. Un skill propio exige que <code>install</code> escriba dos y su propia prueba; una sección en el existente no toca la instalación pero carga todo el texto de coordinación cada vez. Y si no está instalado, no hay «siempre».</li>
   <li><b>La última tarea siempre existe.</b> Se llama <code>fin</code> y lleva <code>after: *</code> (todas las demás): no corre hasta que lo demás esté hecho, y una tarea añadida después la sigue precediendo. Si la persona no la escribió, <code>jw tasks loop on</code> (o la TUI al activar) <b>la añade al archivo</b>: queda visible, editable y en git, y antes de activar la sección la muestra como «se añade al activar». Su texto es la instrucción del agente: <i>corre los tests y el CI del proyecto y anota el resultado y la evidencia</i>. Si la persona escribió una línea con <code>after: *</code>, esa es la final y no se añade otra.</li>
   <li><b>Probar y recolectar.</b> El agente corre lo que el proyecto ya tiene (sus tests y el CI de la rama, que jw ya vigila con <code>ci_failed</code>) y lo anota con <code>jw tasks note fin "cargo test: 214 ok"</code>. La evidencia se guarda <b>bajo la tarea en el archivo</b> o en <code>.jw/evidence.md</code> (decisión) y la sección la muestra debajo de la tarea. Si las pruebas fallan, el agente no pregunta: bloquea <code>fin</code> con el motivo y el bucle se detiene. Marcarla hecha <b>sin ninguna nota</b> no se impide (jw no juzga las pruebas), pero la sección lo dice en amarillo: «sin evidencia anotada».</li>
   <li><b>Revisión con el advisor (decisión).</b> Con «sí», el texto de <code>fin</code> añade <i>«antes de marcarla, pide revisión al advisor»</i> y el agente anota su veredicto como una nota más. <b>jw no implementa nada para esto</b>: es texto de la tarea, que el agente cumple con la herramienta que ya tiene; con «no», el texto no lo menciona. Se ve en el archivo y en lo que lee el agente.</li>
@@ -195,6 +214,9 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>Dónde vive el archivo.</b> <span class="rec">Recomiendo <code>.jw/tasks.md</code> en el repo del workspace.</span> Se versiona, el agente lo edita como cualquier archivo y se lee en git. Consecuencias: <b>cada worktree tiene su copia</b> (la lista de <code>feat/api-v2</code> viaja con su rama) y las casillas marcadas salen en el diff del PR (útil para revisar; ruido si no lo quieres, se pone en <code>.gitignore</code>). Alternativa: el estado de jw (<code>~/.local/state/jw/tasks/&lt;workspace&gt;.md</code>): no ensucia el repo, pero no se versiona y un agente de otro worktree no la ve.</li>
   <li><b>Formato.</b> <span class="rec">Recomiendo casillas de Markdown.</span> Se lee sin herramienta, el visor de Markdown de jw ya la dibuja y es lo que la persona ya escribe. TOML y JSON son más estrictos pero nadie los escribe a mano a gusto.</li>
   <li><b>Dónde está la sección.</b> <span class="rec">Recomiendo dentro del workspace</span>: la lista es de ese worktree y de su agente, y su revisión está donde ya estás trabajando (marca en la fila, vista junto al agente). La zona aparte (como CONVERSACIONES) es el patrón de lo que <i>no</i> es un workspace: aquí repetiría el mismo workspace en otra fila. La pantalla resumen (<kbd>T</kbd>) sirve para ver todas juntas y puede añadirse después sin cambiar nada, porque lee lo mismo.</li>
+  <li><b>Skill propio o sección del existente.</b> <span class="rec">Recomiendo un skill propio <code>jw-tasks</code></span>: su descripción (la que el agente ve siempre) habla de «después de un plan», no de coordinar otros workspaces como la del skill <code>jw</code>; su texto solo se carga cuando se usa; y puede cambiar sin tocar el otro. Cuesta que <code>jw skill install</code> escriba dos archivos y una prueba nueva. La sección en el existente es menos código y más texto cargado.</li>
+  <li><b>Cómo se asegura el «siempre tras un plan».</b> <span class="rec">Recomiendo la descripción y una línea del gancho <code>UserPromptSubmit</code></span> (medido: sin la línea, no lo usó). Para el motor (las conversaciones) hace falta lo mismo que para el bucle: darle el <code>--settings</code> de ganchos y <code>JW_PANE_ID</code>. Alternativas sin medir: una línea en el prompt de sistema al lanzar claude, o un gancho sobre el plan aprobado (en el motor la aprobación no lleva texto).</li>
+  <li><b>Quién activa el bucle.</b> <span class="rec">Recomiendo el agente</span>, como último paso del skill: ya se aprobó un plan (en modo plan el agente no puede tocar nada antes de la aprobación), son como mucho 20 vueltas y la persona lo detiene con <kbd>L</kbd> cuando quiera. Con «la persona» el agente deja la lista y avisa (<span class="c-yellow">?</span>), y el bucle espera; es más prudente y rompe el «solo». Es un cambio respecto a la idea de que nunca arranca solo: lo dejo a tu elección.</li>
   <li><b>¿Revisión con el advisor en la tarea final?</b> <span class="rec">Recomiendo sí</span>, como una frase del texto de la tarea y nada más: es la herramienta que los agentes ya usan antes de dar algo por hecho, jw no tiene que implementarla ni conocerla, y quien no la quiera borra la frase del archivo. Con «no» la tarea es solo pruebas y evidencia.</li>
   <li><b>Dónde se anota la evidencia.</b> <span class="rec">Recomiendo en la lista</span> (líneas con sangría bajo la tarea): un solo archivo, se ve en el diff del PR junto a lo que se hizo. Un archivo aparte (<code>.jw/evidence.md</code>) es mejor si la evidencia es larga (salidas completas de tests); la tarea final lo enlaza.</li>
   <li><b>El aviso de «bucle detenido».</b> <span class="rec">Recomiendo reutilizar <code>Question</code></span> (arriba, sin contrato). Un tipo nuevo da una marca propia, pero rompe a los clientes cerrados.</li>
@@ -221,7 +243,7 @@ const clip=(s,n)=>{s=[...String(s)];return n<=0?'':s.length<=n?s.join(''):s.slic
 const wrap=(s,n)=>{const out=[];String(s).split('\n').forEach(p=>{let l='';p.split(' ').forEach(w=>{if(l&&[...(l+' '+w)].length>n){out.push(l);l=w}else l=l?l+' '+w:w});out.push(l)});return out};
 const spin=()=>SPIN[Math.floor(performance.now()/110)%SPIN.length];
 const KINDS={perm:{g:'!',c:'c-red'},ask:{g:'?',c:'c-yellow'},done:{g:'✓',c:'c-green'}};
-const opt={loc:'repo',fmt:'md',sec:'ws',max:'20',blk:'stop',par:'later',adv:'yes',evi:'list'};
+const opt={loc:'repo',fmt:'md',sec:'ws',max:'20',blk:'stop',par:'later',adv:'yes',evi:'list',skill:'own',trg:'nudge',act:'agent'};
 const fx={cols:100};
 
 /* ---------- the model: pure, no drawing */
@@ -236,6 +258,7 @@ const mkFin=(st,ev,why,auto)=>({id:'fin',t:'pruebas y evidencia',after:['*'],st:
 const txt=t=>t.fin?finalText():t.t;
 const evOf=t=>(t.ev||[]).filter(e=>opt.adv==='yes'||!e.startsWith('advisor:'));
 const EV_OK=['cargo test: 214 ok · 0 fallan','CI #58 verde (4 min)','advisor: sin objeciones'];
+const mkLoop=o=>Object.assign({on:false,laps:0,max:20,cur:null,last:null,stale:0,waiting:false,pane:'panel 2 · claude',stop:null},o);
 function seed(none){
   M={ws:[
     {id:'w1',name:'sales-assist',branch:'main',panes:2},
@@ -244,7 +267,7 @@ function seed(none){
     {id:'w4',name:'export-pdf',repo:'design-studio',branch:'fix/export-pdf',panes:2},
     {id:'w5',name:'dotfiles',branch:'',panes:1}],lists:{},push:null};
   if(none)return;
-  const lp=o=>Object.assign({on:false,laps:0,max:20,cur:null,last:null,stale:0,waiting:false,pane:'panel 2 · claude',stop:null},o);
+  const lp=mkLoop;
   // the person wrote three tasks and no tests: the last one is not in the file yet
   M.lists.w1={seen:true,tasks:[T_('t1','pantalla de login'),T_('t2','recordar la sesión',['t1']),T_('t3','cerrar sesión',['t2']),mkFin('todo',[],'',true)],loop:lp({pane:'panel 1 · claude'})};
   M.lists.w2={seen:true,tasks:[
@@ -678,7 +701,7 @@ function fileText(w){
 const evidenceText=w=>{const L=listOf(w.id),f=L&&L.tasks.find(t=>t.fin);if(!f)return '';const e=evOf(f);return `# ${evPath(w)}\n## ${f.id} ${f.t}\n`+(e.length?e.map(x=>'- '+x).join('\n'):'(vacío)')};
 function drawCli(){
   const w=wsById(target()?(detId()||ui.sel.id):ui.sel.id)||M.ws[1],L=listOf(w.id),pad=(s,n)=>(s+' '.repeat(n)).slice(0,n);
-  if(!L){$('cli').textContent=`$ jw tasks ls\nsin lista en ${w.name}: ${filePath(w)} no existe\n`;$('file').textContent='(sin lista)';$('hook').textContent='(el bucle no está activo)';$('file-note').textContent='';return}
+  if(!L){$('cli').textContent=`$ jw tasks ls\nsin lista en ${w.name}: ${filePath(w)} no existe\n`;$('file').textContent='(sin lista)';$('skill').textContent=skillText();$('hook').textContent='(el bucle no está activo)';$('file-note').textContent='';return}
   let o=`# en ${w.name}\n$ jw tasks ls\n`+pad('NIVEL',7)+pad('ID',5)+pad('ESTADO',10)+pad('TAREA',28)+'ESPERA A\n';
   const nm={done:'hecha',run:'corre',ready:'lista',wait:'espera',blocked:'bloqueada'};
   ordered(L).forEach(r=>{const s=stateOf(L,r.t);o+=pad(r.lv,7)+pad(r.t.id,5)+pad(nm[s],10)+pad(clip(r.t.t,26),28)+(depsText(r.t)||'—')+(r.t.st==='blocked'?'   «'+r.t.why+'»':'')+'\n'});
@@ -689,6 +712,7 @@ function drawCli(){
   o+=`$ jw tasks note fin "cargo test: 214 ok · CI #58 verde"    # evidencia, ${opt.evi==='list'?'bajo la tarea en el archivo':'en '+evPath(w)}\n$ jw tasks done ${t0?t0.id:'t1'}\n$ jw tasks block ${t0?t0.id:'t1'} "falta la clave de Stripe"\n$ jw tasks loop status\n${loopLine(L)}\n$ jw tasks loop on --max ${opt.max}    # off para detenerlo\n`;
   if(opt.par==='here')o+=`$ jw tasks run --parallel 3    # un worktree por tarea lista, un agente en cada una (aparte)\n`;
   $('cli').textContent=o;
+  $('skill').textContent=skillText();
   $('file').textContent='# '+filePath(w)+'\n'+fileText(w)+(opt.evi==='file'?'\n\n'+evidenceText(w):'');
   $('file-note').textContent=opt.loc==='repo'
     ?`Ruta completa de esta lista: ${absPath(w)}. En el repo: se versiona, cada worktree tiene su copia y las casillas marcadas salen en el diff del PR.`
@@ -700,10 +724,35 @@ function drawCli(){
 }
 
 /* ---------- the buttons "simular": what the agent does in the chosen list */
+function skillText(){
+  const own=opt.skill==='own',B='{bin}',w=wsById(detId()||ui.sel.id)||M.ws[1];
+  const ev=opt.evi==='file'?`, which goes to ${evPath(w)}`:'';
+  let o=own?`---\nname: ${B}-tasks\ndescription: Use right after you have made a plan, whenever you run inside ${B} ({pane_env} is set). Turns the plan into this workspace's task list and works it until everything is done.\n---\n# ${B} tasks: work a plan to the end\n`
+    :`## Tasks: work a plan to the end   (a new section of the ${B} skill; its description would gain: "and, after you make a plan, turn it into the task list")\n`;
+  o+=`\n1. Write the plan as ${filePath(w)}: one line per task, \`- [ ] t1 title (after: t0)\`.\n   Ids t1, t2…; \`after\` lists the tasks that must be done first.\n`
+    +`2. Run \`${B} tasks ls\`: it checks ids and dependencies, shows the order and adds the last task (fin) if you did not write it.\n`
+    +(opt.act==='agent'?`3. Run \`${B} tasks loop on --max ${opt.max}\`. When you end a turn, ${B} gives you the next ready task.\n`:`3. Tell the person the list is ready: they start the loop.\n`)
+    +`4. Each task: do it, \`${B} tasks done <id>\`, end your turn. If you need the person, do not ask:\n   \`${B} tasks block <id> "why"\`.\n`
+    +`5. The last task (fin): run the project's tests and CI and note the result and the evidence with\n   \`${B} tasks note fin "…"\`${ev}`+(opt.adv==='yes'?`; ask the advisor to review before you finish`:'')+`; then \`${B} tasks done fin\`.\n`
+    +`\nRules: never mark done what you did not do; the loop stops by itself when fin is done, a task is blocked or the laps run out.`;
+  if(opt.trg==='nudge')o+=`\n\n# plus one line from the UserPromptSubmit hook jw already installs (additionalContext):\n"You run inside ${B}. After you make a plan, use the ${own?B+'-tasks':'tasks section of the '+B} skill before doing any step of it."`;
+  return o;
+}
+// what the skill does in a workspace without a list
+function agentPlan(){
+  const w=(!listOf(ui.sel.id)?wsById(ui.sel.id):null)||M.ws.find(x=>!listOf(x.id));
+  if(!w){say('todos los workspaces ya tienen lista','c-dim');return}
+  if(opt.trg==='desc'){say('el agente no invocó el skill (medido con haiku: la descripción sola no basta): sin lista','c-yellow');return}
+  const L={id:w.id,seen:true,tasks:[T_('t1','escribir la función'),T_('t2','escribir su test',['t1']),T_('t3','ejecutar y corregir',['t2']),mkFin('todo',[],'',true)],loop:mkLoop({pane:'panel 1 · claude'})};
+  M.lists[w.id]=L;
+  if(opt.act==='agent'){const r=activate(L,+opt.max);say(w.name+': lista creada y bucle en marcha, empieza '+(r.next?r.next.id:'—'),'c-green')}
+  else{notify(L,'ask','plan convertido en lista: actívala con L');say(w.name+': lista creada, espera a que la actives','c-yellow')}
+}
 function onControl(b){
   const id=detId()||ui.sel.id,L=listOf(id);
   if(b==='reset'){seed(false);resetUi();resetPh()}
   else if(b==='none'){seed(true);resetUi();resetPh()}
+  else if(b==='plan')agentPlan();
   else if(!L){say('elige una fila con lista','c-dim')}
   else{
     const lp=L.loop,cur=lp.cur&&tById(L,lp.cur);
