@@ -114,6 +114,22 @@ fn a_new_version_is_a_job_that_went_well_with_no_workspace() {
 }
 
 #[test]
+fn an_update_that_prints_a_lot_still_ends_well() {
+    // About 16 KiB on each pipe, past what the reader keeps: the command must not be cut off by a
+    // pipe that nobody reads (a download's progress is that kind of output).
+    let rig = Rig::new(
+        "2.1.309",
+        "i=0; while [ $i -lt 400 ]; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy >&2; i=$((i+1)); done; read n < \"$D/next\"; echo \"$n\" > \"$D/ver\"",
+    );
+    let _daemon = rig.start(Duration::from_secs(5));
+    let mut c = open_session(&rig.sb);
+    let jobs = jobs_after(&mut c, WAIT);
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(jobs[0]["state"], "done", "{jobs:?}");
+    assert_eq!(jobs[0]["name"], "claude 2.1.309 → 2.1.312");
+}
+
+#[test]
 fn the_same_version_leaves_no_job() {
     let rig = Rig::new("2.1.309", ":");
     let _daemon = rig.start(Duration::from_secs(5));
