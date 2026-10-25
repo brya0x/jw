@@ -1390,6 +1390,40 @@ fn send_now_in_the_middle_of_a_turn_interrupts_it_and_goes_first() {
     r.stop();
 }
 
+/// REQ-974: `conversation_unqueue` takes the last message out of the queue and answers it; the rest still goes.
+#[test]
+fn unqueue_takes_the_last_message_that_waits_and_the_rest_goes_on() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    assert_eq!(
+        r.cmd(Cmd::ConversationUnqueue { node: node.clone() })
+            .unwrap(),
+        None,
+        "nothing waits"
+    );
+    r.send(&node, "slow first");
+    r.until(&node, "the turn to run", |v| v["status"] != "idle");
+    r.send(&node, "second");
+    r.send(&node, "third");
+    let taken = r
+        .cmd(Cmd::ConversationUnqueue { node: node.clone() })
+        .unwrap();
+    assert_eq!(taken, Some(serde_json::json!({"text": "third"})));
+    let v = r.conv(&node);
+    assert_eq!(v["queue"], serde_json::json!(["second"]));
+    r.cmd(Cmd::ConversationInterrupt { node: node.clone() })
+        .unwrap();
+    let v = r.idle_after(&node, 2);
+    assert_eq!(v["queue"], serde_json::json!([]));
+    let sent: Vec<String> = log_lines(&r.log)
+        .into_iter()
+        .filter(|l| l.starts_with("user"))
+        .collect();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[1].contains("second") && !sent.iter().any(|l| l.contains("third")));
+    r.stop();
+}
+
 /// REQ-965: with nothing running `now` is a plain send.
 #[test]
 fn send_now_with_nothing_running_is_a_plain_send() {

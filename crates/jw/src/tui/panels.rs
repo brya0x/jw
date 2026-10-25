@@ -133,7 +133,7 @@ const KEYS: [(&str, &str, &str); 24] = [
     ),
     (
         "↑ ↓",
-        "en la primera o la última fila del campo: los mensajes enviados",
+        "en la primera fila del campo: lo que espera en la cola y, si no hay, los enviados",
         "escribir",
     ),
     (

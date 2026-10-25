@@ -1367,6 +1367,19 @@ impl State {
         out
     }
 
+    /// The last message of the person's that waits, out of the queue (REQ-974): not the engine's
+    /// own lines and not one with a picture.
+    pub fn unqueue(&mut self) -> Option<String> {
+        let at = self
+            .queue
+            .iter()
+            .rposition(|q| matches!(q, Queued::Text { images, .. } if images.is_empty()))?;
+        match self.queue.remove(at) {
+            Some(Queued::Text { text, .. }) => Some(text),
+            _ => None,
+        }
+    }
+
     fn start_text(&mut self, text: &str, images: Vec<Image>, now: u64) -> Vec<Effect> {
         if !self.named {
             self.name = clip(&text.split_whitespace().collect::<Vec<_>>().join(" "), 28);
@@ -4437,6 +4450,34 @@ mod tests {
         assert!(s.pending.is_none() && s.queue.is_empty());
         assert!(e.iter().any(|e| matches!(e, Effect::ClearAsk)), "{e:?}");
         assert!(writes(&e)[0].to_string().contains("otra cosa"), "{e:?}");
+    }
+
+    /// REQ-974: the last message of the person's comes out of the queue; an engine's line and a message with a picture stay.
+    #[test]
+    fn unqueue_takes_the_last_message_of_the_person_and_leaves_the_rest() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.send("a", vec![], 1);
+        s.send(
+            "con foto",
+            vec![Image {
+                media_type: "image/png".into(),
+                data: "AAAA".into(),
+            }],
+            2,
+        );
+        s.set(None, None, Some("opus".into()), None, None);
+        s.send("b", vec![], 3);
+        s.set(None, None, None, Some("high".into()), None);
+        assert_eq!(
+            queued(&s),
+            ["a", "con foto", "/model opus", "b", "/effort high"]
+        );
+        assert_eq!(s.unqueue().as_deref(), Some("b"));
+        assert_eq!(s.unqueue().as_deref(), Some("a"));
+        assert_eq!(s.unqueue(), None);
+        assert_eq!(queued(&s), ["con foto", "/model opus", "/effort high"]);
+        assert_eq!(st().unqueue(), None, "an empty queue");
     }
 
     #[test]

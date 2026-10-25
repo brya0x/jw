@@ -295,6 +295,16 @@ class ConformanceTest {
         assertTrue(blocks.any { it is MdBlock.Table })
     }
 
+    /** The result of `conversation_unqueue` in the fixture is what [Unqueued] reads, and writes back as it was. */
+    @Test
+    fun theReplyOfConversationUnqueueIsTheTextThatLeftTheQueue() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-conversation-unqueue.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val taken = ContractJson.decodeFromJsonElement(Unqueued.serializer(), result)
+        assertEquals("y luego corre cargo test auth", taken.text)
+        assertEquals(result, ContractJson.encodeToJsonElement(Unqueued.serializer(), taken))
+    }
+
     /** The result of `conversation_history` in the fixture is what [SentList] reads, folds included, and writes back as it was. */
     @Test
     fun theReplyOfConversationHistoryIsTheMessagesSentOldestFirst() {

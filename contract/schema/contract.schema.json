@@ -750,6 +750,7 @@
             "now": { "type": "boolean" }
           }
         },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_unqueue" }, "node": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_history" }, "node": { "$ref": "#/$defs/Id" } } },
         {
           "type": "object",

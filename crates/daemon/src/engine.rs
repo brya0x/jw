@@ -896,6 +896,25 @@ fn check_images(images: &[Image]) -> Result<(), crate::commands::ErrorBody> {
     Ok(())
 }
 
+/// `conversation_unqueue`: the last message of the person's that waits, out of the queue and in
+/// the answer, or no answer when none waits (REQ-974).
+pub fn unqueue(shared: &Shared, node: &str) -> Done {
+    let mut core = shared.lock();
+    let pane = pane_of(&core, node)?;
+    let c = core
+        .convs
+        .get_mut(&pane)
+        .ok_or_else(|| no_conversation(node))?;
+    let Some(text) = c.st.unqueue() else {
+        return Ok(None);
+    };
+    c.dirty = true;
+    core.refresh();
+    drop(core);
+    save_due(shared, true);
+    Ok(Some(json!(contract::conversation::Unqueued { text })))
+}
+
 pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>, first: bool) -> Done {
     check_images(&images)?;
     let line = text.trim();

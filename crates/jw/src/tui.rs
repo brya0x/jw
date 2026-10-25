@@ -8163,12 +8163,41 @@ fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
             args: Vec::new(),
             env: None,
         },
+        ConvAct::Unqueue { node } => return unqueue(view, client, &node),
         ConvAct::Copy(_) | ConvAct::Open(_) | ConvAct::ViewPlan { .. } => return,
     };
     match client.cmd(cmd) {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => view.flash(&e.message),
         Err(e) => view.flash(&e.to_string()),
+    }
+}
+
+/// How long the answer of `conversation_unqueue` is waited for: an older daemon does not know the
+/// command and never answers it (REQ-975).
+const UNQUEUE_WAIT: Duration = Duration::from_secs(3);
+
+/// `↑` with something in the queue: the daemon takes the last message of the person's out of it
+/// and the line gets it (REQ-972), or the key goes on to the history.
+fn unqueue(view: &mut View, client: &mut Client, node: &str) {
+    let cmd = Cmd::ConversationUnqueue {
+        node: node.to_owned(),
+    };
+    let text = match client.cmd_within(cmd, UNQUEUE_WAIT) {
+        Ok(Ok(Some(v))) => serde_json::from_value::<contract::conversation::Unqueued>(v)
+            .ok()
+            .map(|u| u.text),
+        Ok(Ok(None)) => None,
+        Ok(Err(e)) => return view.flash(&e.message),
+        Err(ClientError::Protocol(_)) => {
+            return view.flash(
+                "el daemon no responde a conversation_unqueue: quizá haga falta actualizarlo",
+            );
+        }
+        Err(e) => return view.flash(&e.to_string()),
+    };
+    if let Some(ui) = view.conv_ui.get_mut(node) {
+        ui.unqueued(text);
     }
 }
 
@@ -14763,7 +14792,12 @@ mod tests {
                 {"text": "mira\nl1\nl2", "folds": [[5, 10]]}
             ]})))),
         });
-        v.press_key(plain(KeyCode::Up));
+        // what waits in the queue is asked for first (REQ-972); with none, the history
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Up)),
+            After::Conv(ConvAct::Unqueue { .. })
+        ));
+        v.conv_ui.get_mut(CONV).unwrap().unqueued(None);
         let ui = &v.conv_ui[CONV];
         assert_eq!(ui.editor.text(), "mira\nl1\nl2");
         assert_eq!(

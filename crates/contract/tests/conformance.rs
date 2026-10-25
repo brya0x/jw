@@ -281,6 +281,20 @@ fn the_reply_of_open_conversation_is_a_node_and_a_session() {
     assert_eq!(serde_json::to_value(&opened).unwrap(), doc["result"]);
 }
 
+/// The result of `conversation_unqueue` in the fixture is what `Unqueued` writes and reads.
+#[test]
+fn the_reply_of_conversation_unqueue_is_the_text_that_left_the_queue() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-conversation-unqueue.json")
+        .expect("the fixture");
+    let taken: contract::conversation::Unqueued =
+        serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(taken.text, "y luego corre cargo test auth");
+    assert_eq!(serde_json::to_value(&taken).unwrap(), doc["result"]);
+}
+
 /// The result of `conversation_history` in the fixture is what `SentList` writes and reads, folds
 /// of a message that had them included.
 #[test]

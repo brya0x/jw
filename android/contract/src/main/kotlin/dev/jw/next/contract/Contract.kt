@@ -436,6 +436,10 @@ sealed interface Cmd {
         val now: Boolean = false,
     ) : Cmd
 
+    /** Take the last message of the person's that waits out of the queue. The result is an [Unqueued], or none. */
+    @Serializable @SerialName("conversation_unqueue")
+    data class ConversationUnqueue(val node: Id) : Cmd
+
     /** The messages sent from the repository of the conversation's folder, oldest first. The result is a [SentList]. */
     @Serializable @SerialName("conversation_history")
     data class ConversationHistory(val node: Id) : Cmd

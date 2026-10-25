@@ -246,6 +246,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             sent::record(shared, &node, &text, &folds, private);
             engine::send(shared, &node, &text, images, now)
         }
+        Cmd::ConversationUnqueue { node } => engine::unqueue(shared, &node),
         Cmd::ConversationHistory { node } => sent::history(shared, &node),
         Cmd::ConversationAnswer {
             node,
