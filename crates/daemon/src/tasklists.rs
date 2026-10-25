@@ -88,6 +88,34 @@ fn phase(t: &tasks::Task) -> TaskPhase {
     }
 }
 
+/// A task as the node and `jw tasks ls --json` say it; `auto` names the final task that is not in the file.
+pub fn item(t: &tasks::Task, auto: Option<&str>) -> TaskItem {
+    TaskItem {
+        id: t.id.clone(),
+        title: t.title.clone(),
+        after: t.after.clone(),
+        status: match t.status {
+            Status::Todo => TaskStatus::Todo,
+            Status::Done => TaskStatus::Done,
+            Status::Blocked => TaskStatus::Blocked,
+        },
+        state: phase(t),
+        level: t.level,
+        why: t.why.clone(),
+        notes: t.notes.clone(),
+        is_final: t.is_final,
+        auto: auto == Some(t.id.as_str()),
+    }
+}
+
+/// What is wrong in the file, as the node says it.
+pub fn problem(p: &tasks::Problem) -> TaskProblem {
+    TaskProblem {
+        line: p.line.map(|l| l as u32),
+        text: p.text.clone(),
+    }
+}
+
 /// The node's document for a workspace (REQ-890).
 fn node(head: Head, workspace: &Id, path: &Path, c: &Cached) -> Tasks {
     Tasks {
@@ -98,32 +126,9 @@ fn node(head: Head, workspace: &Id, path: &Path, c: &Cached) -> Tasks {
             .list
             .tasks
             .iter()
-            .map(|t| TaskItem {
-                id: t.id.clone(),
-                title: t.title.clone(),
-                after: t.after.clone(),
-                status: match t.status {
-                    Status::Todo => TaskStatus::Todo,
-                    Status::Done => TaskStatus::Done,
-                    Status::Blocked => TaskStatus::Blocked,
-                },
-                state: phase(t),
-                level: t.level,
-                why: t.why.clone(),
-                notes: t.notes.clone(),
-                is_final: t.is_final,
-                auto: c.auto.as_deref() == Some(t.id.as_str()),
-            })
+            .map(|t| item(t, c.auto.as_deref()))
             .collect(),
-        problems: c
-            .list
-            .problems
-            .iter()
-            .map(|p| TaskProblem {
-                line: p.line.map(|l| l as u32),
-                text: p.text.clone(),
-            })
-            .collect(),
+        problems: c.list.problems.iter().map(problem).collect(),
         loop_: LoopInfo {
             on: false,
             laps: 0,

@@ -1,5 +1,6 @@
 //! The commands an agent in a pane uses: what there is (`ls`, `pane ls`), what a pane shows
-//! (`read`), what to do (`prompt`, `worktree`, `pane open`, `pane close`, `group`) and the skill that
+//! (`read`), what to do (`prompt`, `worktree`, `pane open`, `pane close`, `group`), the task list of the
+//! workspace (`tasks`, N180) and the skill that
 //! teaches an agent all this (`skill`). They are clients of the daemon like the terminal
 //! client, over nodes and commands that exist (spec N80, REQ-353 to REQ-370).
 
@@ -31,6 +32,7 @@ const TURN_WAIT: Duration = Duration::from_secs(600);
 const CONVERSATION_WAIT: Duration = Duration::from_secs(10);
 
 mod artifact;
+mod tasks;
 
 const SKILL: &str = include_str!("../skill/SKILL.md");
 
@@ -41,6 +43,8 @@ enum Fail {
     Usage(String),
     /// Anything else: exit 1.
     Error(String),
+    /// Nothing to do: the message goes to stderr and the exit is 3 (REQ-923).
+    Idle(String),
     /// The agent waits for an answer: what it asks goes to stdout and the exit is 3 (REQ-454).
     Waiting(String),
     /// The person asked for changes to an artifact: what to change goes to stdout and the exit is 4 (REQ-772).
@@ -88,6 +92,7 @@ fn usage_of(cmd: &str) -> String {
         "pane" => format!(
             "usage: {b} pane ls <workspace> [--json]\n       {b} pane open <workspace> [--split right|down] [--of <pane>] [--] [<program words>...]\n       {b} pane close <workspace> <pane> [--force]"
         ),
+        "tasks" => tasks::usage(),
         _ => format!("usage: {b} skill [install]"),
     }
 }
@@ -102,6 +107,7 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("prompt", rest) => prompt(rest),
         ("worktree", rest) => worktree(rest),
         ("artifact", rest) => artifact::run(rest),
+        ("tasks", rest) => tasks::run(rest),
         ("group", ["ls", rest @ ..]) => group_ls(rest),
         ("group", ["new", rest @ ..]) => group_new(rest),
         ("group", ["rename", rest @ ..]) => group_rename(rest),
@@ -134,6 +140,10 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         Err(Fail::Error(why)) => {
             eprintln!("{} {cmd}: {why}", bin());
             ExitCode::FAILURE
+        }
+        Err(Fail::Idle(why)) => {
+            eprintln!("{} {cmd}: {why}", bin());
+            ExitCode::from(3)
         }
         Err(Fail::Waiting(asks)) => {
             println!("{asks}");
