@@ -26,9 +26,9 @@ fun toolClass(name: String): ToolClass? = when (name) {
     else -> null
 }
 
-/** The class of an item that folds: a tool of a class that has ended (one that runs, or waits for an answer, is drawn by itself). */
+/** The class of an item that folds: a tool of a class that has ended (one that runs, waits for an answer or has no result, REQ-860, is drawn by itself). */
 private fun ConvItem.foldClass(): ToolClass? =
-    if (this is ConvItem.Tool && state != ToolState.Run && state != ToolState.Ask) toolClass(name) else null
+    if (this is ConvItem.Tool && !lost && state != ToolState.Run && state != ToolState.Ask) toolClass(name) else null
 
 /** A run of tools that fold together: the indexes of its first and last item, and what it says. */
 data class FoldRun(val first: Int, val last: Int, val title: String)

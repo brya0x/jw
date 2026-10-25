@@ -220,7 +220,9 @@ private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean, ranFor: Strin
     val uri = LocalUriHandler.current
     Column {
         Row(Modifier.defaultMinSize(minHeight = 40.dp).padding(horizontal = Pad, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Mono(if (t.state == ToolState.Run) spin else "●", stateColor(t.state), 13, bold = t.state == ToolState.Ask)
+            // No result: it may have finished unseen, so it is paused and dim, not a failure (REQ-860).
+            if (t.lost) Mono("⏸", Palette.dim, 13)
+            else Mono(if (t.state == ToolState.Run) spin else "●", stateColor(t.state), 13, bold = t.state == ToolState.Ask)
             Mono(t.name, Palette.fg, 13, bold = true)
             if (t.arg.isNotBlank()) Mono(t.arg, Palette.dim, 13, modifier = Modifier.weight(1f, fill = false))
         }

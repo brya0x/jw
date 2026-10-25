@@ -104,6 +104,8 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
             Mono(ask.title, Palette.fg, 14, bold = true, lines = 3, modifier = Modifier.weight(1f))
             Mono(ask.kind.tag(), Palette.yellow, 11)
         }
+        // It was waiting when the daemon stopped, and the answer goes as a message (REQ-855).
+        if (ask.restored) Mono("↻ se retomó tras reiniciar · tu respuesta irá como un mensaje", Palette.yellow, 12, lines = 3)
         ask.command?.let { Mono(it, Palette.cyan, 12, lines = 8, modifier = Modifier.fillMaxWidth().background(Palette.bg, RoundedCornerShape(6.dp)).padding(8.dp)) }
         if (ask.diff.isNotEmpty()) Diff(ask.diff.take(12))
         // The sheet keeps the beginning of a plan, formatted once the PC has read it, and the viewer has all of it (REQ-480, REQ-597).
