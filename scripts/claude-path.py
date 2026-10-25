@@ -335,6 +335,42 @@ def s_agent():
     c.close()
 
 
+@stage("loop", "a task loop in the engine: the stop hook keeps the agent on the next task until the list ends (N180d2, REQ-905, 913)")
+def s_loop():
+    # Two small tasks and the final one (which `tasks_loop_on` writes). The agent runs `jw tasks done`, so the
+    # binary is on its PATH, and the permissions it asks for are answered yes: this is a throwaway repository.
+    ENV["PATH"] = os.path.dirname(JW) + os.pathsep + ENV["PATH"]
+    folder = os.path.join(REPO, ".jw")
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, "tasks.md"), "w").write(
+        "- [ ] t1 crea el archivo uno.txt con el texto uno\n- [ ] t2 crea el archivo dos.txt con el texto dos (after: t1)\n"
+    )
+    c = Conv(["--permission-mode", "acceptEdits"])
+    on = cmd({"cmd": "tasks_loop_on", "workspace": Conv.ws, "max": 8})
+    check("loop", "the loop turns on and hands out the first task", "result" in on, str(on)[:200])
+    end = time.time() + 400
+    state = {}
+    while time.time() < end:
+        node = result(cmd({"cmd": "open_tasks", "workspace": Conv.ws})).get("node")
+        state = snap(node)["loop"]
+        if not state.get("on"):
+            break
+        ask = c.now().get("ask")
+        if ask and ask.get("kind") == "permission":
+            c.answer(ask, "yes")
+        time.sleep(3)
+    seen("loop", "how it ended", json.dumps(state.get("stop")) + f" laps={state.get('laps')}")
+    check("loop", "it ended by itself, not by waiting", not state.get("on"), str(state))
+    check("loop", "the agent did the tasks: uno.txt and dos.txt", os.path.exists(os.path.join(REPO, "uno.txt")) and os.path.exists(os.path.join(REPO, "dos.txt")))
+    check("loop", "more than one lap: the hook kept the agent going", state.get("laps", 0) >= 2, str(state))
+    n = c.now()
+    notes = [i["text"] for i in items(n, "note") if i["text"].startswith("Task loop")]
+    check("loop", "the conversation says each lap in a note", len(notes) >= 1, str(notes))
+    seen("loop", "turns (results) for the whole loop", str(len(items(n, "result"))))
+    seen("loop", "the list at the end", open(os.path.join(folder, "tasks.md")).read().replace("\n", " | ")[:300])
+    c.close()
+
+
 @stage("queue", "a message sent during a turn waits and goes after it (REQ-382)")
 def s_queue():
     c = Conv()

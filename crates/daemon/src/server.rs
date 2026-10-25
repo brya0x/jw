@@ -195,7 +195,9 @@ impl Daemon {
         shared.lock().chrome = config.chrome;
         shared.lock().mobile.clone().resume();
         if let Some(exe) = &config.hook_exe {
-            shared.lock().hooks = Some(crate::launch::write_hooks(&config.state_dir, exe)?);
+            let mut core = shared.lock();
+            core.hooks = Some(crate::launch::write_hooks(&config.state_dir, exe)?);
+            core.loop_hooks = Some(crate::launch::write_loop_hooks(&config.state_dir, exe)?);
         }
         let engine = {
             let shared = shared.clone();

@@ -15,7 +15,7 @@ def logline(s):
 if os.environ.get("FAKE_PIDFILE"):
     with open(os.environ["FAKE_PIDFILE"], "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
-logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", ""))
+logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", "") + " pane=" + os.environ.get("JW_PANE_ID", ""))
 # With FAKE_CLAUDE_DIR the engine keeps a transcript like Claude's: `<dir>/projects/<folder>/<id>.jsonl`, written
 # at the first message; a reused `--session-id` and a `--resume` of nothing end with code 1, as they do there.
 claude_dir = os.environ.get("FAKE_CLAUDE_DIR")

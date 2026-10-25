@@ -133,6 +133,9 @@ pub struct Loop {
     /// The pane of the agent whose turns the loop answers (REQ-902).
     pub pane: Id,
     pub stop: Option<LoopStop>,
+    /// The loop stopped for a reason that needs the person and the engine's turn has not ended yet:
+    /// the next `agent_done` of that pane is a `question` (REQ-943), once.
+    pub ended: bool,
 }
 
 /// What the end of an agent's turn comes to (REQ-905).
@@ -325,7 +328,7 @@ impl Core {
     }
 
     /// The kinds of attention a pane has raised.
-    fn pane_attention(&self, pane: &str) -> Vec<AttentionKind> {
+    pub(crate) fn pane_attention(&self, pane: &str) -> Vec<AttentionKind> {
         self.model
             .workspaces
             .iter()
@@ -358,6 +361,23 @@ impl Core {
             .find(|p| p.id == pane);
         if let Some(p) = own {
             p.attention.retain(|o| o.kind != AttentionKind::Question);
+        }
+    }
+
+    /// Whether the loop of this pane stopped for a reason that needs the person and its turn has not
+    /// ended yet; it is asked once (REQ-943).
+    pub(crate) fn take_loop_ended(&mut self, pane: &str) -> bool {
+        self.loops
+            .values_mut()
+            .find(|l| l.pane == pane && l.ended)
+            .is_some_and(|l| std::mem::take(&mut l.ended))
+    }
+
+    /// A note in the conversation of this pane, when it has one: what the loop did (REQ-945).
+    fn conv_note(&mut self, pane: &str, text: String) {
+        if let Some(c) = self.convs.get_mut(pane) {
+            c.st.loop_note(text);
+            c.dirty = true;
         }
     }
 
@@ -640,6 +660,7 @@ pub fn loop_on(shared: &Shared, workspace: &Id, max: Option<u32>, pane: Option<&
                 same: 1,
                 pane: agent.clone(),
                 stop: None,
+                ended: false,
             },
         );
         crate::agents::settle(&mut core, &agent, None);
@@ -710,9 +731,11 @@ pub fn on_stop(shared: &Shared, pane: &Id) -> Option<Done> {
             };
             lp.laps += 1;
             lp.task = Some(id.clone());
+            let note = format!("Task loop, lap {}/{}: {id}", lp.laps, lp.max);
             crate::agents::settle(&mut core, pane, None);
-            core.refresh();
             let task = list.tasks.iter().find(|t| t.id == id)?;
+            core.conv_note(pane, format!("{note} {}", task.title));
+            core.refresh();
             Some(Ok(Some(
                 json!({ "block": { "reason": reason(task, &path) } }),
             )))
@@ -721,6 +744,9 @@ pub fn on_stop(shared: &Shared, pane: &Id) -> Option<Done> {
             let lp = core.loops.get_mut(&workspace)?;
             lp.on = false;
             lp.task = None;
+            lp.ended = kind != StopKind::Done;
+            core.conv_note(pane, format!("Task loop stopped: {text}"));
+            let lp = core.loops.get_mut(&workspace)?;
             lp.stop = Some(LoopStop { kind, text });
             let raise = if kind == StopKind::Done {
                 AttentionKind::AgentDone

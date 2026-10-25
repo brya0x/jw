@@ -1200,6 +1200,11 @@ impl State {
             .collect();
     }
 
+    /// What a task loop did, for the person to read in the conversation (REQ-945).
+    pub fn loop_note(&mut self, text: String) {
+        self.note(text, None);
+    }
+
     fn note(&mut self, text: impl Into<String>, tone: Option<Tone>) {
         self.push(Item::Note {
             text: text.into(),

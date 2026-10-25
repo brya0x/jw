@@ -87,6 +87,10 @@ pub fn event(
         return done;
     }
     let mut core = shared.lock();
+    // A conversation's attention is the engine's own events' (REQ-913): its hooks only answer a loop.
+    if core.convs.contains_key(pane) {
+        return Ok(None);
+    }
     let p = core
         .model
         .workspaces

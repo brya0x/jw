@@ -125,6 +125,19 @@ Three runs of `claude -p --model haiku` in a private temp directory, with `JW_PA
 
 Not measured: the same with sonnet or opus; a plan made in plan mode (`ExitPlanMode`) and a `PostToolUse` hook on it answering with `additionalContext`; the interactive terminal; how many runs out of ten take the nudge.
 
+### The task loop in the engine (N180d2, 2026-10-25, claude 2.1.309)
+
+One run of the stage `loop` of `scripts/claude-path.py` (haiku, a private daemon, a throwaway repository, the person's own `~/.claude`; the transcript it made was deleted): a list of two small tasks (`create uno.txt`, `create dos.txt`), the final task written by `tasks_loop_on`, and a conversation started in `acceptEdits` whose permissions the stage answers yes.
+
+| Question | Measured |
+|---|---|
+| Does the engine run the hook? | Yes, started with `--settings <state>/claude-loop-hooks.json` (only `Stop`) and `<PREFIX>_PANE_ID` in its environment: `jw hook stop` found its pane and the daemon's socket. *tested, one run* |
+| Does the loop go on until the list ends? | Yes: the loop ended on its own with «all 3 tasks done in 4 laps», every task `[x]` in the file and both files made. Four laps for three tasks means one task was handed out twice; which one, and whether the agent ticked the tasks with `jw tasks done` or edited the file, was not recorded (the transcript was deleted). *tested, one run* |
+| How many `result` lines for the whole loop? | **One**, as measured with `-p` before (a turn that is longer, not four turns); the conversation shows a note for each lap. *tested* |
+| Did the agent do the final task? | The final task is `[x]` and has a note under it that begins «No test suite…», so it looked for checks and noted that it found none. The advisor sentence was in the task's text and whether the agent followed it was not checked. *tested, one run* |
+
+Not measured: sonnet and opus following the reason (OPEN-71); an interrupt by the person (RISK-132); a permission asked in the middle of a lap (the stage answers it; the loop paused until then by design, REQ-908).
+
 ## Cost and limits
 
 A turn costs what the same turn costs in Claude's own screen, through the person's account; a call of about a dozen tokens of output cost about 0.06 USD, almost all cache creation. `total_cost_usd` in `result` is cumulative for the process.

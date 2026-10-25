@@ -126,6 +126,8 @@ pub struct Core {
     pub mobile: Arc<crate::mobile::Hub>,
     /// The settings file an agent is started with, so its hooks tell this daemon what it does.
     pub hooks: Option<PathBuf>,
+    /// The settings file an engine is started with: only the `Stop` hook of a task loop (REQ-913).
+    pub loop_hooks: Option<PathBuf>,
     /// `claude` typed in a pane is the binary's own (a conversation), in a shell that has the
     /// integration; then its attention comes from the engine and it is given no hooks (REQ-374).
     pub swap: bool,
@@ -232,6 +234,7 @@ impl Core {
             integration,
             mobile,
             hooks: None,
+            loop_hooks: None,
             swap: false,
             projects_dir: identity::config_dir().join("projects"),
         };
@@ -297,6 +300,13 @@ impl Core {
 
     /// A conversation raised something for the person: what the agent had raised is over.
     pub fn raise_agent(&mut self, pane: &str, kind: AttentionKind) {
+        // The turn ended after a task loop stopped for a reason that needs the person: it is
+        // a question and not a turn that is done (REQ-943), and only for this one turn.
+        let kind = if kind == AttentionKind::AgentDone && self.take_loop_ended(pane) {
+            AttentionKind::Question
+        } else {
+            kind
+        };
         if let Some(p) = self.pane_mut(pane) {
             p.attention
                 .retain(|o| !crate::agents::KINDS.contains(&o.kind));
@@ -1691,6 +1701,40 @@ mod tests {
         );
         assert!(core.task_jobs().is_empty(), "looked at a moment ago");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// REQ-943: the turn of a conversation that ends after its loop stopped for a reason that needs the
+    /// person is a question, once; and a loop that ended with everything done is a turn done.
+    #[test]
+    fn the_turn_that_ends_after_a_loop_stopped_is_a_question_once() {
+        let (model, ws, pane) = model_with_pane();
+        let mut core = test_core(model);
+        let lp = |ended| crate::tasklists::Loop {
+            on: false,
+            laps: 3,
+            max: 20,
+            task: None,
+            same: 1,
+            pane: pane.clone(),
+            stop: None,
+            ended,
+        };
+        core.loops.insert(ws.clone(), lp(true));
+        core.raise_agent(&pane, AttentionKind::AgentDone);
+        assert_eq!(core.pane_attention(&pane), [AttentionKind::Question]);
+        core.raise_agent(&pane, AttentionKind::AgentDone);
+        assert_eq!(
+            core.pane_attention(&pane),
+            [AttentionKind::AgentDone],
+            "only the one turn"
+        );
+        core.loops.insert(ws, lp(false));
+        core.raise_agent(&pane, AttentionKind::AgentDone);
+        assert_eq!(core.pane_attention(&pane), [AttentionKind::AgentDone]);
+        // anything but a done turn is raised as it was
+        core.loops.values_mut().for_each(|l| l.ended = true);
+        core.raise_agent(&pane, AttentionKind::Permission);
+        assert_eq!(core.pane_attention(&pane), [AttentionKind::Permission]);
     }
 
     fn attention_of(core: &Core, id: &str) -> Vec<Value> {

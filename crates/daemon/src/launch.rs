@@ -97,17 +97,7 @@ pub fn with_session(argv: &[String], new_id: impl FnOnce() -> String) -> Vec<Str
 /// `PreToolUse` only for the tools that ask a question or present a plan.
 pub fn hook_settings(exe: &Path) -> String {
     let exe = quote("/bin/sh", &exe.to_string_lossy());
-    let hook = |event: &str, matcher: Option<&str>| {
-        let mut group = json!({"hooks": [{
-            "type": "command",
-            "command": format!("{exe} hook {event}"),
-            "timeout": 5,
-        }]});
-        if let Some(m) = matcher {
-            group["matcher"] = m.into();
-        }
-        json!([group])
-    };
+    let hook = |event: &str, matcher: Option<&str>| hook_group(&exe, event, matcher);
     json!({"hooks": {
         "Notification": hook("notification", Some("permission_prompt|elicitation_dialog|agent_needs_input")),
         "PreToolUse": hook("pre_tool_use", Some("AskUserQuestion|ExitPlanMode")),
@@ -117,6 +107,35 @@ pub fn hook_settings(exe: &Path) -> String {
         "SessionEnd": hook("session_end", None),
     }})
     .to_string()
+}
+
+fn hook_group(exe: &str, event: &str, matcher: Option<&str>) -> serde_json::Value {
+    let mut group = json!({"hooks": [{
+        "type": "command",
+        "command": format!("{exe} hook {event}"),
+        "timeout": 5,
+    }]});
+    if let Some(m) = matcher {
+        group["matcher"] = m.into();
+    }
+    json!([group])
+}
+
+/// The hooks an engine is started with (REQ-913): only `Stop`, which is what a task loop answers.
+/// A conversation takes its attention from the engine's own events, so the rest of `hook_settings`
+/// would raise each one twice.
+pub fn loop_hook_settings(exe: &Path) -> String {
+    let exe = quote("/bin/sh", &exe.to_string_lossy());
+    json!({"hooks": {"Stop": hook_group(&exe, "stop", None)}}).to_string()
+}
+
+/// Write the engine's hooks to `<state>/claude-loop-hooks.json`, beside the agent's.
+pub fn write_loop_hooks(state_dir: &Path, exe: &Path) -> std::io::Result<PathBuf> {
+    let file = state_dir.join("claude-loop-hooks.json");
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, loop_hook_settings(exe))?;
+    std::fs::rename(&tmp, &file)?;
+    Ok(file)
 }
 
 /// Write the agent's hooks to `<state>/claude-hooks.json`, which `--settings` takes.
@@ -183,6 +202,31 @@ pub fn transcript_exists(env: &[(String, String)], id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// REQ-913: the engine is given the hook of a task loop and no other.
+    #[test]
+    fn the_engines_hooks_are_the_stop_hook_alone() {
+        let v: serde_json::Value =
+            serde_json::from_str(&loop_hook_settings(Path::new("/bin/jw"))).unwrap();
+        let hooks = v["hooks"].as_object().unwrap();
+        assert_eq!(hooks.keys().collect::<Vec<_>>(), ["Stop"]);
+        let command = hooks["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(command.ends_with(" hook stop"), "{command}");
+        assert_eq!(hooks["Stop"][0]["hooks"][0]["timeout"], 5);
+        // the panes' own file is a different one, with the rest
+        let all: serde_json::Value =
+            serde_json::from_str(&hook_settings(Path::new("/bin/jw"))).unwrap();
+        assert!(all["hooks"].as_object().unwrap().len() > 1);
+        let dir = std::env::temp_dir().join(format!("jw-loop-hooks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = write_loop_hooks(&dir, Path::new("/bin/jw")).unwrap();
+        assert_ne!(file, dir.join("claude-hooks.json"));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            loop_hook_settings(Path::new("/bin/jw"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_owned).collect()
