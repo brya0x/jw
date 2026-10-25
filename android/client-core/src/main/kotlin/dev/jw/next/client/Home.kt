@@ -83,6 +83,10 @@ data class HomeRow(
     /** A conversation of its own: its last line, and when it was said in seconds (REQ-826). */
     val chatLast: String? = null,
     val chatActive: Long? = null,
+    /** How far its task list is, `3/8`, when it has one (REQ-931). */
+    val tasks: String? = null,
+    /** Its task loop runs: a spinner beside the mark. */
+    val loopOn: Boolean = false,
 )
 
 /** An item of Avisos: one unseen attention and the workspace it belongs to, and its group when it has one (REQ-699). */
@@ -137,6 +141,8 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
         removalFailed = !w.removing && removalFailed(session, w.id),
         chatLast = w.chat?.last,
         chatActive = w.chat?.active,
+        tasks = w.tasks?.progress(),
+        loopOn = w.tasks?.on == true,
     )
 }
 
