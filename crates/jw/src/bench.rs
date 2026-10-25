@@ -54,6 +54,7 @@ pub fn run() -> Result<(), String> {
         conversation: false,
         projects: dir.join("projects"),
         chrome: false,
+        claude_update: None,
     };
     let socket = config.socket.clone();
     let daemon =

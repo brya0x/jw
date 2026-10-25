@@ -208,7 +208,7 @@ fn find_in_path(name: &str, path: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-fn resolve_claude(
+pub(crate) fn resolve_claude(
     env: Option<&BTreeMap<String, String>>,
     cfg_env: &[(String, String)],
 ) -> Option<PathBuf> {

@@ -1740,7 +1740,7 @@ impl View {
         self.session.iter().flat_map(|s| s.jobs.iter()).any(|j| {
             j.kind == JobKind::RemoveWorkspace
                 && j.state == JobState::Failed
-                && j.workspace == workspace
+                && j.workspace.as_deref() == Some(workspace)
         })
     }
 
@@ -1775,7 +1775,20 @@ impl View {
                         .is_some_and(|before| before.get(&j.id) == Some(&JobState::Running)))
         };
         let told: Vec<&Job> = s.jobs.iter().filter(ended).collect();
-        let said = told.first().map(|j| removal_said(j));
+        let said = told.first().map(|j| removal_said(j)).or_else(|| {
+            // An update of claude that appeared already over, after the first read (REQ-854).
+            s.jobs
+                .iter()
+                .find(|j| {
+                    j.kind == JobKind::UpdateClaude
+                        && j.state != JobState::Running
+                        && self
+                            .jobs_state
+                            .as_ref()
+                            .is_some_and(|before| !before.contains_key(&j.id))
+                })
+                .map(update_said)
+        });
         let told: HashSet<String> = told.iter().map(|j| j.id.clone()).collect();
         self.jobs_seen.retain(|id| now.contains_key(id));
         self.jobs_mine
@@ -4118,7 +4131,7 @@ impl View {
                 match job {
                     Some(j) if j.state == JobState::Running && j.cancellable => {
                         return After::CancelOp {
-                            workspace: j.workspace.clone(),
+                            workspace: j.workspace.clone().unwrap_or_default(),
                         };
                     }
                     Some(j) if j.state == JobState::Running => {
@@ -4128,10 +4141,11 @@ impl View {
                 }
             }
             (Mode::Avisos, Key::Enter) if self.avisos_tab == AvisosTab::Trabajos => {
+                let job = self.jobs_listed().get(self.jobs_selected).is_some();
                 let ws = self
                     .jobs_listed()
                     .get(self.jobs_selected)
-                    .map(|j| j.workspace.clone());
+                    .and_then(|j| j.workspace.clone());
                 let at = ws.as_ref().and_then(|ws| {
                     self.session
                         .as_ref()
@@ -4144,6 +4158,7 @@ impl View {
                         self.open(&ws, 0);
                     }
                     (Some(_), None) => self.flash("ese workspace ya no está"),
+                    (None, _) if job => self.flash("este trabajo no es de un workspace"),
                     _ => {}
                 }
             }
@@ -7419,11 +7434,24 @@ fn removal_said(j: &Job) -> String {
     }
 }
 
+/// What the bar says when an update of claude is over: green when it went, red when it did not
+/// (REQ-854).
+fn update_said(j: &Job) -> String {
+    match j.state {
+        JobState::Done => format!(
+            "✓ {} · las conversaciones abiertas siguen en la anterior",
+            job_title(j)
+        ),
+        _ => "✗ no se pudo actualizar claude".into(),
+    }
+}
+
 /// What a job is called in the tab.
 fn job_title(j: &Job) -> String {
     match j.kind {
         JobKind::RemoveWorkspace => format!("quitar {}", j.name),
         JobKind::SyncWorkspace => format!("subir {}", j.name),
+        JobKind::UpdateClaude => format!("actualizar {}", j.name),
     }
 }
 
@@ -7449,6 +7477,13 @@ fn job_said(j: &Job) -> (String, Rgb) {
             ("quitado · la rama se queda".into(), look::dim())
         }
         (JobState::Done, JobKind::SyncWorkspace) => (format!("subido {}", j.name), look::dim()),
+        (JobState::Done, JobKind::UpdateClaude) => (
+            format!(
+                "{} · las conversaciones abiertas siguen en la anterior",
+                j.name
+            ),
+            look::dim(),
+        ),
         (JobState::Failed, _) => (
             j.detail
                 .clone()
@@ -11727,7 +11762,7 @@ mod tests {
         Job {
             id: id.into(),
             kind,
-            workspace: workspace.into(),
+            workspace: (!workspace.is_empty()).then(|| workspace.into()),
             name: name.into(),
             state,
             started_at: 1_000_000,
@@ -12049,6 +12084,45 @@ mod tests {
         assert_eq!(v.press(Key::DismissAll), After::Continue);
     }
 
+    /// REQ-854: an update of claude has no workspace, no removal's words and a line of its own in the bar
+    /// when it appears over after the first read; `↵` on it says so.
+    #[test]
+    fn an_update_of_claude_is_said_once_in_the_bar_and_has_no_workspace_to_go_to() {
+        let update = |state, name: &str| {
+            let mut j = job("u1", JobKind::UpdateClaude, "", name, state);
+            j.cancellable = false;
+            j
+        };
+        let done = || update(JobState::Done, "claude 2.1.309 → 2.1.312");
+        let mut v = fixture_view();
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(
+            v.flash,
+            "✓ actualizar claude 2.1.309 → 2.1.312 · las conversaciones abiertas siguen en la anterior"
+        );
+        v.flash.clear();
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "", "said once");
+        // One that was there when the client first read the session says nothing.
+        let mut v = fixture_view();
+        v.jobs_state = None;
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "");
+        // A failure is red and says what failed in the tab.
+        let mut v = fixture_view();
+        let mut broke = update(JobState::Failed, "claude");
+        broke.detail = Some("EACCES: permission denied".into());
+        with_jobs(&mut v, vec![broke]);
+        assert_eq!(v.flash, "✗ no se pudo actualizar claude");
+        v.press(Key::Avisos);
+        v.press(Key::Next);
+        assert!(v.plain(120, 30).contains("actualizar claude"));
+        assert!(v.plain(120, 30).contains("EACCES: permission denied"));
+        v.press(Key::Enter);
+        assert_eq!(v.mode, Mode::Avisos, "it stays");
+        assert_eq!(v.flash, "este trabajo no es de un workspace");
+    }
+
     /// `↵` on a job goes to its workspace, and says so when that is gone.
     #[test]
     fn enter_on_a_job_goes_to_its_workspace() {
@@ -12151,6 +12225,7 @@ mod tests {
             conversation: false,
             projects: dir.join("projects"),
             chrome: false,
+            claude_update: None,
         };
         let socket = config.socket.clone();
         let daemon = daemon::Daemon::start(config).unwrap();
@@ -14477,6 +14552,7 @@ mod tests {
             conversation: false,
             projects: dir.join("projects"),
             chrome: false,
+            claude_update: None,
         };
         let d = daemon::Daemon::start(config.clone()).unwrap();
         let c = Client::connect(&config.socket, "test").unwrap();

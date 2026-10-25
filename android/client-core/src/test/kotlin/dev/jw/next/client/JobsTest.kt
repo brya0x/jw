@@ -17,6 +17,18 @@ class JobsTest {
     private val pushed = session.jobs[1]
     private val failed = session.jobs[2]
 
+    @Test
+    fun anUpdateOfClaudeHasNoWorkspaceAndIsNamedByWhatItDid() {
+        val update = (ContractJson.decodeFromString(DaemonMsg.serializer(), File(System.getProperty("contract.dir"), "fixtures/daemon/snapshot-session-update-claude.json").readText()) as DaemonMsg.Snapshot).node as Node.Session
+        val (done, broke) = update.jobs
+        assertEquals(null, done.workspace)
+        assertEquals("actualizar claude 2.1.309 → 2.1.312", done.title())
+        assertEquals("actualizar claude", done.kindLabel())
+        assertEquals("actualizar claude", broke.title())
+        assertEquals("EACCES: permission denied", broke.said())
+        assertEquals(JobsMark.Ended(failed = true, count = 2), jobsMark(update, Seen()))
+    }
+
     private fun without(vararg ids: String) = session.copy(jobs = session.jobs.filterNot { it.id in ids })
 
     private class Pc(override val epoch: String, var now: Node.Session) : NodeSource {
@@ -105,9 +117,9 @@ class JobsTest {
             jobs = session.jobs.map { if (it.id == running.id) it.copy(state = JobState.Failed, detail = "x") else it },
         )
         assertTrue(homeRows(back, Seen())[0].removalFailed)
-        assertTrue(removalFailed(back, running.workspace))
-        assertFalse(removalFailed(session.copy(jobs = emptyList()), running.workspace), "dismissed")
-        assertFalse(removalFailed(back, pushed.workspace), "a push that went well is no failure of the row")
+        assertTrue(removalFailed(back, running.workspace!!))
+        assertFalse(removalFailed(session.copy(jobs = emptyList()), running.workspace!!), "dismissed")
+        assertFalse(removalFailed(back, pushed.workspace!!), "a push that went well is no failure of the row")
     }
 
     @Test

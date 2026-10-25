@@ -34,6 +34,15 @@ fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
 }
 
 fn rig_with_chrome(sb: Sandbox, extra_env: Vec<(String, String)>, chrome: bool) -> Rig {
+    rig_with_watch(sb, extra_env, chrome, None)
+}
+
+fn rig_with_watch(
+    sb: Sandbox,
+    extra_env: Vec<(String, String)>,
+    chrome: bool,
+    watch: Option<daemon::claude_update::Watch>,
+) -> Rig {
     let bin = sb.dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let engine = bin.join("claude");
@@ -42,6 +51,7 @@ fn rig_with_chrome(sb: Sandbox, extra_env: Vec<(String, String)>, chrome: bool) 
     let log = sb.dir.join("engine.log");
     let mut config: Config = sb.config();
     config.chrome = chrome;
+    config.claude_update = watch;
     config.env = vec![
         (
             "PATH".into(),
@@ -2670,4 +2680,47 @@ fn a_verdict_for_a_pane_without_a_conversation_or_a_pane_that_is_gone_is_kept_an
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(kept.matches("\"delivered\":\"none\"").count(), 2);
+}
+
+/// A rig whose installed `claude` (the stand-in, which says `installed` when asked its version)
+/// is only read, never updated (`notify`), and whose engine says 2.1.309 in its `init`.
+fn rig_installed(installed: &str) -> Rig {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.dir.join("bin")).unwrap();
+    std::fs::write(sb.dir.join("bin/installed"), installed).unwrap();
+    std::fs::write(sb.dir.join("config.toml"), "claude_update = \"notify\"\n").unwrap();
+    let watch = daemon::claude_update::Watch {
+        file: sb.dir.join("config.toml"),
+        wake: Duration::from_millis(50),
+        within: Duration::from_secs(5),
+    };
+    rig_with_watch(sb, Vec::new(), false, Some(watch))
+}
+
+#[test]
+fn a_conversation_whose_engine_is_not_the_installed_claude_says_which_it_runs_and_which_is_installed()
+ {
+    let mut r = rig_installed("2.1.312");
+    let (node, _) = r.open();
+    r.send(&node, "hola");
+    let v = r.until(&node, "the engine's version and the installed one", |v| {
+        v["engine_version"] == "2.1.309" && v["engine_newer"] == "2.1.312"
+    });
+    assert_eq!(v["engine_version"], "2.1.309");
+    r.stop();
+}
+
+#[test]
+fn a_conversation_whose_engine_is_the_installed_claude_has_no_newer() {
+    let mut r = rig_installed("2.1.309");
+    let (node, _) = r.open();
+    r.send(&node, "hola");
+    r.until(&node, "the engine's version", |v| {
+        v["engine_version"] == "2.1.309"
+    });
+    // The check ran at the daemon's start; give it a moment, then it must still say nothing.
+    std::thread::sleep(Duration::from_millis(300));
+    let v = r.conv(&node);
+    assert!(v.get("engine_newer").is_none(), "{v:#}");
+    r.stop();
 }

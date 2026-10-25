@@ -22,6 +22,8 @@
     "artifacts": [],
     "commands": [],
     "cost": 0,
-    "cwd": "/work/app/crates"
+    "cwd": "/work/app/crates",
+    "engine_version": "2.1.309",
+    "engine_newer": "2.1.312"
   }
 }

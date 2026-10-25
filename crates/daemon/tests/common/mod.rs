@@ -40,6 +40,8 @@ impl Sandbox {
             conversation: false,
             projects: self.dir.join("projects"),
             chrome: false,
+            // No test reaches the person's `claude`: the update runs only where a test asks for it.
+            claude_update: None,
         }
     }
 

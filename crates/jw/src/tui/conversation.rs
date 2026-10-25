@@ -1830,6 +1830,13 @@ impl Ui {
             if let Some(at) = self.recalling {
                 chips.push((format!("↑ {}/{}", at + 1, self.sent.len()), look::yellow()));
             }
+            // The engine runs another claude than the one installed (REQ-855).
+            if let (Some(running), Some(newer)) = (&conv.engine_version, &conv.engine_newer) {
+                chips.push((
+                    format!("motor {running} ↑ {newer} · ciérrala y ábrela"),
+                    look::yellow(),
+                ));
+            }
             let proposed = match &conv.held {
                 Some(h) => Some(Ui::held_why(h).0),
                 None => self.ghost(conv).map(|s| format!("{s}  tab")),
@@ -4359,6 +4366,44 @@ mod tests {
         ui.draw(&mut g, conv, INNER, &chips, true, 1_792_110_012_000);
         let rows = g.rows_plain();
         (g, rows)
+    }
+
+    #[test]
+    fn an_engine_that_is_not_the_installed_claude_has_a_chip_in_the_row_of_the_field() {
+        let mut conv = idle();
+        let chip = |conv: &Conversation, width: usize| {
+            frame_in(&Ui::default(), conv, (2, 1, width, 24))
+                .into_iter()
+                .find(|r| r.contains("motor"))
+        };
+        assert_eq!(
+            chip(&conv, 96),
+            None,
+            "an engine that has not said its version has no chip"
+        );
+        conv.engine_version = Some("2.1.309".into());
+        assert_eq!(
+            chip(&conv, 96),
+            None,
+            "nor does one that runs the installed claude"
+        );
+        conv.engine_newer = Some("2.1.312".into());
+        let wide = chip(&conv, 96).expect("the chip is drawn");
+        assert!(
+            wide.contains("motor 2.1.309 ↑ 2.1.312 · ciérrala y ábrela"),
+            "{wide}"
+        );
+        // In a narrow pane the chip is cut with `…`, as every chip is, and what matters comes first.
+        let narrow = chip(&conv, 50).expect("it is drawn, cut");
+        assert!(
+            narrow.contains("motor 2.1.309 ↑ 2.1.312") && narrow.ends_with('…'),
+            "{narrow}"
+        );
+        assert!(
+            chip(&conv, 30)
+                .expect("and cut again")
+                .contains("motor 2.1.309")
+        );
     }
 
     /// A `Ui` with every run of tools open, to see the tools one by one.

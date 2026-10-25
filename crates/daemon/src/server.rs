@@ -65,6 +65,9 @@ pub struct Config {
     /// `config.toml` says `chrome = false`, and a conversation's own `--chrome` or `--no-chrome`
     /// wins (REQ-634).
     pub chrome: bool,
+    /// Keep `claude` up to date and say what was done (REQ-846 to REQ-853): where its settings are
+    /// read from, each time; none runs nothing, which is what every test wants.
+    pub claude_update: Option<crate::claude_update::Watch>,
 }
 
 /// Whether `config.toml` leaves Claude in Chrome on for the conversations: `chrome = false` turns it
@@ -99,6 +102,11 @@ impl Config {
                 &std::fs::read_to_string(identity::config_dir().join("config.toml"))
                     .unwrap_or_default(),
             ),
+            claude_update: std::env::var(identity::env_var("CLAUDE_UPDATE"))
+                .map_or(true, |v| v != "0")
+                .then(|| {
+                    crate::claude_update::Watch::new(identity::config_dir().join("config.toml"))
+                }),
         }
     }
 
@@ -229,6 +237,13 @@ impl Daemon {
             thread::Builder::new()
                 .name("github".into())
                 .spawn(move || crate::github::run(shared, stop, program, every))?;
+        }
+        if let Some(watch) = config.claude_update.clone() {
+            let stop = stop.clone();
+            let shared = shared.clone();
+            thread::Builder::new()
+                .name("claude-update".into())
+                .spawn(move || crate::claude_update::run(shared, stop, watch))?;
         }
         let accept = {
             let stop = stop.clone();
