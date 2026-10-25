@@ -1,0 +1,307 @@
+<meta charset="utf-8">
+<title>jw · ↑ brings the message that waits in the queue back to the field</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:92ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.col{display:flex;flex-direction:column;gap:6px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:auto;width:max-content;max-width:100%}
+.term pre{margin:0;font:13px/1.3 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus{box-shadow:0 0 0 2px var(--blue)}
+.hint{font:12px var(--mono);color:var(--mut);max-width:96ch}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.mag{color:var(--magenta)}.b{font-weight:700}
+.hd{background:var(--panel);color:var(--dim)}
+.band{background:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.box h2{margin:0 0 8px}
+.box ol,.box ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.box li{max-width:100ch}
+fieldset{border:1px solid var(--line);border-radius:6px;margin:0;padding:8px 12px;display:flex;flex-direction:column;gap:4px}
+legend{font:600 12px var(--mono);color:var(--mut);padding:0 6px}
+fieldset label{font:12px/1.45 var(--mono);color:var(--fg);display:flex;gap:8px;align-items:flex-start;max-width:100ch;cursor:pointer}
+fieldset input{margin-top:3px}
+.rec{color:var(--green)}
+#info{min-height:2.6em}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>↑ brings back what waits in the queue</h1>
+    <p>While Claude works, what you send waits in the daemon's queue (<code>⧖</code>) and goes one message per turn. Today the only thing to do with a message that waits is to leave it. Here <b>↑ on the first row of the field takes the <u>last</u> one back into the field</b>, out of the queue, to edit it, send it again or erase it. Click the terminal and type: <kbd>Enter</kbd> sends (it queues while Claude works), <kbd>Ctrl+Enter</kbd> sends now (N181a: interrupts and goes first), <kbd>Esc</kbd> interrupts. The choices at the bottom change what ↑ does here.</p>
+  </div>
+  <div class="bar" role="group" aria-label="The conversation">
+    <button id="b-end" type="button">the turn ends (the daemon takes the first of the queue)</button>
+    <button id="b-work" type="button">Claude is idle: send something to start a turn</button>
+    <button id="b-reset" type="button">start again</button>
+  </div>
+  <div class="col"><h2>CONVERSATION</h2><div class="term"><pre id="scr" tabindex="0" aria-label="The conversation. Type, press up to bring back a queued message."></pre></div></div>
+  <div class="hint" id="info"></div>
+  <div class="hint">Keys: letters type, <kbd>Enter</kbd> sends (queues while a turn runs), <kbd>Ctrl+Enter</kbd> sends now, <kbd>Shift+Enter</kbd> a new line, <kbd>←</kbd> <kbd>→</kbd> move, <kbd>↑</kbd> on the first row brings back the last message of the queue (the chip <code>en cola N</code> counts one less); with nothing left to bring back it goes through the sent messages as <code>composer-history</code> does (the chip <code>↑ i/n</code>), <kbd>↓</kbd> on the last row goes forward in that history, <kbd>Esc</kbd> interrupts the turn that runs. To <b>erase</b> a message that waited: ↑ and then <kbd>Ctrl+C</kbd> (it clears the field when nothing runs; here also <kbd>Ctrl+U</kbd>) or Backspace.</div>
+
+  <div class="box"><h2>WHAT CHANGES</h2>
+    <ul>
+      <li><b>↑ on the first row</b> (where it already recalls the history, REQ-714) looks first at the queue: if a message that you wrote waits, it comes out of the queue and into the field, the cursor at its start so another ↑ takes the one before. The messages that wait are the ones you wrote (REQ-382); they keep their order when they come back together.</li>
+      <li><b>The daemon does the taking</b>, in one step: a command <code>conversation_unqueue {node}</code> whose answer is <code>{text}</code> (or nothing when no message of yours waits). It is one command because the daemon may take the first of the queue at the very moment the turn ends: if the client read the queue and then asked to remove the n-th, it could remove another. The last one is the farthest from being sent, so the race is rare, and when the queue has just emptied the answer is «nothing» and ↑ goes on to the history. The contract gains the command only (additive, no node's <code>v</code> changes; there is no <code>PROTOCOL</code> number in this repository, RAT-2).</li>
+      <li><b>What cannot come back stays.</b> A <code>/model</code>, <code>/effort</code> or <code>/mode</code> that waits is the engine's own line, not a message, and what another <code>claude</code> queued (REQ-549) is not ours: both stay and ↑ skips them.</li>
+      <li><b>↓, Esc and the history are as now.</b> The history's draft takes whatever the field holds when ↑ goes on into the history, so nothing is lost there either.</li>
+    </ul>
+  </div>
+
+  <div class="box"><h2>TO DECIDE (each choice below changes the terminal above)</h2>
+    <div class="col" style="gap:12px">
+      <fieldset id="d-field"><legend>1. The field already has text you did not send</legend>
+        <label><input type="radio" name="field" value="prepend" checked><span><b class="rec">Recommended: the message goes before it.</b> The field holds «recalled, line break, what you had», the cursor at the start. Nothing is lost, there is no mode to remember, and a second ↑ stacks the previous message on top in its original order. Sent as one message.</span></label>
+        <label><input type="radio" name="field" value="draft"><span>What you had becomes a draft, as the history does: the message replaces the field and ↓ on its last row brings the draft back. The message you took out of the queue is then gone if you press ↓ (it is not in the queue any more): it would need a warning.</span></label>
+        <label><input type="radio" name="field" value="ignore"><span>↑ does not take it while the field has text (it moves or goes to the history as today). Safe, but the first ↑ stops working just when you are typing something and remember the other one.</span></label>
+      </fieldset>
+      <fieldset id="d-prio"><legend>2. ↑ when both a queue and a history exist</legend>
+        <label><input type="radio" name="prio" value="queue" checked><span><b class="rec">Recommended: the queue first.</b> What waits is what you can still change; when nothing is left to bring back, ↑ is the history as today. While you walk the history (<code>↑ 2/6</code>) ↑ stays in it.</span></label>
+        <label><input type="radio" name="prio" value="history"><span>The history first; the queue only by a second key (<kbd>^Q</kbd>, free in the field, to check). More keys to remember, and the queue is what is about to leave.</span></label>
+      </fieldset>
+      <fieldset id="d-img"><legend>3. A queued message that carries a picture (<code>▣</code>)</legend>
+        <label><input type="radio" name="img" value="skip" checked><span><b class="rec">Recommended: it stays in the queue</b> and ↑ skips it (the third message of this queue). Bringing it back needs the picture to come with it and to take its number in the field; not worth it for the rare case.</span></label>
+        <label><input type="radio" name="img" value="back"><span>It comes back with its picture: the command answers <code>{text, images}</code> and the field takes them as when a picture is pasted.</span></label>
+      </fieldset>
+      <fieldset id="d-phone"><legend>4. The phone</legend>
+        <label><input type="radio" name="phone" value="open" checked><span><b class="rec">Recommended: left as an open question.</b> There is no ↑ there; the phone draws only the first three that wait (REQ-549), while the command takes the last, so a tap on a row would have to name which one: a second command (<code>conversation_unqueue {node, at}</code>) and a drawing of its own.</span></label>
+        <label><input type="radio" name="phone" value="tap"><span>A tap on a <code>⧖</code> row brings that one to the field (needs the second command and the phone's prototype).</span></label>
+      </fieldset>
+    </div>
+  </div>
+</div>
+
+<script>
+const W = 80, H = 24, AROUND = 4, CAP = 5, PROMPT = 2;
+const IW = W - 2, TW = IW - (PROMPT + 4);
+let CFG = { field: 'prepend', prio: 'queue', img: 'skip', phone: 'open' };
+
+const BASE = [
+  ['', ''],
+  ['blue', 'tú'], ['', 'arregla el login con google, falla con el redirect'],
+  ['', ''],
+  ['green', 'claude'], ['', 'Miro el flujo de OAuth en auth/google.rs.'],
+  ['dim', '  ◆ Read  src/auth/google.rs'],
+  ['dim', '  ◆ Edit  src/auth/google.rs  +4 −2'],
+  ['', ''],
+];
+
+const fresh = () => ({
+  items: [], text: '', cursor: 0,
+  working: true,
+  queue: [{ t: 'revisa que el logout también borre la cookie', img: true }, { t: 'y luego corre cargo test auth' }, { t: 'actualiza el README con lo que cambió' }],
+  hist: ['arregla el login con google, falla con el redirect', 'y en los tests?', 'corre cargo test auth', 'haz un commit con lo que hay'],
+  hi: -1, draft: null, qdraft: null, last: '', since: 0,
+});
+let M = fresh();
+
+function wrapText(s, width) {
+  const out = [];
+  for (const line of s.split('\n')) { const cs = [...line]; if (!cs.length) out.push(''); for (let i = 0; i < cs.length; i += width) out.push(cs.slice(i, i + width).join('')); }
+  return out;
+}
+// field.rs `wrap`: the rows of the text, where each starts, and where the cursor is.
+function wrapF(text, cursor, width) {
+  const cs = [...text], rows = [[]], starts = [0];
+  let rowW = 0, at = [0, 0], placed = false;
+  for (let i = 0; i < cs.length; i++) {
+    const nl = cs[i] === '\n';
+    if (!nl && rowW >= width) { rows.push([]); starts.push(i); rowW = 0; }
+    if (i === cursor) { at = [rows.length - 1, rowW]; placed = true; }
+    if (nl) { rows.push([]); starts.push(i + 1); rowW = 0; } else { rows[rows.length - 1].push(cs[i]); rowW++; }
+  }
+  if (!placed) { if (rowW >= width) { rows.push([]); starts.push(cs.length); rowW = 0; } at = [rows.length - 1, rowW]; }
+  return { rows, starts, at };
+}
+const windowStart = (n, cursorRow) => Math.min(Math.max(0, n - CAP), cursorRow);
+
+class Scr {
+  constructor() { this.cells = Array.from({ length: H }, () => Array.from({ length: W }, () => [' ', ''])); }
+  put(y, x, s, cls = '') { for (const c of s) { if (y >= 0 && y < H && x >= 0 && x < W) this.cells[y][x] = [c, cls]; x++; } }
+  fill(y, cls) { for (let x = 0; x < W; x++) this.cells[y][x] = [this.cells[y][x][0], cls + ' ' + this.cells[y][x][1]]; }
+  html() {
+    const esc = s => s === '<' ? '&lt;' : s === '>' ? '&gt;' : s === '&' ? '&amp;' : s;
+    return this.cells.map(r => {
+      let out = '', cur = null, buf = '';
+      for (const [c, cls] of r) {
+        if (cls !== cur) { if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; }
+        buf += esc(c);
+      }
+      if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf;
+      return out;
+    }).join('\n');
+  }
+}
+
+function listLines() {
+  const lines = BASE.slice();
+  for (const it of M.items) {
+    if (it.k === 'user') { lines.push(['blue', 'tú']); wrapText(it.t, IW).forEach(r => lines.push(['', r])); lines.push(['', '']); }
+    else if (it.k === 'note') { lines.push(['yellow', '  ' + it.t]); lines.push(['', '']); }
+    else { lines.push(['green', 'claude']); lines.push(['', it.t]); lines.push(['', '']); }
+  }
+  if (M.working) lines.push(['dim', '✻ Pensando… (esc interrumpe)']);
+  // REQ-549: what waits is drawn after the last item, dim.
+  for (const q of M.queue) {
+    const rows = wrapText((q.img ? '▣ ' : '') + q.t, IW - 2);
+    rows.forEach((r, i) => lines.push(['dim', (i === 0 ? '⧖ ' : '  ') + r]));
+  }
+  return lines;
+}
+
+function draw() {
+  const g = new Scr();
+  const w = wrapF(M.text, M.cursor, TW), n = w.rows.length;
+  const start = windowStart(n, w.at[0]), v = Math.min(n, CAP);
+  const band = AROUND + v, top = H - band;
+  g.put(0, 1, 'claude  ·  conversación', 'hd'); g.fill(0, 'hd');
+  const lines = listLines(), room = top - 1, shown = lines.slice(Math.max(0, lines.length - room));
+  shown.forEach(([c, s], i) => g.put(1 + room - shown.length + i, 1, s.slice(0, IW), c));
+  for (let y = top; y < H; y++) g.fill(y, 'band');
+  g.put(top + 1, 3, '▸ ~/ws/jw', 'cyan');
+  g.put(top + 1, 14, '⎇ feat/queue-recall', 'mag');
+  const chips = [];
+  if (M.queue.length) chips.push(['en cola ' + M.queue.length, 'yellow']);
+  if (M.hi >= 0) chips.push([`↑ ${M.hi + 1}/${M.hist.length}`, 'yellow']);
+  if (M.working) chips.push(['■ esc', 'red']);
+  let x = W - 2;
+  for (const [s, c] of chips.reverse()) { x -= s.length; g.put(top + 1, x, s, c); x -= 2; }
+  const rows = w.rows.slice(start, start + v), empty = !M.text.length;
+  rows.forEach((r, i) => {
+    const y = top + 3 + i;
+    if (i === 0) { g.put(y, 1, '❯', 'green'); g.put(y, 76, '➤', 'blue'); }
+    g.put(y, 3, r.join(''), '');
+  });
+  if (empty) g.put(top + 3, 3, M.queue.length ? 'escribe un mensaje · ↑ trae el último de la cola' : 'escribe un mensaje', 'dim');
+  const cr = w.at[0] - start;
+  if (cr >= 0 && cr < v) { const y = top + 3 + cr, cx = 3 + w.at[1]; g.cells[y][cx] = [g.cells[y][cx][0], 'cur band']; }
+  g.put(H - 1, 3, M.working ? 'ctrl+↵ enviar ahora · ↑ trae la cola' : 'jw', 'dim');
+  return { html: g.html(), n, v };
+}
+
+const chars = () => [...M.text];
+function setText(s, cursor) { M.text = s; M.cursor = cursor; }
+function insert(s) { const c = chars(); c.splice(M.cursor, 0, ...s); M.text = c.join(''); M.cursor += [...s].length; }
+function moveRow(d) {
+  const w = wrapF(M.text, M.cursor, TW), r = w.at[0] + d;
+  if (r < 0 || r >= w.rows.length) return;
+  const end = r + 1 < w.starts.length ? w.starts[r + 1] : chars().length;
+  M.cursor = Math.min(w.starts[r] + w.at[1], r + 1 < w.starts.length && chars()[end - 1] === '\n' ? end - 1 : end);
+}
+
+function startTurn(t) { M.items.push({ k: 'user', t }); M.working = true; }
+function endTurn(interrupted) {
+  if (interrupted) M.items.push({ k: 'note', t: 'Interrumpido por ti' }); else M.items.push({ k: 'claude', t: 'Listo.' });
+  M.working = false;
+  const next = M.queue.shift();   // the daemon sends one message per turn (REQ-382)
+  if (next) { startTurn(next.t); M.last = `the turn ended: «${next.t.slice(0, 40)}» left the queue and started the next turn.`; }
+}
+function remember(t) { if (M.hist[M.hist.length - 1] !== t) M.hist.push(t); }
+function send(now) {
+  const t = M.text.trim();
+  if (!t) return;
+  remember(t);
+  setText('', 0); M.hi = -1; M.draft = null; M.qdraft = null;
+  if (!M.working) { startTurn(t); M.last = 'nothing ran: the message started a turn.'; }
+  else if (now) { M.queue.unshift({ t }); M.last = 'sent now: the turn is interrupted and this goes first.'; endTurn(true); }
+  else { M.queue.push({ t }); M.last = 'Claude works: the message waits in the queue.'; }
+}
+
+// The daemon's `conversation_unqueue`: the last message of yours that waits, out of the queue, or nothing.
+function unqueue() {
+  for (let i = M.queue.length - 1; i >= 0; i--) {
+    if (M.queue[i].img && CFG.img === 'skip') continue;
+    return M.queue.splice(i, 1)[0].t;
+  }
+  return null;
+}
+function canRecallQueue() {
+  if (CFG.prio !== 'queue' || M.hi !== -1) return false;
+  if (M.text && CFG.field === 'ignore') return false;
+  return M.queue.some(q => !(q.img && CFG.img === 'skip'));
+}
+function recallQueue() {
+  const t = unqueue();
+  if (t === null) return false;
+  if (!M.text) { setText(t, 0); M.last = 'brought back the last message of the queue.'; }
+  else if (CFG.field === 'draft') { M.qdraft = M.text; setText(t, 0); M.last = 'what you had is a draft; ↓ on the last row brings it back (and drops this message).'; }
+  else { setText(t + '\n' + M.text, 0); M.last = 'brought back before what you had.'; }
+  return true;
+}
+function recallHistory(dir) {
+  if (dir < 0) {
+    if (M.hi === -1) { M.draft = M.text; M.hi = M.hist.length - 1; } else if (M.hi > 0) M.hi--; else return;
+    setText(M.hist[M.hi], 0);
+  } else {
+    M.hi++;
+    if (M.hi >= M.hist.length) { M.hi = -1; const d = M.draft || ''; M.draft = null; setText(d, [...d].length); } else { const h = M.hist[M.hi]; setText(h, [...h].length); }
+  }
+}
+function interrupt() { if (M.working) { M.last = 'esc: the turn is interrupted; the queue is not emptied.'; endTurn(true); } }
+
+function key(e) {
+  if (e.metaKey || e.altKey) return;
+  const k = e.key;
+  if (e.ctrlKey && k === 'Enter') { e.preventDefault(); send(true); render(); return; }
+  if (e.ctrlKey && (k === 'c' || k === 'u')) { e.preventDefault(); if (M.working && k === 'c' && !M.text) interrupt(); else { setText('', 0); M.hi = -1; M.draft = null; M.qdraft = null; M.last = 'the field is clear.'; } render(); return; }
+  if (e.ctrlKey) return;
+  let used = true;
+  const w = wrapF(M.text, M.cursor, TW);
+  if (k.length === 1) { insert(k); M.hi = -1; M.draft = null; M.qdraft = null; }
+  else if (k === 'Enter') { if (e.shiftKey) insert('\n'); else send(false); }
+  else if (k === 'Backspace') { if (M.cursor > 0) { const c = chars(); c.splice(M.cursor - 1, 1); M.text = c.join(''); M.cursor--; } }
+  else if (k === 'ArrowLeft') M.cursor = Math.max(0, M.cursor - 1);
+  else if (k === 'ArrowRight') M.cursor = Math.min(chars().length, M.cursor + 1);
+  else if (k === 'ArrowUp') {
+    if (w.at[0] === 0) { if (canRecallQueue()) recallQueue(); else if (M.hist.length) { recallHistory(-1); M.last = 'the queue has nothing to bring back: the history, as now.'; } else moveRow(-1); }
+    else moveRow(-1);
+  } else if (k === 'ArrowDown') {
+    if (M.qdraft !== null && w.at[0] === w.rows.length - 1) { setText(M.qdraft, [...M.qdraft].length); M.qdraft = null; }
+    else if (M.hi >= 0 && w.at[0] === w.rows.length - 1) recallHistory(1);
+    else moveRow(1);
+  } else if (k === 'Escape') interrupt();
+  else used = false;
+  if (used) { e.preventDefault(); render(); }
+}
+
+function $(id) { return document.getElementById(id); }
+function readCfg() { for (const k of Object.keys(CFG)) { const r = document.querySelector(`input[name="${k}"]:checked`); if (r) CFG[k] = r.value; } }
+function render() {
+  readCfg();
+  const d = draw();
+  $('scr').innerHTML = d.html;
+  $('info').textContent = `${M.working ? 'a turn runs' : 'idle'}  ·  waits: ${M.queue.length}  ·  sent before: ${M.hist.length}  ·  field: «${M.text.slice(0, 50).replace(/\n/g, ' ⏎ ')}${M.text.length > 50 ? '…' : ''}»${M.last ? '\nlast: ' + M.last : ''}`;
+  $('info').style.whiteSpace = 'pre-line';
+  $('b-end').disabled = !M.working;
+}
+
+if (typeof document !== 'undefined') {
+  $('scr').addEventListener('keydown', key);
+  const focus = () => $('scr').focus();
+  $('b-end').onclick = () => { endTurn(false); render(); focus(); };
+  $('b-work').onclick = () => { if (!M.working) { startTurn('revisa los tests de auth'); M.last = 'a turn started.'; } render(); focus(); };
+  $('b-reset').onclick = () => { M = fresh(); render(); focus(); };
+  document.querySelectorAll('input[type=radio]').forEach(r => r.onchange = () => { render(); focus(); });
+  render();
+} else {
+  globalThis.__T = { M: () => M, reset: () => { M = fresh(); }, CFG, key, send, endTurn, unqueue, recallQueue, canRecallQueue, recallHistory, interrupt, wrapF, listLines, draw, setText };
+}
+</script>
