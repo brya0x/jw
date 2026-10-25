@@ -236,6 +236,11 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             hub.stop();
             Ok(None)
         }
+        // The process that runs the daemon sees the flag and stops it as it stops by itself (REQ-891).
+        Cmd::Stop {} => {
+            shared.lock().stop_requested = true;
+            Ok(None)
+        }
         Cmd::OpenConversation {
             pane,
             resume,

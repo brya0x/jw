@@ -449,7 +449,7 @@ pub enum Key {
     Review,
     /// Open the diff of the highlighted workspace.
     Changes,
-    /// The tasks of the highlighted workspace, in place of its panels (`T`, REQ-926).
+    /// The tasks of the highlighted workspace, in place of its panels (`T`, REQ-943).
     Tasks,
     /// Close what the level is about: the highlighted workspace, or the focused panel.
     Close,
@@ -865,7 +865,7 @@ pub struct View {
     check_node: Option<String>,
     /// What the last command did, in the status bar until the next key.
     flash: String,
-    /// What a task loop did that the person should know (REQ-929): the text, whether it is good news, and until
+    /// What a task loop did that the person should know (REQ-946): the text, whether it is good news, and until
     /// when it is shown, in `now_ms`.
     notice: Option<(String, bool, u64)>,
     /// The look the person chose, and whether the machine is dark (what `system` follows).
@@ -1079,7 +1079,7 @@ impl View {
         self.now_ms = ms;
     }
 
-    /// A task loop that stopped or ended since the session the person was last shown (REQ-929): what it
+    /// A task loop that stopped or ended since the session the person was last shown (REQ-946): what it
     /// says is in the footer for 6 seconds. The first session of a connection says nothing, since what
     /// stopped before the client came is not news.
     fn tasks_stopped(&mut self, new: &Session) {
@@ -1205,7 +1205,7 @@ impl View {
         self.task_docs.values().find(|t| t.workspace == workspace)
     }
 
-    /// Whether the row of a workspace says it has a task list (REQ-936: the summary alone).
+    /// Whether the row of a workspace says it has a task list (REQ-953: the summary alone).
     fn has_task_list(&self, workspace: &str) -> bool {
         self.session.as_ref().is_some_and(|s| {
             s.workspaces
@@ -1214,7 +1214,7 @@ impl View {
         })
     }
 
-    /// `T`: the tasks of the highlighted workspace in place of its panels, or the panels back (REQ-926).
+    /// `T`: the tasks of the highlighted workspace in place of its panels, or the panels back (REQ-943).
     fn toggle_tasks(&mut self) -> After {
         if self.tasks.take().is_some() {
             return After::Continue;
@@ -1241,7 +1241,7 @@ impl View {
         }
     }
 
-    /// A key while the tasks view is shown: every key is the view's, a chord with Ctrl or Alt is none (REQ-928).
+    /// A key while the tasks view is shown: every key is the view's, a chord with Ctrl or Alt is none (REQ-945).
     fn tasks_key(&mut self, ev: KeyEvent) -> After {
         let Some(mut view) = self.tasks.take() else {
             return After::Continue;
@@ -1264,7 +1264,7 @@ impl View {
         }
     }
 
-    /// What the tasks view wants the daemon to do, for the loop to send (REQ-941 included).
+    /// What the tasks view wants the daemon to do, for the loop to send (REQ-958 included).
     pub fn take_task_asks(&mut self) -> Vec<tasks::Ask> {
         self.drop_stale_tasks();
         let Some(workspace) = self.tasks.as_ref().map(|v| v.workspace().to_owned()) else {
@@ -1873,7 +1873,7 @@ impl View {
         self.session.iter().flat_map(|s| s.jobs.iter()).any(|j| {
             j.kind == JobKind::RemoveWorkspace
                 && j.state == JobState::Failed
-                && j.workspace == workspace
+                && j.workspace.as_deref() == Some(workspace)
         })
     }
 
@@ -1908,7 +1908,20 @@ impl View {
                         .is_some_and(|before| before.get(&j.id) == Some(&JobState::Running)))
         };
         let told: Vec<&Job> = s.jobs.iter().filter(ended).collect();
-        let said = told.first().map(|j| removal_said(j));
+        let said = told.first().map(|j| removal_said(j)).or_else(|| {
+            // An update of claude that appeared already over, after the first read (REQ-854).
+            s.jobs
+                .iter()
+                .find(|j| {
+                    j.kind == JobKind::UpdateClaude
+                        && j.state != JobState::Running
+                        && self
+                            .jobs_state
+                            .as_ref()
+                            .is_some_and(|before| !before.contains_key(&j.id))
+                })
+                .map(update_said)
+        });
         let told: HashSet<String> = told.iter().map(|j| j.id.clone()).collect();
         self.jobs_seen.retain(|id| now.contains_key(id));
         self.jobs_mine
@@ -4257,7 +4270,7 @@ impl View {
                 match job {
                     Some(j) if j.state == JobState::Running && j.cancellable => {
                         return After::CancelOp {
-                            workspace: j.workspace.clone(),
+                            workspace: j.workspace.clone().unwrap_or_default(),
                         };
                     }
                     Some(j) if j.state == JobState::Running => {
@@ -4267,10 +4280,11 @@ impl View {
                 }
             }
             (Mode::Avisos, Key::Enter) if self.avisos_tab == AvisosTab::Trabajos => {
+                let job = self.jobs_listed().get(self.jobs_selected).is_some();
                 let ws = self
                     .jobs_listed()
                     .get(self.jobs_selected)
-                    .map(|j| j.workspace.clone());
+                    .and_then(|j| j.workspace.clone());
                 let at = ws.as_ref().and_then(|ws| {
                     self.session
                         .as_ref()
@@ -4283,6 +4297,7 @@ impl View {
                         self.open(&ws, 0);
                     }
                     (Some(_), None) => self.flash("ese workspace ya no está"),
+                    (None, _) if job => self.flash("este trabajo no es de un workspace"),
                     _ => {}
                 }
             }
@@ -4891,7 +4906,7 @@ impl View {
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        // The tasks view covers the panels: a click does not reach what it hides (REQ-934).
+        // The tasks view covers the panels: a click does not reach what it hides (REQ-951).
         if self.tasks.is_some() {
             return After::Continue;
         }
@@ -6398,7 +6413,7 @@ impl View {
             // A review says which pull request it is, beside the marks (REQ-588).
             let tag = w.review.as_ref().map(|r| format!("⎇#{}", r.pr));
             let tag_w = tag.as_ref().map_or(0, |t| t.chars().count() + 1);
-            // A task list says how far it is, beside the marks (REQ-925).
+            // A task list says how far it is, beside the marks (REQ-942).
             let progress = w.tasks.as_ref().map(|t| format!("{}/{}", t.done, t.total));
             let progress_w = progress.as_ref().map_or(0, |p| p.chars().count() + 1);
             g.put_over(
@@ -6439,7 +6454,7 @@ impl View {
             } else if self.removal_failed(&w.id) {
                 g.put_over(SIDEBAR - 2, y, "✗", Style::fg(look::red()).bold());
             }
-            // Claude works in it, or its task loop does: a spinner beside the marks (REQ-579, REQ-925).
+            // Claude works in it, or its task loop does: a spinner beside the marks (REQ-579, REQ-942).
             if w.working || loop_on {
                 g.put_over(
                     SIDEBAR - 3,
@@ -6547,7 +6562,7 @@ impl View {
             );
         }
 
-        // The tasks view takes the place of the panels, and the whole screen when it is narrow (REQ-926, REQ-930).
+        // The tasks view takes the place of the panels, and the whole screen when it is narrow (REQ-943, REQ-947).
         if let Some(tv) = &self.tasks {
             let rect = if cols >= SINGLE_BELOW {
                 (
@@ -7340,7 +7355,7 @@ impl View {
 
 type Rect = (usize, usize, usize, usize);
 
-/// How long what a task loop did stays in the footer (REQ-929).
+/// How long what a task loop did stays in the footer (REQ-946).
 const NOTICE_MS: u64 = 6000;
 
 /// The stop chip of a running command, at the right of the editor's chips row.
@@ -7621,11 +7636,24 @@ fn removal_said(j: &Job) -> String {
     }
 }
 
+/// What the bar says when an update of claude is over: green when it went, red when it did not
+/// (REQ-854).
+fn update_said(j: &Job) -> String {
+    match j.state {
+        JobState::Done => format!(
+            "✓ {} · las conversaciones abiertas siguen en la anterior",
+            job_title(j)
+        ),
+        _ => "✗ no se pudo actualizar claude".into(),
+    }
+}
+
 /// What a job is called in the tab.
 fn job_title(j: &Job) -> String {
     match j.kind {
         JobKind::RemoveWorkspace => format!("quitar {}", j.name),
         JobKind::SyncWorkspace => format!("subir {}", j.name),
+        JobKind::UpdateClaude => format!("actualizar {}", j.name),
     }
 }
 
@@ -7651,6 +7679,13 @@ fn job_said(j: &Job) -> (String, Rgb) {
             ("quitado · la rama se queda".into(), look::dim())
         }
         (JobState::Done, JobKind::SyncWorkspace) => (format!("subido {}", j.name), look::dim()),
+        (JobState::Done, JobKind::UpdateClaude) => (
+            format!(
+                "{} · las conversaciones abiertas siguen en la anterior",
+                j.name
+            ),
+            look::dim(),
+        ),
         (JobState::Failed, _) => (
             j.detail
                 .clone()
@@ -9860,7 +9895,7 @@ mod tests {
         });
     }
 
-    /// REQ-925: a workspace that has a list says how far it is, beside its marks; the loop's spinner
+    /// REQ-942: a workspace that has a list says how far it is, beside its marks; the loop's spinner
     /// turns while it is on, the attention's mark is the attention's, and `○` is what is left.
     #[test]
     fn a_workspace_with_a_task_list_says_its_progress_and_its_loop() {
@@ -9902,7 +9937,7 @@ mod tests {
         assert!(long.contains("12/12") && long.contains('…'), "{long}");
     }
 
-    /// REQ-929: a loop that stops says so in the footer for 6 seconds, once; the first session of a
+    /// REQ-946: a loop that stops says so in the footer for 6 seconds, once; the first session of a
     /// connection says nothing.
     #[test]
     fn a_loop_that_stops_is_said_in_the_footer_for_six_seconds_and_what_was_there_is_not_news() {
@@ -9983,7 +10018,7 @@ mod tests {
         v
     }
 
-    /// REQ-926, REQ-934: `T` shows the tasks of the highlighted workspace in place of its panels and `esc` brings
+    /// REQ-943, REQ-951: `T` shows the tasks of the highlighted workspace in place of its panels and `esc` brings
     /// them back; a workspace with no list says so; nothing of the daemon's layout is touched.
     #[test]
     fn t_shows_the_tasks_of_the_workspace_in_place_of_its_panels_and_esc_brings_them_back() {
@@ -10047,7 +10082,7 @@ mod tests {
         );
     }
 
-    /// REQ-934: the view covers the panels, and a click or the wheel does not reach what it hides: the
+    /// REQ-951: the view covers the panels, and a click or the wheel does not reach what it hides: the
     /// keyboard does not end up in a shell nobody can see.
     #[test]
     fn a_click_or_the_wheel_on_the_tasks_view_does_not_reach_the_panels_under_it() {
@@ -10066,7 +10101,7 @@ mod tests {
         assert!(!v.typing);
     }
 
-    /// REQ-930: under 64 columns the view takes the screen.
+    /// REQ-947: under 64 columns the view takes the screen.
     #[test]
     fn on_a_narrow_screen_the_tasks_view_takes_the_whole_screen() {
         let mut v = tasks_view(true);
@@ -10084,7 +10119,7 @@ mod tests {
         assert!(v.tasks.is_none());
     }
 
-    /// REQ-928, REQ-936: the keys ask the daemon for what they say, and `e` leaves for the viewer with the list's file.
+    /// REQ-945, REQ-953: the keys ask the daemon for what they say, and `e` leaves for the viewer with the list's file.
     #[test]
     fn the_keys_of_the_tasks_view_become_commands_and_e_reads_the_file() {
         let mut v = tasks_view(true);
@@ -10123,7 +10158,7 @@ mod tests {
         assert!(v.tasks.is_none());
     }
 
-    /// REQ-941: when the node goes while the row says there is a list it is asked for again, not at every frame;
+    /// REQ-958: when the node goes while the row says there is a list it is asked for again, not at every frame;
     /// a row with no list closes the view.
     #[test]
     fn the_tasks_node_is_asked_for_again_when_it_goes_and_a_row_with_no_list_ends_the_view() {
@@ -12285,7 +12320,7 @@ mod tests {
         Job {
             id: id.into(),
             kind,
-            workspace: workspace.into(),
+            workspace: (!workspace.is_empty()).then(|| workspace.into()),
             name: name.into(),
             state,
             started_at: 1_000_000,
@@ -12607,6 +12642,45 @@ mod tests {
         assert_eq!(v.press(Key::DismissAll), After::Continue);
     }
 
+    /// REQ-854: an update of claude has no workspace, no removal's words and a line of its own in the bar
+    /// when it appears over after the first read; `↵` on it says so.
+    #[test]
+    fn an_update_of_claude_is_said_once_in_the_bar_and_has_no_workspace_to_go_to() {
+        let update = |state, name: &str| {
+            let mut j = job("u1", JobKind::UpdateClaude, "", name, state);
+            j.cancellable = false;
+            j
+        };
+        let done = || update(JobState::Done, "claude 2.1.309 → 2.1.312");
+        let mut v = fixture_view();
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(
+            v.flash,
+            "✓ actualizar claude 2.1.309 → 2.1.312 · las conversaciones abiertas siguen en la anterior"
+        );
+        v.flash.clear();
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "", "said once");
+        // One that was there when the client first read the session says nothing.
+        let mut v = fixture_view();
+        v.jobs_state = None;
+        with_jobs(&mut v, vec![done()]);
+        assert_eq!(v.flash, "");
+        // A failure is red and says what failed in the tab.
+        let mut v = fixture_view();
+        let mut broke = update(JobState::Failed, "claude");
+        broke.detail = Some("EACCES: permission denied".into());
+        with_jobs(&mut v, vec![broke]);
+        assert_eq!(v.flash, "✗ no se pudo actualizar claude");
+        v.press(Key::Avisos);
+        v.press(Key::Next);
+        assert!(v.plain(120, 30).contains("actualizar claude"));
+        assert!(v.plain(120, 30).contains("EACCES: permission denied"));
+        v.press(Key::Enter);
+        assert_eq!(v.mode, Mode::Avisos, "it stays");
+        assert_eq!(v.flash, "este trabajo no es de un workspace");
+    }
+
     /// `↵` on a job goes to its workspace, and says so when that is gone.
     #[test]
     fn enter_on_a_job_goes_to_its_workspace() {
@@ -12709,6 +12783,7 @@ mod tests {
             conversation: false,
             projects: dir.join("projects"),
             chrome: false,
+            claude_update: None,
         };
         let socket = config.socket.clone();
         let daemon = daemon::Daemon::start(config).unwrap();
@@ -15035,6 +15110,7 @@ mod tests {
             conversation: false,
             projects: dir.join("projects"),
             chrome: false,
+            claude_update: None,
         };
         let d = daemon::Daemon::start(config.clone()).unwrap();
         let c = Client::connect(&config.socket, "test").unwrap();
@@ -15604,6 +15680,7 @@ mod tests {
                 option("no", "Seguir planeando"),
             ],
             multi: false,
+            restored: false,
         }
     }
 

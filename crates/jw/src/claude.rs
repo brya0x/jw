@@ -538,6 +538,7 @@ mod tests {
                 })
                 .collect(),
             multi: false,
+            restored: false,
         }
     }
 
@@ -605,6 +606,7 @@ mod tests {
             diff: vec![],
             url: None,
             by: Some("el móvil".into()),
+            lost: false,
         };
         assert_eq!(
             item_lines(&tool),
@@ -648,6 +650,7 @@ mod tests {
             diff: vec![],
             url: None,
             by: None,
+            lost: false,
         };
         assert!(!settled(&running));
     }

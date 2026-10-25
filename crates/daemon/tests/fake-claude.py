@@ -3,7 +3,9 @@ import json, os, sys, tempfile, threading, time
 LOG = os.environ.get("FAKE_LOG", "/tmp/fake-engine.log")
 argv = sys.argv[1:]
 if "--version" in argv:
-    print("fake-claude 1.0")
+    # With an `installed` file beside it, the stand-in is that version of Claude Code.
+    installed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "installed")
+    print(open(installed).read().strip() + " (Claude Code)" if os.path.exists(installed) else "fake-claude 1.0")
     sys.exit(0)
 session = ""
 for i, a in enumerate(argv):
@@ -44,7 +46,8 @@ def out(o):
         sys.stdout.write(json.dumps(o) + "\n")
         sys.stdout.flush()
 def init():
-    out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5-5", "permissionMode": mode[0], "skills": ["jw"]})
+    out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5-5", "permissionMode": mode[0], "skills": ["jw"],
+         "claude_code_version": os.environ.get("FAKE_VERSION", "2.1.309")})
 def say(text):
     out({"type": "stream_event", "event": {"type": "message_start"}})
     out({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}})
@@ -65,6 +68,7 @@ def wait_response(request_id):
         if m.get("type") == "control_request" and m["request"]["subtype"] == "interrupt":
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {"still_queued": []}}})
             return {"behavior": "interrupt"}
+    logline("eof")
     sys.exit(0)
 def edit(n, suggested):
     tid = "toolu_e%d" % n
@@ -259,7 +263,7 @@ for line in sys.stdin:
         todo()
     elif "push" in text:
         push()
-    elif "edit" in text:
+    elif "edit" in text or text.startswith("Sí, adelante con Edit"):
         edits += 1
         say("Voy a editar.")
         edit(edits, "session" in text)
@@ -268,6 +272,7 @@ for line in sys.stdin:
         result()
     if "monitor" in text:
         threading.Thread(target=auto).start()
+logline("eof")
 # A stubborn engine does not end when its input does (a turn or a background task still runs).
 if os.environ.get("FAKE_STUBBORN"):
     time.sleep(600)

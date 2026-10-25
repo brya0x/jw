@@ -56,6 +56,14 @@ pub struct Conversation {
     /// REQ-631); absent while the conversation has not been opened from a pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// The version of `claude` its engine says it is (`claude_code_version` of `system/init`);
+    /// absent while no engine runs or none has said it (REQ-852).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    /// The version of `claude` that is installed, while it is not `engine_version` and the update
+    /// is not `off` (REQ-852): the clients say that the conversation runs an older engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_newer: Option<String>,
     /// What Claude proposes the person writes next, while the engine is stopped and nothing waits
     /// (REQ-572): the clients draw it grey in the empty field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,6 +196,9 @@ pub enum Item {
         /// Where the answer to its permission came from (`el móvil`, `modo accept edits`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<String>,
+        /// It has no result and may have finished unseen: drawn as such, not as a failure (REQ-887).
+        #[serde(default, skip_serializing_if = "is_false")]
+        lost: bool,
     },
     /// A subagent: a card with its progress and its totals.
     Agent {
@@ -298,6 +309,9 @@ pub struct Ask {
     pub options: Vec<AskOption>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub multi: bool,
+    /// It was waiting when the daemon stopped and is shown again; the answer goes as a message (REQ-875).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub restored: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

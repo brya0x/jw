@@ -203,17 +203,18 @@ internal fun BoxScope.JobSheet(
         } else {
             Mono(job.said(), Palette.dim, 12, lines = 3)
         }
-        if (job.state == JobState.Running && job.cancellable) {
+        val workspace = job.workspace
+        if (job.state == JobState.Running && job.cancellable && workspace != null) {
             SheetAction("×", "cancelar", Palette.red) {
-                source.cancel(job.workspace) { r -> r.onFailure { source.say("✗ ${it.message ?: "el PC no pudo cancelar el trabajo"}") } }
+                source.cancel(workspace) { r -> r.onFailure { source.say("✗ ${it.message ?: "el PC no pudo cancelar el trabajo"}") } }
                 dismiss()
             }
         }
-        val there = session.workspaces.any { it.id == job.workspace }
-        if (there && (job.kind != JobKind.RemoveWorkspace || job.state == JobState.Failed)) {
+        val there = workspace != null && session.workspaces.any { it.id == workspace }
+        if (workspace != null && there && (job.kind != JobKind.RemoveWorkspace || job.state == JobState.Failed)) {
             SheetAction("›", "ir al workspace") {
                 dismiss()
-                set(nav.openWorkspace(state, job.workspace))
+                set(nav.openWorkspace(state, workspace))
             }
         }
         if (job.state != JobState.Running) {

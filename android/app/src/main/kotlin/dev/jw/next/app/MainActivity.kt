@@ -189,7 +189,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(state.seen) { store.save(state.seen) }
         LaunchedEffect(state.folded) { folds.save(pc, state.folded) }
         BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos || state.screen is Screen.Archived) { state = nav.back(state) }
-        // A loop that stops while the app is open is said over any screen; the first session of a connection says nothing (REQ-933).
+        // A loop that stops while the app is open is said over any screen; the first session of a connection says nothing (REQ-950).
         val notices = remember(source, epoch) { TasksNotices() }
         var banner by remember(source) { mutableStateOf<TasksNotice?>(null) }
         val version = source.tick.intValue

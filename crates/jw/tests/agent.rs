@@ -572,7 +572,7 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
     assert!(out.status.success());
     let path = config.join(format!("skills/{name}/SKILL.md"));
     let tasks = config.join(format!("skills/{name}-tasks/SKILL.md"));
-    // both skills are written (REQ-915)
+    // both skills are written (REQ-932)
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         format!(

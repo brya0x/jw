@@ -102,6 +102,8 @@ sealed interface ConvItem {
         val url: String? = null,
         /** Where the answer to its permission came from. */
         val by: String? = null,
+        /** It has no result and may have finished unseen. */
+        val lost: Boolean = false,
     ) : ConvItem
 
     /** A subagent: a card with its progress and its totals. */
@@ -162,6 +164,7 @@ data class Ask(
     val plan: List<String> = emptyList(),
     val options: List<AskOption>,
     val multi: Boolean = false,
+    val restored: Boolean = false,
 )
 
 @Serializable

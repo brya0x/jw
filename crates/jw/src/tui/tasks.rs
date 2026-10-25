@@ -1,5 +1,5 @@
-//! The tasks view of the terminal client (N180f2; REQ-926 to REQ-928, REQ-930, REQ-934 to REQ-936,
-//! REQ-941): a screen of this client that takes the place of the workspace's panels while it is
+//! The tasks view of the terminal client (N180f2; REQ-943 to REQ-945, REQ-947, REQ-951 to REQ-953,
+//! REQ-958): a screen of this client that takes the place of the workspace's panels while it is
 //! open, drawn from the `tasks` node alone. It owns every key while it is shown, so `L`, `d`, `u`
 //! and `b` are its own and not a swap, the diff or a close. It asks the daemon through `Ask`s that
 //! the loop serves, and holds no list of its own.
@@ -10,7 +10,7 @@ use crossterm::event::KeyCode;
 use super::{Grid, Rect, Style, clip, look, shell};
 
 /// How long before the node is asked for again when it is gone while the row says there is a list
-/// (REQ-941).
+/// (REQ-958).
 const ASK_AGAIN_MS: u64 = 3000;
 
 /// What the view wants the daemon to do, for the loop to send.
@@ -81,7 +81,7 @@ impl TasksView {
         &self.workspace
     }
 
-    /// The node is not there while the row says there is a list: ask for it, and again if it goes (REQ-941).
+    /// The node is not there while the row says there is a list: ask for it, and again if it goes (REQ-958).
     pub fn want(&mut self, have: bool, listed: bool, now_ms: u64) {
         if have {
             self.asked_at = None;
@@ -123,7 +123,7 @@ impl TasksView {
         }
     }
 
-    /// A key while the view is shown: every key is the view's (REQ-928); no key uses Alt.
+    /// A key while the view is shown: every key is the view's (REQ-945); no key uses Alt.
     pub fn press(&mut self, doc: Option<&Tasks>, code: KeyCode) -> Outcome {
         if let Some(input) = self.input.take() {
             return self.type_in(input, code);
@@ -412,7 +412,7 @@ mod tests {
         g.rows_plain()
     }
 
-    /// REQ-927: the tasks by level with their state and what they wait for, the final task that is not
+    /// REQ-944: the tasks by level with their state and what they wait for, the final task that is not
     /// in the file yet, the problems and the loop's line.
     #[test]
     fn the_view_shows_the_tasks_by_level_with_their_state_and_what_they_wait_for() {
@@ -462,7 +462,7 @@ mod tests {
         );
     }
 
-    /// REQ-927: a blocked task says why, the final task shows its notes (its evidence) and the loop says why it stopped.
+    /// REQ-944: a blocked task says why, the final task shows its notes (its evidence) and the loop says why it stopped.
     #[test]
     fn a_blocked_task_its_evidence_and_why_the_loop_stopped_are_there() {
         let doc = fixture("snapshot-tasks-stopped.json");
@@ -522,7 +522,7 @@ mod tests {
         assert!(text(&TasksView::new("w"), None, 60, 10)[2].contains("leyendo la lista"));
     }
 
-    /// REQ-928: the keys of the view, and that it swallows the others.
+    /// REQ-945: the keys of the view, and that it swallows the others.
     #[test]
     fn the_keys_of_the_view_ask_for_what_they_say_and_the_others_are_swallowed() {
         let doc = fixture("snapshot-tasks.json");
@@ -653,7 +653,7 @@ mod tests {
         assert!(none.take_asks().is_empty());
     }
 
-    /// REQ-941: the node is asked for when it is not there while the row says there is a list, and again,
+    /// REQ-958: the node is asked for when it is not there while the row says there is a list, and again,
     /// not at every frame, when it goes.
     #[test]
     fn the_node_is_asked_for_again_when_it_goes_while_the_row_says_there_is_a_list() {

@@ -1,4 +1,4 @@
-//! `tasks`: what an agent does with its workspace's task list (N180c, REQ-919 to REQ-924): `ls`,
+//! `tasks`: what an agent does with its workspace's task list (N180c, REQ-936 to REQ-941): `ls`,
 //! `next`, `done`, `block`, `reopen` and `note`. They read and write the list's file and nothing else,
 //! so they work with no daemon. `loop on|off|status` are the loop's, which the daemon runs (N180d).
 
@@ -26,7 +26,7 @@ pub(super) fn run(args: &[&str]) -> Out {
 }
 
 /// The list from the current folder up to the folder that has a `.git`, a file in a worktree and a
-/// folder in a clone (REQ-920), or the file `--file` names.
+/// folder in a clone (REQ-937), or the file `--file` names.
 fn find(a: &Args) -> Out<PathBuf> {
     if let Some(file) = a.value("file") {
         return Ok(PathBuf::from(file));
@@ -57,7 +57,7 @@ fn parsed(path: &Path, text: &str) -> Out<List> {
     }
 }
 
-/// Every task in order of level, the final one added to the file when it has none (REQ-888).
+/// Every task in order of level, the final one added to the file when it has none (REQ-905).
 fn ls(args: &[&str]) -> Out {
     let a = Args::parse(args, &["file"], &["json"])?;
     a.words::<0>()?;
@@ -129,7 +129,7 @@ fn ls(args: &[&str]) -> Out {
 }
 
 /// The next ready task: what the file says, with the final task counted even if it is not written yet.
-/// Nothing ready is exit 3, with nothing on stdout (REQ-923).
+/// Nothing ready is exit 3, with nothing on stdout (REQ-940).
 fn next(args: &[&str]) -> Out {
     let a = Args::parse(args, &["file"], &[])?;
     a.words::<0>()?;
@@ -146,7 +146,7 @@ fn next(args: &[&str]) -> Out {
     }
 }
 
-/// `done`, `block`, `reopen` and `note`: one change to one task (REQ-881, REQ-924).
+/// `done`, `block`, `reopen` and `note`: one change to one task (REQ-898, REQ-941).
 fn change(args: &[&str], verb: &str) -> Out {
     let a = Args::parse(args, &["file"], &[])?;
     let Some((id, words)) = a.pos.split_first() else {
@@ -206,7 +206,7 @@ fn target(a: &Args, s: &mut Link) -> Out<WorkspaceSummary> {
     }
 }
 
-/// `loop on [--max N]`: the first task is printed as `next` prints it (REQ-921).
+/// `loop on [--max N]`: the first task is printed as `next` prints it (REQ-938).
 fn loop_on(args: &[&str]) -> Out {
     let a = Args::parse(args, &["max", "in"], &[])?;
     a.words::<0>()?;

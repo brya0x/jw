@@ -31,7 +31,7 @@ pub fn run(event: &str) -> ExitCode {
         // Not in a pane of ours: nothing to tell.
         return ExitCode::SUCCESS;
     };
-    // The nudge needs no daemon (REQ-917): one line that names the skill, when it is installed.
+    // The nudge needs no daemon (REQ-934): one line that names the skill, when it is installed.
     if event == AgentEvent::UserPromptSubmit && crate::agent::tasks_skill_installed() {
         println!(
             "{}",
@@ -56,7 +56,7 @@ pub fn run(event: &str) -> ExitCode {
         },
         REPLY_WAIT,
     );
-    // The daemon answers a `stop` with a reason when a task loop goes on (REQ-903): claude keeps going.
+    // The daemon answers a `stop` with a reason when a task loop goes on (REQ-920): claude keeps going.
     if let Ok(Ok(Some(result))) = reply
         && let Some(reason) = result["block"]["reason"].as_str()
     {

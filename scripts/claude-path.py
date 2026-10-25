@@ -335,7 +335,7 @@ def s_agent():
     c.close()
 
 
-@stage("loop", "a task loop in the engine: the stop hook keeps the agent on the next task until the list ends (N180d2, REQ-905, 913)")
+@stage("loop", "a task loop in the engine: the stop hook keeps the agent on the next task until the list ends (N180d2, REQ-922, 913)")
 def s_loop():
     # Two small tasks and the final one (which `tasks_loop_on` writes). The agent runs `jw tasks done`, so the
     # binary is on its PATH, and the permissions it asks for are answered yes: this is a throwaway repository.

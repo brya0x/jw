@@ -83,7 +83,7 @@ data class HomeRow(
     /** A conversation of its own: its last line, and when it was said in seconds (REQ-826). */
     val chatLast: String? = null,
     val chatActive: Long? = null,
-    /** How far its task list is, `3/8`, when it has one (REQ-931). */
+    /** How far its task list is, `3/8`, when it has one (REQ-948). */
     val tasks: String? = null,
     /** Its task loop runs: a spinner beside the mark. */
     val loopOn: Boolean = false,

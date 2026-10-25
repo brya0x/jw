@@ -414,12 +414,12 @@ pub enum Cmd {
     OpenCommits {
         workspace: Id,
     },
-    /// Make (or find) the `tasks` node of `workspace` (N180, REQ-890). The result is `{node}`;
+    /// Make (or find) the `tasks` node of `workspace` (N180, REQ-907). The result is `{node}`;
     /// a workspace with no list is `not_found`.
     OpenTasks {
         workspace: Id,
     },
-    /// Change one task of the workspace's list (REQ-895): mark it done, blocked (with `text`, the
+    /// Change one task of the workspace's list (REQ-912): mark it done, blocked (with `text`, the
     /// reason), or reopened, or add `text` as a note under it. The result is nothing.
     TasksEdit {
         workspace: Id,
@@ -428,7 +428,7 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
     },
-    /// Turn on the loop of the workspace's agent over its task list (N180, REQ-899 to REQ-901):
+    /// Turn on the loop of the workspace's agent over its task list (N180, REQ-916 to REQ-918):
     /// up to `max` laps (1 to 99, 20 when absent). `pane` is the agent's own pane when the agent
     /// asks (nothing is sent to it); without it the daemon tells the workspace's agent the first
     /// task. The result is `{laps, max, task: {id, title, text}}`.
@@ -439,7 +439,7 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pane: Option<Id>,
     },
-    /// Turn the loop off (REQ-911).
+    /// Turn the loop off (REQ-928).
     TasksLoopOff {
         workspace: Id,
     },
@@ -526,6 +526,9 @@ pub enum Cmd {
     },
     /// Turn the phone link off; connected phones are dropped, paired devices are kept.
     MobileStop {},
+    /// Stop the daemon as it stops when it ends by itself: its engines are ended as REQ-638 and
+    /// REQ-885 say, what waits is saved, and the socket goes. The reply comes before it ends.
+    Stop {},
     /// Open the conversation of `pane` (the pane runs `claude`): a new one, or the one of
     /// `resume`. `args` are the flags `claude` was typed with that the engine serves; `env`
     /// is the environment it was typed in, which the engine runs with. The result is
@@ -727,6 +730,8 @@ pub enum JobKind {
     RemoveWorkspace,
     /// A branch is being pushed (`sync_workspace`).
     SyncWorkspace,
+    /// The daemon updated `claude`, or tried to and failed (REQ-849, REQ-850); it has no workspace.
+    UpdateClaude,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -742,9 +747,12 @@ pub enum JobState {
 pub struct Job {
     pub id: Id,
     pub kind: JobKind,
-    /// The workspace it is about; it is gone from the session when a removal ended well.
-    pub workspace: Id,
-    /// What to call it: the workspace's name for a removal, the branch for a push.
+    /// The workspace it is about; it is gone from the session when a removal ended well. Absent
+    /// for a job that is about none (`update_claude`, REQ-851).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Id>,
+    /// What to call it: the workspace's name for a removal, the branch for a push, `claude <before> → <after>`
+    /// for an update that went well and `claude` for one that failed.
     pub name: String,
     pub state: JobState,
     /// When it began, in milliseconds since the epoch of the daemon's machine.
@@ -1279,7 +1287,7 @@ pub struct WorkspaceSummary {
     /// The workspace is a conversation of its own (REQ-805).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatInfo>,
-    /// The workspace has a task list (REQ-891).
+    /// The workspace has a task list (REQ-908).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tasks: Option<tasks::TasksSummary>,
 }

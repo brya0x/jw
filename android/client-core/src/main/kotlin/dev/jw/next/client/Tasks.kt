@@ -11,15 +11,15 @@ import dev.jw.next.contract.TaskStatus
 import dev.jw.next.contract.TasksSummary
 
 /**
- * What the phone knows of the task lists (N180g, REQ-931 to REQ-933, REQ-936): the row's progress, the
+ * What the phone knows of the task lists (N180g, REQ-948 to REQ-950, REQ-953): the row's progress, the
  * rows of the «tareas» tab, the card of the loop, what a task's sheet offers, the notices of a loop that
  * stopped, and when the node is asked for again. All of it is pure: the screens only draw it.
  */
 
-/** The tab of a workspace that shows its tasks: it is not the id of a pane or of a view (REQ-932). */
+/** The tab of a workspace that shows its tasks: it is not the id of a pane or of a view (REQ-949). */
 const val TASKS_TAB: Id = "@tasks"
 
-/** How many laps the loop's sheet offers, and the one that is chosen first (REQ-932). */
+/** How many laps the loop's sheet offers, and the one that is chosen first (REQ-949). */
 val LOOP_LAPS = listOf(10, 20, 40)
 const val DEFAULT_LAPS = 20
 
@@ -46,7 +46,7 @@ data class TaskRow(
     val isFinal: Boolean,
 )
 
-/** The tasks by level, and in the order of the file within one: the order of work (REQ-932). */
+/** The tasks by level, and in the order of the file within one: the order of work (REQ-949). */
 fun taskRows(doc: Node.Tasks): List<TaskRow> =
     doc.tasks.withIndex().sortedWith(compareBy({ it.value.level }, { it.index })).map { it.value.row() }
 
@@ -76,7 +76,7 @@ private fun TaskItem.row(): TaskRow {
 
 enum class LoopButton { Start, Stop }
 
-/** The card at the top of the tab: how the loop is, and the button that turns it on or off (REQ-932). */
+/** The card at the top of the tab: how the loop is, and the button that turns it on or off (REQ-949). */
 data class LoopCard(
     val title: String,
     val line: String,
@@ -108,7 +108,7 @@ fun loopCard(doc: Node.Tasks): LoopCard {
     }
 }
 
-/** What the sheet of a task offers (REQ-932): done and block while it waits, done or reopen while it is blocked, reopen when done. */
+/** What the sheet of a task offers (REQ-949): done and block while it waits, done or reopen while it is blocked, reopen when done. */
 enum class TaskAction(val label: String, val op: TaskOp, val needsText: Boolean) {
     Done("hecha", TaskOp.Done, false),
     Block("bloquear…", TaskOp.Block, true),
@@ -121,11 +121,11 @@ fun taskActions(t: TaskRow): List<TaskAction> = when (t.status) {
     TaskStatus.Done -> listOf(TaskAction.Reopen)
 }
 
-/** A loop that stopped or ended, for the banner (REQ-933). */
+/** A loop that stopped or ended, for the banner (REQ-950). */
 data class TasksNotice(val workspace: Id, val text: String, val good: Boolean)
 
 /**
- * What the sessions say of the loops, from one session to the next (REQ-933): a stop that is new is a notice, once;
+ * What the sessions say of the loops, from one session to the next (REQ-950): a stop that is new is a notice, once;
  * the first session of a connection says nothing, since what stopped before the phone came is not news.
  */
 class TasksNotices {
@@ -138,7 +138,7 @@ class TasksNotices {
         if (before == null) return emptyList()
         return session.workspaces.mapNotNull { w ->
             val stop = w.tasks?.stop ?: return@mapNotNull null
-            // A loop the person turned off was seen by whoever pressed the button (REQ-911).
+            // A loop the person turned off was seen by whoever pressed the button (REQ-928).
             if (before[w.id] == stop || stop.kind == StopKind.Person) null
             else TasksNotice(w.id, "${w.shown()}: ${stop.text}", stop.kind == StopKind.Done)
         }
@@ -147,7 +147,7 @@ class TasksNotices {
 
 /**
  * When the tab asks for its node: when it is not there while the row says there is a list, and again, not at every
- * recomposition, when it goes (REQ-941).
+ * recomposition, when it goes (REQ-958).
  */
 class TasksWatch(private val againMs: Long = 3000) {
     private var askedAt: Long? = null

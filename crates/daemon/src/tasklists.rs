@@ -1,4 +1,4 @@
-//! The task lists the daemon serves (N180; REQ-890 to REQ-897): what it knows of each workspace's
+//! The task lists the daemon serves (N180; REQ-907 to REQ-914): what it knows of each workspace's
 //! list, the `tasks` node, and the two commands that open and change it. The file itself is
 //! `tasks.rs`; every read and write here runs with the hub's lock released.
 
@@ -19,10 +19,10 @@ use crate::server::Shared;
 use crate::tasks::{self, Edit, State, Status};
 
 /// How long a list nobody asks for is left alone: the poll goes by every 2 seconds, so this is the
-/// second poll after the last look, 6 seconds at most (REQ-893).
+/// second poll after the last look, 6 seconds at most (REQ-910).
 const SLOW: Duration = Duration::from_secs(5);
 
-/// The laps of a loop when nobody says (REQ-899).
+/// The laps of a loop when nobody says (REQ-916).
 const DEFAULT_MAX: u32 = 20;
 
 /// What the daemon last read of one workspace's list. `list` has the final task in it even while
@@ -120,7 +120,7 @@ pub fn problem(p: &tasks::Problem) -> TaskProblem {
     }
 }
 
-/// The loop of one workspace's agent over its list (REQ-898): in the daemon's memory and no further.
+/// The loop of one workspace's agent over its list (REQ-915): in the daemon's memory and no further.
 #[derive(Clone, Debug)]
 pub struct Loop {
     pub on: bool,
@@ -130,22 +130,22 @@ pub struct Loop {
     /// The task handed out last, and how many times in a row.
     pub task: Option<String>,
     pub same: u32,
-    /// The pane of the agent whose turns the loop answers (REQ-902).
+    /// The pane of the agent whose turns the loop answers (REQ-919).
     pub pane: Id,
     pub stop: Option<LoopStop>,
     /// The loop stopped for a reason that needs the person and the engine's turn has not ended yet:
-    /// the next `agent_done` of that pane is a `question` (REQ-943), once.
+    /// the next `agent_done` of that pane is a `question` (REQ-960), once.
     pub ended: bool,
 }
 
-/// What the end of an agent's turn comes to (REQ-905).
+/// What the end of an agent's turn comes to (REQ-922).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
     Hand(String),
     Stop(StopKind, String),
 }
 
-/// The order of REQ-905, from the file as it is now: everything done, a task blocked, nothing ready,
+/// The order of REQ-922, from the file as it is now: everything done, a task blocked, nothing ready,
 /// the laps used up, the same task handed out three times in a row and not done, else the next.
 pub fn decide(list: &tasks::List, laps: u32, max: u32, last: Option<&str>, same: u32) -> Decision {
     let n = list.tasks.len();
@@ -182,7 +182,7 @@ pub fn decide(list: &tasks::List, laps: u32, max: u32, last: Option<&str>, same:
     Decision::Hand(next.id.clone())
 }
 
-/// What the agent is told at a lap (REQ-906): the file, the task, what to do, and not to ask.
+/// What the agent is told at a lap (REQ-923): the file, the task, what to do, and not to ask.
 pub fn reason(t: &tasks::Task, path: &Path) -> String {
     let b = &identity::get().name;
     let id = &t.id;
@@ -206,7 +206,7 @@ pub fn reason(t: &tasks::Task, path: &Path) -> String {
     }
 }
 
-/// The node's document for a workspace (REQ-890).
+/// The node's document for a workspace (REQ-907).
 fn node(
     head: Head,
     workspace: &Id,
@@ -225,7 +225,7 @@ fn node(
             .iter()
             .map(|t| {
                 let mut it = item(t, c.auto.as_deref());
-                // the task the loop handed out and that is not done is the one that runs (REQ-883)
+                // the task the loop handed out and that is not done is the one that runs (REQ-900)
                 if lp.is_some_and(|l| l.on && l.task.as_deref() == Some(t.id.as_str()))
                     && t.status == Status::Todo
                 {
@@ -259,7 +259,7 @@ fn node(
 }
 
 impl Core {
-    /// What a workspace's row says of its list (REQ-891); the final task is counted (REQ-888).
+    /// What a workspace's row says of its list (REQ-908); the final task is counted (REQ-905).
     pub fn task_summary(&self, workspace: &str) -> Option<TasksSummary> {
         let c = self.task_lists.get(workspace)?;
         let lp = self.loops.get(workspace);
@@ -339,7 +339,7 @@ impl Core {
     }
 
     /// The `question` of a loop that stopped for a blocked task ends when nothing is blocked any
-    /// more (REQ-910).
+    /// more (REQ-927).
     fn end_blocked_question(&mut self, workspace: &Id, list: &tasks::List) {
         let Some(lp) = self.loops.get(workspace) else {
             return;
@@ -365,7 +365,7 @@ impl Core {
     }
 
     /// Whether the loop of this pane stopped for a reason that needs the person and its turn has not
-    /// ended yet; it is asked once (REQ-943).
+    /// ended yet; it is asked once (REQ-960).
     pub(crate) fn take_loop_ended(&mut self, pane: &str) -> bool {
         self.loops
             .values_mut()
@@ -373,7 +373,7 @@ impl Core {
             .is_some_and(|l| std::mem::take(&mut l.ended))
     }
 
-    /// A note in the conversation of this pane, when it has one: what the loop did (REQ-945).
+    /// A note in the conversation of this pane, when it has one: what the loop did (REQ-962).
     fn conv_note(&mut self, pane: &str, text: String) {
         if let Some(c) = self.convs.get_mut(pane) {
             c.st.loop_note(text);
@@ -381,7 +381,7 @@ impl Core {
         }
     }
 
-    /// A loop whose agent's pane is gone stops (REQ-911), without an attention.
+    /// A loop whose agent's pane is gone stops (REQ-928), without an attention.
     pub(crate) fn loops_check_panes(&mut self) {
         let panes: HashSet<Id> = self
             .model
@@ -401,7 +401,7 @@ impl Core {
         }
     }
 
-    /// The node of a workspace that has a list, made if it is not there (REQ-890).
+    /// The node of a workspace that has a list, made if it is not there (REQ-907).
     fn find_or_add_tasks(&mut self, workspace: &Id) -> Option<Id> {
         self.task_lists.get(workspace)?;
         let now = Instant::now();
@@ -425,7 +425,7 @@ impl Core {
         Some(id)
     }
 
-    /// Look at this workspace's list at the next poll (REQ-894): an agent moved.
+    /// Look at this workspace's list at the next poll (REQ-911): an agent moved.
     pub fn task_look_soon(&mut self, workspace: &str) {
         self.task_look.insert(workspace.to_owned());
     }
@@ -443,7 +443,7 @@ impl Core {
         }
     }
 
-    /// The lists to look at in this round of the poll (REQ-893, REQ-894): the ones asked for, a
+    /// The lists to look at in this round of the poll (REQ-910, REQ-911): the ones asked for, a
     /// workspace not looked at yet (one that was restored or just opened), the ones a client has
     /// open (every round) and the ones that have a list, once in a while. With no list anywhere and
     /// every workspace seen, it is empty: no periodic work.
@@ -506,7 +506,7 @@ fn dir_of(shared: &Shared, workspace: &Id) -> Result<PathBuf, ErrorBody> {
         .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))
 }
 
-/// `open_tasks`: the node of the workspace's list, made if it is not there (REQ-890).
+/// `open_tasks`: the node of the workspace's list, made if it is not there (REQ-907).
 pub fn open_tasks(shared: &Shared, workspace: &Id) -> Done {
     let dir = dir_of(shared, workspace)?;
     let found = look(&dir, None);
@@ -521,7 +521,7 @@ pub fn open_tasks(shared: &Shared, workspace: &Id) -> Done {
     }
 }
 
-/// `tasks_edit`: the same change `jw tasks` makes (REQ-895, REQ-896), and the clients are told at once.
+/// `tasks_edit`: the same change `jw tasks` makes (REQ-912, REQ-913), and the clients are told at once.
 pub fn edit(shared: &Shared, workspace: &Id, op: TaskOp, id: &str, text: Option<&str>) -> Done {
     let dir = dir_of(shared, workspace)?;
     let path = identity::tasks_path(&dir);
@@ -557,7 +557,7 @@ pub fn edit(shared: &Shared, workspace: &Id, op: TaskOp, id: &str, text: Option<
 }
 
 /// The agent pane of a workspace: the one `pane` names (it must be the workspace's), else the first
-/// that runs a conversation or an agent (REQ-902).
+/// that runs a conversation or an agent (REQ-919).
 fn agent_pane(core: &Core, workspace: &Id, pane: Option<&Id>) -> Result<Id, ErrorBody> {
     let ws = core
         .model
@@ -589,7 +589,7 @@ fn agent_pane(core: &Core, workspace: &Id, pane: Option<&Id>) -> Result<Id, Erro
 }
 
 /// Tell the agent of `pane` the first task, as `jw prompt` does: a conversation by its own message
-/// and a program in the pane by a paste and an Enter (REQ-901). The lock is not held.
+/// and a program in the pane by a paste and an Enter (REQ-918). The lock is not held.
 fn deliver(shared: &Shared, pane: &Id, text: &str) {
     let conv = shared.lock().convs.get(pane).map(|c| c.id.clone());
     if let Some(node) = conv {
@@ -607,7 +607,7 @@ fn deliver(shared: &Shared, pane: &Id, text: &str) {
     });
 }
 
-/// `tasks_loop_on` (REQ-899 to REQ-901): the loop starts at lap 1 with the first ready task.
+/// `tasks_loop_on` (REQ-916 to REQ-918): the loop starts at lap 1 with the first ready task.
 pub fn loop_on(shared: &Shared, workspace: &Id, max: Option<u32>, pane: Option<&Id>) -> Done {
     let max = max.unwrap_or(DEFAULT_MAX);
     if !(1..=99).contains(&max) {
@@ -675,7 +675,7 @@ pub fn loop_on(shared: &Shared, workspace: &Id, max: Option<u32>, pane: Option<&
     ))
 }
 
-/// `tasks_loop_off` (REQ-911).
+/// `tasks_loop_off` (REQ-928).
 pub fn loop_off(shared: &Shared, workspace: &Id) -> Done {
     let mut core = shared.lock();
     core.workspace_dir(workspace)
@@ -692,7 +692,7 @@ pub fn loop_off(shared: &Shared, workspace: &Id) -> Done {
     Ok(None)
 }
 
-/// The end of an agent's turn, for the pane of a loop that is on (REQ-902 to REQ-909): `None` when
+/// The end of an agent's turn, for the pane of a loop that is on (REQ-919 to REQ-926): `None` when
 /// there is no such loop, and the ordinary attention follows. The file is read with the lock released.
 pub fn on_stop(shared: &Shared, pane: &Id) -> Option<Done> {
     let (workspace, dir) = {
@@ -778,7 +778,7 @@ mod tests {
         }
     }
 
-    /// REQ-905: the order of the decision, one case for each step and the ones that beat each other.
+    /// REQ-922: the order of the decision, one case for each step and the ones that beat each other.
     #[test]
     fn the_end_of_a_turn_is_decided_in_the_order_of_the_spec() {
         let open = list("- [x] t1 one\n- [ ] t2 two (after: t1)\n- [ ] t3 three (after: t2)\n");

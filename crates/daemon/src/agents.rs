@@ -53,7 +53,7 @@ fn change(event: AgentEvent, notification_type: Option<&str>, tool: Option<&str>
 }
 
 /// Ends what an agent had raised on `pane` and raises `raise`, which is how a loop ends its turn
-/// (REQ-909, REQ-910).
+/// (REQ-926, REQ-927).
 pub(crate) fn settle(core: &mut Core, pane: &str, raise: Option<AttentionKind>) {
     let own = core
         .model
@@ -80,14 +80,14 @@ pub fn event(
     notification_type: Option<&str>,
     tool: Option<&str>,
 ) -> Done {
-    // A loop that is on for this pane decides what the end of its turn is (REQ-905).
+    // A loop that is on for this pane decides what the end of its turn is (REQ-922).
     if event == AgentEvent::Stop
         && let Some(done) = crate::tasklists::on_stop(shared, pane)
     {
         return done;
     }
     let mut core = shared.lock();
-    // A conversation's attention is the engine's own events' (REQ-913): its hooks only answer a loop.
+    // A conversation's attention is the engine's own events' (REQ-930): its hooks only answer a loop.
     if core.convs.contains_key(pane) {
         return Ok(None);
     }

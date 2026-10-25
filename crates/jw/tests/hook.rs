@@ -134,7 +134,7 @@ fn a_hook_tells_the_daemon_and_never_fails_the_agent() {
     );
 }
 
-// ---- the nudge (N180e, REQ-917): one line that names the skill of the task lists, when it is installed
+// ---- the nudge (N180e, REQ-934): one line that names the skill of the task lists, when it is installed
 
 /// `jw hook user_prompt_submit` in a pane, with `config` as the Claude configuration; what it printed.
 fn prompt_hook(env: &Env, pane: Option<&str>, config: &std::path::Path) -> std::process::Output {

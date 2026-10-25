@@ -121,8 +121,8 @@ fn hook_group(exe: &str, event: &str, matcher: Option<&str>) -> serde_json::Valu
     json!([group])
 }
 
-/// The hooks an engine is started with (REQ-913): `Stop`, which a task loop answers, and
-/// `UserPromptSubmit`, whose answer names the skill of the task lists (REQ-917). A conversation takes its
+/// The hooks an engine is started with (REQ-930): `Stop`, which a task loop answers, and
+/// `UserPromptSubmit`, whose answer names the skill of the task lists (REQ-934). A conversation takes its
 /// attention from the engine's own events, so the rest of `hook_settings` would raise each one twice.
 pub fn loop_hook_settings(exe: &Path) -> String {
     let exe = quote("/bin/sh", &exe.to_string_lossy());
@@ -207,7 +207,7 @@ pub fn transcript_exists(env: &[(String, String)], id: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// REQ-913: the engine is given the hook of a task loop and no other.
+    /// REQ-930: the engine is given the hook of a task loop and no other.
     #[test]
     fn the_engines_hooks_are_the_stop_and_the_prompt_hooks_alone() {
         let v: serde_json::Value =

@@ -1,5 +1,5 @@
 //! N180c: `jw tasks ls | next | done | block | reopen | note` read and write a list's file and work with no
-//! daemon (REQ-919, REQ-920, REQ-922 to REQ-924, REQ-888). The private socket of `Env` answers nothing.
+//! daemon (REQ-936, REQ-937, REQ-939 to REQ-941, REQ-905). The private socket of `Env` answers nothing.
 
 mod common;
 
@@ -66,7 +66,7 @@ fn ls_lists_the_tasks_by_level_and_adds_the_final_one_once() {
         "{text}"
     );
     assert!(text.trim_end().ends_with("1/4 done"), "{text}");
-    // REQ-888: the final task was written, once
+    // REQ-905: the final task was written, once
     let written = file(&dir);
     assert!(
         written.starts_with(LIST) && written.contains("- [ ] fin tests:"),

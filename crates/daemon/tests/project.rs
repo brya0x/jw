@@ -1356,10 +1356,21 @@ fn type_probe(c: &mut Client, pane: &str) {
 fn pane_says(c: &mut Client, pane: &str, said: &str) {
     open(c, pane);
     type_probe(c, pane);
-    wait_for(said, || {
+    let end = Instant::now() + WAIT;
+    while Instant::now() < end {
         let _ = c.poll(Duration::from_millis(20));
-        screen(c, pane).lines().any(|l| l == said)
-    });
+        // The shell may draw its prompt after the line was typed, and then the output follows the
+        // prompt on one row: the line ends with what was said, whatever the prompt is.
+        if screen(c, pane).lines().any(|l| l.ends_with(said)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    // The screen is what says why the line never came.
+    panic!(
+        "timed out waiting for {said}; the pane shows:\n{}",
+        screen(c, pane)
+    );
 }
 
 /// N177 (REQ-870 to REQ-872): the panel of the layout, a pane opened by `new_pane` (which is what

@@ -98,6 +98,8 @@ import dev.jw.next.client.savedPanel
 import dev.jw.next.client.skillsPanel
 import dev.jw.next.client.agentRows
 import dev.jw.next.client.agentsChip
+import dev.jw.next.client.engineChip
+import dev.jw.next.client.engineSaid
 import dev.jw.next.client.slashIsWholeLine
 import dev.jw.next.client.slashMenu
 import dev.jw.next.client.takeCommand
@@ -139,6 +141,7 @@ private sealed interface Open {
     data object Settings : Open
     data object Plus : Open
     data object Tasks : Open
+    data object Engine : Open
     data object Files : Open
 
     /** One of jwn's lists; null view while it is read. */
@@ -484,6 +487,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                     Mono("· ${node.mode.label()}", node.mode.color(), 11)
                 }
                 agentsChip(node, agentsOpen)?.let { AgentsChip(it, agentsOpen) { agentsOpen = !agentsOpen } }
+                engineChip(node)?.let { EngineChip(it) { open = Open.Engine } }
                 branch?.let { Chip("⎇ $it", Palette.magenta) }
                 if (node.queue.isNotEmpty()) Chip("${node.queue.size} en cola", Palette.yellow)
                 if (text.text.startsWith("!")) Chip("! shell", Palette.yellow)
@@ -543,6 +547,10 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 "commands" -> text = TextFieldValue("/", TextRange(1))
                 "shell" -> text = TextFieldValue("!", TextRange(1))
             }
+        }
+        Open.Engine -> ConvSheet(dismiss = { open = null }) {
+            Mono(engineSaid(node), Palette.fg, 13, lines = 6)
+            Mono("cerrar", Palette.fg, 14, modifier = Modifier.fillMaxWidth().clickable { open = null }.padding(vertical = 12.dp))
         }
         Open.Tasks -> PanelSheet(tasksPanel(node), now, dismiss = { open = null }) { act ->
             if (act is RowAct.Stop) { open = null; stopTask(act.task) }

@@ -1,4 +1,4 @@
-//! The task list of a workspace (N180; REQ-875 to REQ-889, REQ-937, REQ-939): a Markdown file read into
+//! The task list of a workspace (N180; REQ-892 to REQ-906, REQ-954, REQ-956): a Markdown file read into
 //! tasks and edited one line at a time. Everything but the last two functions is text in, text out, so
 //! the daemon and the binary's file commands share it and a list can be edited with no daemon.
 
@@ -9,10 +9,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-/// The id the final task gets when it is written (REQ-888).
+/// The id the final task gets when it is written (REQ-905).
 pub const FINAL_ID: &str = "fin";
 
-/// What the final task says (REQ-889): the tests and the CI, the evidence under the line, and the advisor.
+/// What the final task says (REQ-906): the tests and the CI, the evidence under the line, and the advisor.
 pub const FINAL_TEXT: &str = "tests: run the project's tests and CI, note the result and the evidence under this line, and ask the advisor to review before marking it done";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -22,7 +22,7 @@ pub enum Status {
     Blocked,
 }
 
-/// What a task is at the moment (REQ-883); `running` is the loop's and is not in the file.
+/// What a task is at the moment (REQ-900); `running` is the loop's and is not in the file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
     Waiting,
@@ -35,7 +35,7 @@ pub enum State {
 pub struct Task {
     pub id: String,
     pub title: String,
-    /// The ids it waits for; `*` is every other task (REQ-882).
+    /// The ids it waits for; `*` is every other task (REQ-899).
     pub after: Vec<String>,
     pub status: Status,
     pub why: Option<String>,
@@ -60,7 +60,7 @@ pub struct List {
 }
 
 impl List {
-    /// A file with no task line is not a list (REQ-887).
+    /// A file with no task line is not a list (REQ-904).
     pub fn is_list(&self) -> bool {
         !self.tasks.is_empty()
     }
@@ -69,7 +69,7 @@ impl List {
         self.tasks.iter().any(|t| t.is_final)
     }
 
-    /// The first ready task in the order of the file (REQ-886).
+    /// The first ready task in the order of the file (REQ-903).
     pub fn next(&self) -> Option<&Task> {
         self.tasks.iter().find(|t| t.state == State::Ready)
     }
@@ -94,7 +94,7 @@ pub enum Edit<'a> {
 pub enum Error {
     /// No task has that id.
     NotFound,
-    /// More than one task has it (REQ-939).
+    /// More than one task has it (REQ-956).
     Duplicate,
     /// A reason or a note with nothing in it.
     Empty,
@@ -132,7 +132,7 @@ fn lines(text: &str) -> Vec<Line<'_>> {
         .collect()
 }
 
-/// A list item indented two columns or more (REQ-879).
+/// A list item indented two columns or more (REQ-896).
 fn note_of(s: &str) -> Option<&str> {
     let indent = s.bytes().take_while(|b| *b == b' ' || *b == b'\t').count();
     let rest = &s[indent..];
@@ -140,7 +140,7 @@ fn note_of(s: &str) -> Option<&str> {
         .then(|| rest[2..].trim())
 }
 
-/// A parenthesis group at the end of a task line whose segments name `after:` or `blocked:` (REQ-877).
+/// A parenthesis group at the end of a task line whose segments name `after:` or `blocked:` (REQ-894).
 struct Group {
     open: usize,
     close: usize,
@@ -313,7 +313,7 @@ pub fn parse(text: &str) -> List {
     List { tasks, problems }
 }
 
-/// Dependencies, levels, cycles and states (REQ-878, REQ-882 to REQ-885, REQ-939).
+/// Dependencies, levels, cycles and states (REQ-895, REQ-899 to REQ-902, REQ-956).
 fn analyse(tasks: &mut [Task], problems: &mut Vec<Problem>) {
     let n = tasks.len();
     let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -516,7 +516,7 @@ fn segments(s: &str, g: &Group) -> Vec<(usize, usize)> {
     out
 }
 
-/// The line with the `blocked:` key set to `why`, or taken away when `why` is `None` (REQ-881).
+/// The line with the `blocked:` key set to `why`, or taken away when `why` is `None` (REQ-898).
 fn set_blocked(s: &str, tl: &TaskLine, why: Option<&str>) -> String {
     let found = tl.groups.iter().find_map(|g| {
         segments(s, g)
@@ -554,8 +554,8 @@ fn set_box(s: &str, tl: &TaskLine, c: char) -> String {
     format!("{}{c}{}", &s[..tl.box_at], &s[tl.box_at + 1..])
 }
 
-/// The new text of the file with one change, found again by id in `text` itself (REQ-881): every other
-/// line is as it was, with its line ending (REQ-880).
+/// The new text of the file with one change, found again by id in `text` itself (REQ-898): every other
+/// line is as it was, with its line ending (REQ-897).
 pub fn edit(text: &str, id: &str, change: Edit) -> Result<String, Error> {
     let ls = lines(text);
     let list = parse(text);
@@ -604,7 +604,7 @@ pub fn edit(text: &str, id: &str, change: Edit) -> Result<String, Error> {
     Ok(out.concat())
 }
 
-/// The file with the final task appended when it has tasks and none is final (REQ-888); `None` when nothing
+/// The file with the final task appended when it has tasks and none is final (REQ-905); `None` when nothing
 /// is to be added.
 pub fn complete(text: &str) -> Option<String> {
     let list = parse(text);
@@ -628,7 +628,7 @@ pub fn complete(text: &str) -> Option<String> {
 
 // ---- the file
 
-/// Replaces the file atomically, with the mode it had (REQ-881): a temporary file beside it, named for this
+/// Replaces the file atomically, with the mode it had (REQ-898): a temporary file beside it, named for this
 /// write alone so that the daemon and the binary writing at once never share one, then a rename.
 pub fn write_keeping_mode(path: &Path, text: &str) -> io::Result<()> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
@@ -666,7 +666,7 @@ pub fn signature(path: &Path) -> Option<Sig> {
     })
 }
 
-/// Reads the file again, makes one change and writes it back (REQ-881).
+/// Reads the file again, makes one change and writes it back (REQ-898).
 pub fn apply(path: &Path, id: &str, change: Edit) -> Result<(), Error> {
     let text = fs::read_to_string(path)?;
     let new = edit(&text, id, change)?;

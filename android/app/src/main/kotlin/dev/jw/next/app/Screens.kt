@@ -449,7 +449,7 @@ private fun WorkspaceRow(row: HomeRow, number: Int, grouped: Boolean, current: B
                 }
             }
             if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
-            // A list says how far it is; `○` stands where no mark and no loop is (REQ-931).
+            // A list says how far it is; `○` stands where no mark and no loop is (REQ-948).
             row.tasks?.let { Mono(it, Palette.dim, 11) }
             row.mark?.let { m ->
                 Mono(m.glyph, m.tone.color(), 14, bold = true)
@@ -644,7 +644,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val convId = tabPane?.conversation
         val tabConv = remember(version, convId) { convId?.let { source.node(it) as? Node.Conversation } }
         val listed = remember(version, screen.id) { source.session().workspaces.firstOrNull { it.id == screen.id }?.tasks != null }
-        // The list gone from the summary takes its tab with it: the first pane is shown again (REQ-932).
+        // The list gone from the summary takes its tab with it: the first pane is shown again (REQ-949).
         LaunchedEffect(listed) { if (!listed && screen.pane == TASKS_TAB) set(nav.settle(state)) }
         PaneTabs(
             ws.panes, ws.views, screen.pane, state, listed, adding = asking || waitingPane != null,
@@ -1041,7 +1041,7 @@ private fun PaneTabs(
                     }
                 }
             }
-            // The tasks of the workspace, while it has a list (REQ-932).
+            // The tasks of the workspace, while it has a list (REQ-949).
             if (tasks) Column(Modifier.clickable { select(TASKS_TAB) }) {
                 Box(Modifier.defaultMinSize(minHeight = 44.dp).padding(horizontal = Gutter), contentAlignment = Alignment.Center) {
                     Mono("☰ tareas", if (current == TASKS_TAB) Palette.fg else Palette.dim, 13, bold = current == TASKS_TAB)

@@ -44,7 +44,7 @@ enum Fail {
     Usage(String),
     /// Anything else: exit 1.
     Error(String),
-    /// Nothing to do: the message goes to stderr and the exit is 3 (REQ-923).
+    /// Nothing to do: the message goes to stderr and the exit is 3 (REQ-940).
     Idle(String),
     /// The agent waits for an answer: what it asks goes to stdout and the exit is 3 (REQ-454).
     Waiting(String),
@@ -1274,7 +1274,7 @@ fn skill_text() -> String {
         .replace("{pane_env}", &identity::env_var("PANE_ID"))
 }
 
-/// The skill of the task lists (N180e, REQ-916): the binary's name, the pane variable and the list's
+/// The skill of the task lists (N180e, REQ-933): the binary's name, the pane variable and the list's
 /// file as the product's identity says them.
 fn tasks_skill_text() -> String {
     TASKS_SKILL
@@ -1304,8 +1304,8 @@ fn skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBu
     )
 }
 
-/// Where the skill of the task lists goes: `skills/<name>-tasks/SKILL.md` (REQ-915). The name is never
-/// `tasks`, which is a command of claude's own (REQ-938).
+/// Where the skill of the task lists goes: `skills/<name>-tasks/SKILL.md` (REQ-932). The name is never
+/// `tasks`, which is a command of claude's own (REQ-955).
 fn tasks_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
     Some(
         claude_base(config_dir, home)?
@@ -1315,7 +1315,7 @@ fn tasks_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<
     )
 }
 
-/// Whether the skill of the task lists is installed, which is what lets a hook name it (REQ-917).
+/// Whether the skill of the task lists is installed, which is what lets a hook name it (REQ-934).
 pub(crate) fn tasks_skill_installed() -> bool {
     tasks_skill_path(
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
@@ -1324,7 +1324,7 @@ pub(crate) fn tasks_skill_installed() -> bool {
     .is_some_and(|p| p.is_file())
 }
 
-/// The one line the `UserPromptSubmit` hook adds to what the agent reads (REQ-917).
+/// The one line the `UserPromptSubmit` hook adds to what the agent reads (REQ-934).
 pub(crate) fn tasks_nudge() -> String {
     let b = bin();
     format!(
@@ -1346,7 +1346,7 @@ fn write_skill(path: &Path, text: &str) -> Out {
     Ok(())
 }
 
-/// `skill install` writes the skill of the session and the one of the task lists (REQ-915).
+/// `skill install` writes the skill of the session and the one of the task lists (REQ-932).
 fn skill_install() -> Out {
     let (config, home) = (
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
@@ -1679,7 +1679,7 @@ mod tests {
         assert_eq!(skill_path(None, None), None);
     }
 
-    /// REQ-916, REQ-918: what the skill of the task lists says, by the words the loop and the commands use.
+    /// REQ-933, REQ-935: what the skill of the task lists says, by the words the loop and the commands use.
     #[test]
     fn the_tasks_skill_says_the_steps_with_the_words_of_the_commands() {
         let text = tasks_skill_text();
@@ -1721,7 +1721,7 @@ mod tests {
         ] {
             assert!(text.contains(word), "the skill does not say {word:?}");
         }
-        // never `tasks` alone, which is a command of claude's own (REQ-938)
+        // never `tasks` alone, which is a command of claude's own (REQ-955)
         let path = tasks_skill_path(Some("/cfg".into()), None).unwrap();
         assert_eq!(
             path,

@@ -443,7 +443,7 @@ class Navigator(private val source: NodeSource) {
         val at = s.screen as? Screen.Workspace ?: return s
         val ws = source.node(at.id) as? Node.Workspace ?: return s
         if (at.pane != null && (ws.panes.any { it.id == at.pane } || ws.views.any { it.id == at.pane })) return s
-        // The tab of the tasks stays while the row says there is a list; it gives way when the list is gone (REQ-932).
+        // The tab of the tasks stays while the row says there is a list; it gives way when the list is gone (REQ-949).
         if (at.pane == TASKS_TAB && source.session().workspaces.firstOrNull { it.id == at.id }?.tasks != null) return s
         val first = ws.panes.firstOrNull()?.id
         val seen = if (first != null) markNode(s.seen, first) else s.seen

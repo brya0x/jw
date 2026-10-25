@@ -64,7 +64,7 @@ pub fn chats_dir(state: &Path) -> PathBuf {
     state.join("chats")
 }
 
-/// A workspace's task list: `<folder>/.<name>/tasks.md` (N180, REQ-875). The directory is the product's
+/// A workspace's task list: `<folder>/.<name>/tasks.md` (N180, REQ-892). The directory is the product's
 /// name with a dot, so nothing else spells it.
 pub fn tasks_path(folder: &Path) -> PathBuf {
     folder.join(format!(".{}", get().name)).join("tasks.md")
@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(path, PathBuf::from(format!("/w/.{}/tasks.md", get().name)));
     }
 
-    /// REQ-875: no source spells the directory or the file; they come from `tasks_path`.
+    /// REQ-892: no source spells the directory or the file; they come from `tasks_path`.
     #[test]
     fn no_source_spells_the_task_list_directory_or_file() {
         fn walk(dir: &Path, found: &mut Vec<String>) {

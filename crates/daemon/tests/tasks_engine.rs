@@ -1,4 +1,4 @@
-//! N180d2: the task loop in a conversation (REQ-913, REQ-943 to REQ-945, REQ-901), against the fake
+//! N180d2: the task loop in a conversation (REQ-930, REQ-960 to REQ-962, REQ-918), against the fake
 //! engine of the conversation tests: its hook file and environment, what a conversation's hooks raise,
 //! the notes of a lap, and the turn that ends after the loop stopped. Each test has its own state.
 

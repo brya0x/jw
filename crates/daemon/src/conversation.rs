@@ -39,6 +39,7 @@ pub(crate) fn advisor_row(id: &str) -> Item {
         diff: Vec::new(),
         url: None,
         by: None,
+        lost: false,
     }
 }
 
@@ -438,6 +439,9 @@ pub enum Effect {
     ClearAsk,
     /// The conversation can be resumed from now on: the pane brings it back after a restart.
     Resumable(String),
+    /// The answer to an ask that was waiting before a restart: no engine has the question any more, so
+    /// the daemon starts one and this is the first message it is sent (REQ-879 to REQ-881).
+    Resume(String),
 }
 
 /// What a local command of the engine (`/model`, `/effort`, `/rename`) changes once it answers.
@@ -523,6 +527,8 @@ struct Pending {
     input: Value,
     tool_use_id: Option<String>,
     session_rule: Option<String>,
+    /// The request came from a subagent (`agent_id`): not kept for a restart (REQ-877).
+    nested: bool,
 }
 
 /// What a conversation is. The first group is saved; the rest is about now.
@@ -561,6 +567,10 @@ pub struct State {
     pub status: ConvStatus,
     pub since: Option<u64>,
     pending: Option<Pending>,
+    /// The permission the saved file kept, until the transcript says whether it still waits (REQ-876).
+    saved_pending: Option<SavedPending>,
+    /// What a restored permission was answered yes to: the call Claude makes again for it is allowed once (REQ-881).
+    allow_once: Option<(String, Value)>,
     queue: VecDeque<Queued>,
     pub tasks: Vec<Task>,
     pub todos: Vec<Todo>,
@@ -604,6 +614,9 @@ pub struct State {
     advisor: Option<String>,
     /// Another `claude` that has this session open, while the conversation has no engine (REQ-575).
     held: Option<Held>,
+    /// What the engine that runs says its version is (`claude_code_version` of `system/init`),
+    /// not saved (REQ-852).
+    engine_version: Option<String>,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -651,6 +664,20 @@ pub struct Saved {
     /// The `/` list the engine gave, so a conversation that comes back has it before its engine does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<ConvCommand>,
+    /// The permission that waited when it was saved: the transcript cannot tell it from a tool that runs (REQ-876).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<SavedPending>,
+}
+
+/// A permission that waits, as the saved file keeps it (REQ-876, REQ-877).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedPending {
+    pub tool_use_id: String,
+    pub tool: String,
+    pub input: Value,
+    /// «Allow for this session» was offered.
+    #[serde(default)]
+    pub suggested: bool,
 }
 
 pub const SAVED_VERSION: u32 = 1;
@@ -778,6 +805,8 @@ impl State {
             status: ConvStatus::Idle,
             since: None,
             pending: None,
+            saved_pending: None,
+            allow_once: None,
             queue: VecDeque::new(),
             tasks: Vec::new(),
             todos: Vec::new(),
@@ -804,6 +833,7 @@ impl State {
             cwd: None,
             advisor: None,
             held: None,
+            engine_version: None,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -825,6 +855,7 @@ impl State {
         st.mode = saved.mode;
         st.before_plan = saved.before_plan.filter(|_| saved.mode == Mode::Plan);
         st.has_transcript = saved.has_transcript;
+        st.saved_pending = saved.pending;
         st.first = saved.first;
         st.legacy = !saved.items.is_empty();
         st.stamps = vec![(saved.saved_at, true); saved.items.len()];
@@ -891,6 +922,15 @@ impl State {
         self.first = u32::try_from(skip + from).unwrap_or(u32::MAX);
         self.live_texts.clear();
         self.followed_queue = t.waiting();
+        // The items are made again: the tool that asks stays the one that asks.
+        let asking = self
+            .pending
+            .as_ref()
+            .filter(|p| p.ask.restored)
+            .and_then(|p| p.tool_use_id.clone());
+        if let Some(id) = asking {
+            self.set_tool(&id, |t| t.0 = ToolState::Ask);
+        }
         if let Some(mode) = t.mode {
             self.change_mode(mode);
         }
@@ -926,11 +966,17 @@ impl State {
     /// were interrupted.
     fn settle_running(&mut self) {
         for item in &mut self.items {
-            if let Item::Tool { state, summary, .. } = item
+            if let Item::Tool {
+                state,
+                summary,
+                lost,
+                ..
+            } = item
                 && *state == ToolState::Run
             {
                 *state = ToolState::Failed;
-                *summary = Some("sin resultado".into());
+                *summary = Some(crate::transcript::LOST.into());
+                *lost = true;
             }
         }
     }
@@ -1097,7 +1143,84 @@ impl State {
             model_arg: None,
             effort_arg: None,
             commands: self.commands.clone(),
+            pending: self.pending.as_ref().and_then(|p| {
+                if !matches!(p.kind, Kind::Permission) || p.nested {
+                    return None;
+                }
+                Some(SavedPending {
+                    tool_use_id: p.tool_use_id.clone()?,
+                    tool: p.ask.tool.clone(),
+                    input: p.input.clone(),
+                    suggested: p.session_rule.is_some(),
+                })
+            }),
         }
+    }
+
+    #[cfg(test)]
+    fn restore_pending_for_test(&mut self, tool: &str, input: Value, id: &str) {
+        let mut text = json!({"type": "user", "message": {"role": "user", "content": "hola"}})
+            .to_string()
+            + "\n";
+        text += &json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":id,"name":tool,"input":input}]}}).to_string();
+        let parser = crate::transcript::parse(&text);
+        self.saved_pending = Some(SavedPending {
+            tool_use_id: id.into(),
+            tool: tool.into(),
+            input,
+            suggested: false,
+        });
+        self.restore_ask(Some(&parser));
+    }
+
+    /// Whether the ask `ask` waits from before a restart: no engine has it, so its answer starts one (REQ-879).
+    pub fn is_restored_ask(&self, ask: &str) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| p.ask.id == ask && p.ask.restored)
+    }
+
+    /// Whether a permission waits that the saved file keeps: answering it takes it out of the file (REQ-877).
+    pub fn records_permission(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, Kind::Permission) && !p.nested)
+    }
+
+    /// Ask again what the conversation was waiting for when the daemon stopped (REQ-875, REQ-876): a
+    /// question or a plan the transcript ends with, or the permission the saved file kept if the
+    /// transcript still has its call and no result. A session another `claude` holds is not asked in.
+    pub fn restore_ask(&mut self, parser: Option<&crate::transcript::Parser>) -> Vec<Effect> {
+        let record = self.saved_pending.take();
+        let Some(parser) = parser.filter(|_| self.held.is_none()) else {
+            return Vec::new();
+        };
+        let (tool, input, id, suggested) = if let Some(a) = parser
+            .open_ask
+            .as_ref()
+            .filter(|a| a.tool != "AskUserQuestion" || !parse_questions(&a.input).is_empty())
+        {
+            (a.tool.clone(), a.input.clone(), a.id.clone(), false)
+        } else if let Some(r) = record.filter(|r| parser.has_no_result(&r.tool_use_id)) {
+            (r.tool, r.input, r.tool_use_id, r.suggested)
+        } else {
+            return Vec::new();
+        };
+        // The same road a live request takes, so the ask, the tool's state and the attention are the same.
+        let mut request = json!({
+            "subtype": "can_use_tool",
+            "tool_name": tool,
+            "input": input,
+            "tool_use_id": id,
+        });
+        if suggested {
+            request["permission_suggestions"] = json!([{}]);
+        }
+        let fx = self.control_request(&json!({"request_id": id, "request": request}));
+        if let Some(p) = &mut self.pending {
+            p.ask.restored = true;
+        }
+        fx
     }
 
     /// The node's document.
@@ -1158,6 +1281,8 @@ impl State {
             following: self.followed.map(|f| f.since),
             held: self.held.clone(),
             cwd: self.cwd.clone(),
+            engine_version: self.engine_version.clone(),
+            engine_newer: None,
             suggestion: self.shown_suggestion(),
             older: self.older_cursor(),
         }
@@ -1200,7 +1325,7 @@ impl State {
             .collect();
     }
 
-    /// What a task loop did, for the person to read in the conversation (REQ-945).
+    /// What a task loop did, for the person to read in the conversation (REQ-962).
     pub fn loop_note(&mut self, text: String) {
         self.note(text, None);
     }
@@ -1304,6 +1429,9 @@ impl State {
             Kind::Plan => return Ok(self.answer_plan(&p, key, text, by)),
             Kind::Permission => {}
         }
+        if p.ask.restored {
+            return Ok(self.answer_restored_permission(p, key, text, by));
+        }
         let mut out = vec![Effect::ClearAsk];
         let tool_id = p.tool_use_id.clone();
         let by = by.map(str::to_owned);
@@ -1345,6 +1473,50 @@ impl State {
         }
         self.status = ConvStatus::Tool;
         Ok(out)
+    }
+
+    /// The answer to a permission that waited before a restart: what Claude is told, as a message (REQ-881).
+    fn answer_restored_permission(
+        &mut self,
+        p: Pending,
+        key: &str,
+        text: Option<&str>,
+        by: Option<&str>,
+    ) -> Vec<Effect> {
+        let what = format!("{} {}", p.ask.tool, tool_arg(&p.ask.tool, &p.input));
+        let refused = key == "no";
+        let line = if refused {
+            match text.map(str::trim).filter(|t| !t.is_empty()) {
+                Some(t) => format!("No, no ejecutes {what}: {t}"),
+                None => format!("No, no ejecutes {what}"),
+            }
+        } else {
+            if key == "session"
+                && let Some(rule) = p.session_rule
+            {
+                self.allowed.push(rule);
+            }
+            self.allow_once = Some((p.ask.tool.clone(), p.input.clone()));
+            format!("Sí, adelante con {what}")
+        };
+        if let Some(id) = &p.tool_use_id {
+            let by = by.map(str::to_owned);
+            if refused {
+                self.refused.push(id.clone());
+            }
+            if refused {
+                self.set_tool(id, |t| {
+                    t.0 = ToolState::Denied;
+                    t.1 = Some("Rechazado".into());
+                    t.2 = by;
+                });
+            } else {
+                // It did not run; Claude proposes it again as a new call, so this one is left without a result.
+                self.mark_lost(id, "aprobada · Claude la vuelve a proponer");
+            }
+        }
+        self.resuming();
+        vec![Effect::ClearAsk, Effect::Resume(line)]
     }
 
     /// The answer to one of the questions Claude asks: the number of the option (several, with commas, for a
@@ -1391,7 +1563,9 @@ impl State {
         let shown = joined(own.map(|t| format!("«{t}»")));
         qs.answered.push((q.question.clone(), told, shown));
         if qs.answered.len() < qs.all.len() {
+            let restored = p.ask.restored;
             p.ask = question_ask(&p.request, qs.answered.len(), &qs.all[qs.answered.len()]);
+            p.ask.restored = restored;
             p.kind = Kind::Question(qs);
             self.pending = Some(p);
             return Ok(Vec::new());
@@ -1411,11 +1585,27 @@ impl State {
             .join(" · ");
         if let Some(id) = &p.tool_use_id {
             let by = by.map(str::to_owned);
+            // A question of before a restart gets no result on the stream (Claude settles it in its own file): it ends here.
+            let state = if p.ask.restored {
+                ToolState::Ok
+            } else {
+                ToolState::Run
+            };
             self.set_tool(id, |t| {
-                t.0 = ToolState::Run;
+                t.0 = state;
                 t.1 = Some(clip(&format!("Respondida: {said}"), LINE_CHARS));
                 t.2 = by;
             });
+        }
+        if p.ask.restored {
+            let line = qs
+                .answered
+                .iter()
+                .map(|(q, told, _)| format!("Elegí «{told}» para «{q}»"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.resuming();
+            return Ok(vec![Effect::ClearAsk, Effect::Resume(line)]);
         }
         self.status = ConvStatus::Tool;
         Ok(vec![
@@ -1435,6 +1625,54 @@ impl State {
     ) -> Vec<Effect> {
         let mut out = vec![Effect::ClearAsk];
         let by = by.map(str::to_owned);
+        if p.ask.restored {
+            // No engine has the plan: the mode the answer means is the one the engine starts in.
+            let said = text.map(str::trim).filter(|t| !t.is_empty());
+            let (mode, line) = match key {
+                "no" => (
+                    Mode::Plan,
+                    said.map_or("No apruebo el plan; seguí planeando.".to_owned(), |t| {
+                        format!("No apruebo el plan; seguí planeando: {t}")
+                    }),
+                ),
+                "accept" => (
+                    Mode::AcceptEdits,
+                    "Aprobado: seguí con el plan y editá sin preguntar.".to_owned(),
+                ),
+                "auto" => (Mode::Auto, "Aprobado: seguí con el plan.".to_owned()),
+                _ => (Mode::Manual, "Aprobado: seguí con el plan.".to_owned()),
+            };
+            self.change_mode(mode);
+            if let Some(id) = &p.tool_use_id {
+                let refused = key == "no";
+                if refused {
+                    self.refused.push(id.clone());
+                }
+                self.set_tool(id, |t| {
+                    t.0 = if refused {
+                        ToolState::Denied
+                    } else {
+                        ToolState::Ok
+                    };
+                    t.1 = Some(
+                        if refused {
+                            "Plan rechazado"
+                        } else {
+                            "Plan aprobado"
+                        }
+                        .into(),
+                    );
+                    t.2 = by;
+                });
+            }
+            // The engine may be running already (a message sent meanwhile started it): it is told the mode too.
+            if key != "no" {
+                out.push(self.mode_request(mode));
+            }
+            self.resuming();
+            out.push(Effect::Resume(line));
+            return out;
+        }
         if key == "no" {
             let message = match text.map(str::trim).filter(|t| !t.is_empty()) {
                 Some(t) => format!("El usuario no aprobó el plan y dice: {t}"),
@@ -1493,6 +1731,18 @@ impl State {
 
     /// Stop what runs: a waiting question is refused first, so the engine is not left asking.
     pub fn interrupt(&mut self) -> Vec<Effect> {
+        // No engine has an ask of before a restart: dropping it is all there is to interrupt.
+        if self.pending.as_ref().is_some_and(|p| p.ask.restored) {
+            let p = self.pending.take().expect("checked above");
+            if let Some(id) = p.tool_use_id {
+                self.set_tool(&id, |t| {
+                    t.0 = ToolState::Denied;
+                    t.1 = Some("Interrumpido".into());
+                });
+            }
+            self.status = ConvStatus::Dead;
+            return vec![Effect::ClearAsk];
+        }
         if !self.busy() || self.interrupting {
             return Vec::new();
         }
@@ -1711,6 +1961,12 @@ impl State {
                 }
                 if msg["skills"].is_array() {
                     self.learn_skills(&msg["skills"]);
+                }
+                if let Some(v) = msg["claude_code_version"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                {
+                    self.engine_version = Some(v.to_owned());
                 }
                 self.begin_auto(now);
             }
@@ -1936,6 +2192,7 @@ impl State {
                         output: Vec::new(),
                         url: None,
                         by: None,
+                        lost: false,
                     });
                 }
                 // The advisor is consulted by the API itself: the call and its answer are blocks
@@ -2319,6 +2576,7 @@ impl State {
         let tool = req["tool_name"].as_str().unwrap_or("").to_owned();
         let input = req["input"].clone();
         let tool_use_id = req["tool_use_id"].as_str().map(str::to_owned);
+        let nested = !req["agent_id"].is_null();
         // What Claude asks the person (a choice, a plan) is not a permission: it has its own box (REQ-435, REQ-436).
         let questions = parse_questions(&input);
         if tool == "AskUserQuestion" && !questions.is_empty() {
@@ -2334,6 +2592,7 @@ impl State {
                     input,
                     tool_use_id,
                     session_rule: None,
+                    nested,
                 },
                 AttentionKind::Question,
             );
@@ -2348,9 +2607,22 @@ impl State {
                     input,
                     tool_use_id,
                     session_rule: None,
+                    nested,
                 },
                 AttentionKind::Plan,
             );
+        }
+        // The person said yes to this before a restart: Claude proposes the same call again (REQ-882).
+        if self
+            .allow_once
+            .as_ref()
+            .is_some_and(|(t, i)| *t == tool && *i == input)
+        {
+            self.allow_once = None;
+            if let Some(tid) = req["tool_use_id"].as_str() {
+                self.set_tool(tid, |t| t.2 = Some("aprobada antes de reiniciar".into()));
+            }
+            return vec![Effect::Write(permission_reply(&id, true, &input, ""))];
         }
         let rule = rule_key(&tool, &input);
         // «Allow for this session» said yes to this once already.
@@ -2388,6 +2660,7 @@ impl State {
             plan: Vec::new(),
             options,
             multi: false,
+            restored: false,
         };
         self.wait(
             Pending {
@@ -2397,6 +2670,7 @@ impl State {
                 input,
                 tool_use_id,
                 session_rule: suggested.then_some(rule),
+                nested,
             },
             AttentionKind::Permission,
         )
@@ -2414,6 +2688,7 @@ impl State {
 
     fn result(&mut self, msg: &Value, now: u64) -> Vec<Effect> {
         let mut out = Vec::new();
+        self.allow_once = None;
         if let Some(s) = msg["session_id"].as_str().filter(|s| !s.is_empty())
             && s != self.session
         {
@@ -2543,13 +2818,23 @@ impl State {
 
     /// The engine's process ended while the conversation was open.
     pub fn engine_gone(&mut self, reason: &str) -> Vec<Effect> {
-        let had_ask = self.pending.take().is_some();
+        self.engine_version = None;
+        // What it asked is not lost with it: it waits again as after a restart, and its answer starts another engine (REQ-886).
+        let had_ask = self.pending.as_mut().is_some_and(|p| {
+            p.ask.restored = true;
+            true
+        });
         self.suggestion = None;
         self.inflight = None;
         self.auto = false;
         self.interrupting = false;
         self.finish_live();
+        // The tool of the ask that stays is still the one that asks.
+        let asking = self.pending.as_ref().and_then(|p| p.tool_use_id.clone());
         for id in self.running_tools() {
+            if asking.as_deref() == Some(id.as_str()) {
+                continue;
+            }
             self.set_tool(&id, |t| {
                 t.0 = ToolState::Failed;
                 t.1 = Some("El motor se detuvo".into());
@@ -2557,14 +2842,19 @@ impl State {
         }
         self.cut_agents(true);
         self.task_links.clear();
-        self.status = ConvStatus::Dead;
+        self.status = if had_ask {
+            ConvStatus::Asking
+        } else {
+            ConvStatus::Dead
+        };
         self.since = None;
         self.note(reason.to_owned(), Some(Tone::Error));
-        if had_ask {
-            vec![Effect::ClearAsk]
-        } else {
-            Vec::new()
-        }
+        Vec::new()
+    }
+
+    /// Whether an ask waits for the person: the engine that has it is ended at once when the daemon stops (REQ-885).
+    pub fn has_ask(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// The engine is being started for a message: show it.
@@ -2658,6 +2948,26 @@ impl State {
     }
 
     /// The tool item with this id: its state, summary, who answered, its output and its name.
+    /// A tool with no result that may have finished unseen: `failed` and `lost`, with what is known of it (REQ-887).
+    fn mark_lost(&mut self, id: &str, summary: &str) {
+        for item in self.items.iter_mut().rev() {
+            if let Item::Tool {
+                id: tid,
+                state,
+                summary: said,
+                lost,
+                ..
+            } = item
+                && tid == id
+            {
+                *state = ToolState::Failed;
+                *said = Some(summary.to_owned());
+                *lost = true;
+                return;
+            }
+        }
+    }
+
     fn set_tool(
         &mut self,
         id: &str,
@@ -2896,6 +3206,7 @@ fn question_ask(request: &str, at: usize, q: &Q) -> Ask {
             })
             .collect(),
         multi: q.multi,
+        restored: false,
     }
 }
 
@@ -2939,6 +3250,7 @@ fn plan_ask(request: &str, input: &Value, back: Option<Mode>) -> Ask {
             },
         ],
         multi: false,
+        restored: false,
     }
 }
 
@@ -3370,7 +3682,7 @@ mod tests {
         assert!(s.expire_follow(1_001 + FOLLOW_SILENCE_MS));
         assert!(!s.expire_follow(2_000 + FOLLOW_SILENCE_MS), "once");
         assert_eq!(node_of(&s).following, None);
-        assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Failed, summary: Some(x), .. } if x == "sin resultado")));
+        assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Failed, summary: Some(x), lost: true, .. } if x == crate::transcript::LOST)));
     }
 
     #[test]
@@ -3405,6 +3717,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }];
         let back = State::restored(saved, "20:00");
         assert!(matches!(
@@ -3653,6 +3966,208 @@ mod tests {
     fn can_use(id: &str, tool: &str, input: Value, suggested: bool) -> Value {
         json!({"type": "control_request", "request_id": id, "request": {"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": "toolu_x",
             "permission_suggestions": if suggested { json!([{"type": "addRules"}]) } else { json!([]) }}})
+    }
+
+    /// REQ-877: a permission is kept for a restart unless a subagent asked it; a question or a plan is not kept (the transcript has them).
+    #[test]
+    fn only_a_permission_that_the_main_agent_asked_is_kept_for_a_restart() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&can_use("r1", "Bash", json!({"command": "ls"}), true), 1);
+        let kept = s.saved(0).pending.expect("a permission waits");
+        assert_eq!(
+            (
+                kept.tool.as_str(),
+                kept.tool_use_id.as_str(),
+                kept.suggested
+            ),
+            ("Bash", "toolu_x", true)
+        );
+        let mut nested = can_use("r2", "Bash", json!({"command": "ls"}), false);
+        nested["request"]["agent_id"] = json!("a1");
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&nested, 1);
+        assert!(s.pending.is_some() && s.saved(0).pending.is_none());
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(
+            &can_use("r3", "ExitPlanMode", json!({"plan": "# Plan"}), false),
+            1,
+        );
+        assert!(s.pending.is_some() && s.saved(0).pending.is_none());
+    }
+
+    /// REQ-875: the items are made again when the transcript grows, and the tool of a restored ask is still the one that asks.
+    #[test]
+    fn making_the_items_again_leaves_the_tool_of_a_restored_ask_asking() {
+        let call = json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"}]}]}}]}});
+        let text = json!({"type":"user","message":{"role":"user","content":"hola"}}).to_string()
+            + "\n"
+            + &call.to_string()
+            + "\n";
+        let parser = crate::transcript::parse(&text);
+        let mut s = State::resumed("old".into(), Some(&parser));
+        let fx = s.restore_ask(Some(&parser));
+        assert!(matches!(
+            fx.as_slice(),
+            [Effect::Raise(AttentionKind::Question)]
+        ));
+        assert!(s.pending.as_ref().is_some_and(|p| p.ask.restored));
+        s.follow(&parser);
+        assert!(
+            matches!(
+                s.items.last(),
+                Some(Item::Tool {
+                    state: ToolState::Ask,
+                    ..
+                })
+            ),
+            "{:?}",
+            s.items.last()
+        );
+        // a session another `claude` holds is not asked in
+        let mut held = State::resumed("old".into(), Some(&parser));
+        held.set_held(Some(Held {
+            pid: 1,
+            cwd: "/x".into(),
+            busy: false,
+        }));
+        assert!(held.restore_ask(Some(&parser)).is_empty() && held.pending.is_none());
+    }
+
+    fn restored(tool: &str, input: Value, id: &str) -> State {
+        let mut s = st();
+        s.restore_pending_for_test(tool, input, id);
+        s
+    }
+
+    /// REQ-879 to REQ-881: what a restored ask says when it is answered, and what it leaves for the next call.
+    #[test]
+    fn a_restored_ask_answers_with_a_message_and_the_mode_that_the_answer_means() {
+        let line = |fx: Vec<Effect>| {
+            assert!(matches!(fx[0], Effect::ClearAsk), "{fx:?}");
+            fx.iter()
+                .find_map(|e| match e {
+                    Effect::Resume(l) => Some(l.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{fx:?}"))
+        };
+        // two questions are answered one after the other and go as one message of two lines
+        let two = json!({"questions": [
+            {"question": "¿Uno?", "header": "U", "options": [{"label": "A", "description": ""}, {"label": "B", "description": ""}], "multiSelect": false},
+            {"question": "¿Dos?", "header": "D", "options": [{"label": "X", "description": ""}], "multiSelect": true}]});
+        let mut s = restored("AskUserQuestion", two, "q");
+        assert_eq!(s.answer("q:0", "1", None, None).unwrap(), Vec::new());
+        assert!(
+            s.pending
+                .as_ref()
+                .is_some_and(|p| p.ask.restored && p.ask.id == "q:1")
+        );
+        let said = line(s.answer("q:1", "0", Some("Z"), None).unwrap());
+        assert_eq!(said, "Elegí «B» para «¿Uno?»\nElegí «X, Z» para «¿Dos?»");
+        // a plan: the mode is the answer's, and the refusal keeps `plan` with what the person wrote
+        let plan = json!({"plan": "# Plan"});
+        for (key, text, mode, said) in [
+            (
+                "accept",
+                None,
+                Mode::AcceptEdits,
+                "Aprobado: seguí con el plan y editá sin preguntar.",
+            ),
+            ("manual", None, Mode::Manual, "Aprobado: seguí con el plan."),
+            (
+                "no",
+                Some(" usa i32 "),
+                Mode::Plan,
+                "No apruebo el plan; seguí planeando: usa i32",
+            ),
+            (
+                "no",
+                None,
+                Mode::Plan,
+                "No apruebo el plan; seguí planeando.",
+            ),
+        ] {
+            let mut s = restored("ExitPlanMode", plan.clone(), "p");
+            s.mode = Mode::Plan;
+            assert_eq!(line(s.answer("p", key, text, None).unwrap()), said);
+            assert_eq!(s.mode, mode);
+        }
+        // a permission: yes allows the same call once and no does not
+        let input = json!({"command": "touch probe-file"});
+        let mut s = restored("Bash", input.clone(), "b");
+        assert_eq!(
+            line(s.answer("b", "yes", None, None).unwrap()),
+            "Sí, adelante con Bash touch probe-file"
+        );
+        let again = |s: &mut State, input: Value| s.apply(&can_use("r2", "Bash", input, false), 1);
+        let other = again(&mut s, json!({"command": "rm -rf x"}));
+        assert!(
+            s.pending.is_some() && matches!(other.as_slice(), [Effect::Raise(_)]),
+            "another call is asked"
+        );
+        s.pending = None;
+        let same = again(&mut s, input.clone());
+        assert!(
+            s.pending.is_none() && matches!(same.as_slice(), [Effect::Write(_)]),
+            "the same call is allowed once"
+        );
+        assert!(s.allow_once.is_none());
+        let mut s = restored("Bash", input, "b");
+        assert_eq!(
+            line(s.answer("b", "no", Some("no"), None).unwrap()),
+            "No, no ejecutes Bash touch probe-file: no"
+        );
+        assert!(s.allow_once.is_none());
+    }
+
+    /// REQ-881: the tool of an ask of before a restart gets no result on the stream, so it ends when it is answered; `^C` on it drops it.
+    #[test]
+    fn the_tool_of_a_restored_ask_ends_when_it_is_answered_and_is_not_left_running() {
+        let state = |s: &State| match s.items.last() {
+            Some(Item::Tool { state, lost, .. }) => (*state, *lost),
+            other => panic!("{other:?}"),
+        };
+        let with_tool = |tool: &str, input: Value, id: &str| {
+            let mut s = st();
+            s.push(Item::Tool {
+                id: id.into(),
+                name: tool.into(),
+                arg: String::new(),
+                state: ToolState::Failed,
+                summary: None,
+                output: Vec::new(),
+                diff: Vec::new(),
+                url: None,
+                by: None,
+                lost: false,
+            });
+            s.restore_pending_for_test(tool, input, id);
+            s
+        };
+        let q = json!({"questions": [{"question": "¿Uno?", "header": "U", "options": [{"label": "A", "description": ""}], "multiSelect": false}]});
+        let mut s = with_tool("AskUserQuestion", q.clone(), "q");
+        assert_eq!(state(&s), (ToolState::Ask, false));
+        s.answer("q:0", "0", None, None).unwrap();
+        assert_eq!(state(&s), (ToolState::Ok, false));
+        let mut s = with_tool("ExitPlanMode", json!({"plan": "# P"}), "p");
+        s.answer("p", "accept", None, None).unwrap();
+        assert_eq!(state(&s), (ToolState::Ok, false));
+        let mut s = with_tool("Bash", json!({"command": "ls"}), "b");
+        s.answer("b", "yes", None, None).unwrap();
+        assert_eq!(
+            state(&s),
+            (ToolState::Failed, true),
+            "it did not run and has no result"
+        );
+        let mut s = with_tool("Bash", json!({"command": "ls"}), "b");
+        s.status = ConvStatus::Asking;
+        let fx = s.interrupt();
+        assert!(matches!(fx.as_slice(), [Effect::ClearAsk]), "{fx:?}");
+        assert!(s.pending.is_none() && !s.interrupting && s.status == ConvStatus::Dead);
+        assert_eq!(state(&s).0, ToolState::Denied);
     }
 
     /// REQ-605: a plan entered from `auto` offers to go back to it; from any other mode, or when the
@@ -4111,6 +4626,35 @@ mod tests {
         assert_eq!(short_model("claude-sonnet-5-5"), "sonnet-5.5");
         assert_eq!(short_model("claude-opus-4-1-20250805"), "opus-4.1");
         assert_eq!(short_model("fable"), "fable");
+    }
+
+    #[test]
+    fn the_engines_version_is_what_init_says_and_goes_with_the_engine() {
+        let mut s = st();
+        let head = || Head {
+            id: "c".into(),
+            v: 1,
+            epoch: "e".into(),
+            rev: 1,
+            attention: Vec::new(),
+        };
+        assert_eq!(s.node(head(), &"p".into()).engine_version, None);
+        s.apply(&json!({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "claude_code_version": "2.1.309"}), 0);
+        assert_eq!(
+            s.node(head(), &"p".into()).engine_version.as_deref(),
+            Some("2.1.309")
+        );
+        // An init that does not say it keeps what the engine said before.
+        s.apply(
+            &json!({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5"}),
+            1,
+        );
+        assert_eq!(
+            s.node(head(), &"p".into()).engine_version.as_deref(),
+            Some("2.1.309")
+        );
+        s.engine_gone("el motor terminó");
+        assert_eq!(s.node(head(), &"p".into()).engine_version, None);
     }
 
     #[test]
@@ -4715,6 +5259,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }
     }
 
@@ -4948,6 +5493,7 @@ mod tests {
                 diff: Vec::new(),
                 url: None,
                 by: None,
+                lost: false,
             },
         );
         s.follow(&t);

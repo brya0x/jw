@@ -1,5 +1,5 @@
 //! N180b: a workspace's task list is read from its file, summed up in the workspace's row, served
-//! as the `tasks` node and changed by `tasks_edit` (REQ-890 to REQ-896, REQ-939), in a private daemon.
+//! as the `tasks` node and changed by `tasks_edit` (REQ-907 to REQ-913, REQ-956), in a private daemon.
 
 mod common;
 
@@ -362,7 +362,7 @@ fn a_list_an_agent_writes_later_shows_when_its_pane_moves() {
     });
 }
 
-// ---- the loop (N180d): REQ-898 to REQ-912
+// ---- the loop (N180d): REQ-915 to REQ-929
 
 const FLOW: &str = "- [ ] t1 first\n- [ ] t2 second (after: t1)\n";
 
@@ -626,7 +626,7 @@ fn closing_the_agents_pane_stops_the_loop_and_a_restart_leaves_it_off() {
         w["tasks"]["stop"]["kind"] == "pane"
     });
     assert!(!attention(&mut r.c, &ws).contains(&"question".to_owned()));
-    // a restart: the list is as it was and the loop is off (REQ-898)
+    // a restart: the list is as it was and the loop is off (REQ-915)
     loop_on(&mut r.c, &ws, None, Some(&keep)).unwrap();
     let Run { sb, _d, c, .. } = r;
     drop(c);
@@ -694,7 +694,7 @@ fn turning_the_loop_on_says_why_it_cannot() {
         loop_on(&mut r.c, &plain, None, Some(&p2)),
         Err(ErrorCode::NotFound)
     );
-    // two asks for the node give the same one (REQ-890)
+    // two asks for the node give the same one (REQ-907)
     let a = node_of(&mut r.c, &ws);
     let b = node_of(&mut r.c, &ws);
     assert_eq!(a, b);

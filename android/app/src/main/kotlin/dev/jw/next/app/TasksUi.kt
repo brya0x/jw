@@ -45,7 +45,7 @@ import kotlinx.coroutines.delay
 
 private val Gutter = 16.dp
 
-/** What the person asked of one task or of the loop, over the tab (REQ-932). */
+/** What the person asked of one task or of the loop, over the tab (REQ-949). */
 private sealed interface Asking {
     data class Task(val row: TaskRow) : Asking
     data class Block(val row: TaskRow) : Asking
@@ -54,7 +54,7 @@ private sealed interface Asking {
 
 /**
  * The «tareas» tab of a workspace: the card of its loop over its tasks by level, a sheet for a task and one for the laps
- * (REQ-932). It draws the node and edits nothing itself: every change is a command, and the node that comes back is what shows.
+ * (REQ-949). It draws the node and edits nothing itself: every change is a command, and the node that comes back is what shows.
  */
 @Composable
 internal fun TasksPanel(source: AppSource, workspace: Id, listed: Boolean) {
@@ -62,7 +62,7 @@ internal fun TasksPanel(source: AppSource, workspace: Id, listed: Boolean) {
     var nodeId by remember(workspace) { mutableStateOf<Id?>(null) }
     val doc = remember(version, nodeId) { nodeId?.let { source.node(it) as? Node.Tasks } }
     val watch = remember(workspace) { TasksWatch() }
-    // The node is asked for once, and again when it goes while the row still says there is a list (REQ-941).
+    // The node is asked for once, and again when it goes while the row still says there is a list (REQ-958).
     LaunchedEffect(version, doc != null, listed) {
         if (watch.want(doc != null, listed, System.currentTimeMillis())) {
             source.openTasks(workspace) { r -> r.onSuccess { nodeId = it; source.open(it) } }
@@ -172,7 +172,7 @@ private fun BoxScope.LapsSheet(dismiss: () -> Unit, start: (Int) -> Unit) {
     }
 }
 
-/** A loop that stopped or ended while the app is open (REQ-933): a line over the screen that opens the tasks. */
+/** A loop that stopped or ended while the app is open (REQ-950): a line over the screen that opens the tasks. */
 @Composable
 internal fun BoxScope.TasksBanner(notice: TasksNotice, open: () -> Unit, dismiss: () -> Unit) {
     LaunchedEffect(notice) { delay(8000); dismiss() }

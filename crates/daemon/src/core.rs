@@ -126,7 +126,7 @@ pub struct Core {
     pub mobile: Arc<crate::mobile::Hub>,
     /// The settings file an agent is started with, so its hooks tell this daemon what it does.
     pub hooks: Option<PathBuf>,
-    /// The settings file an engine is started with: only the `Stop` hook of a task loop (REQ-913).
+    /// The settings file an engine is started with: only the `Stop` hook of a task loop (REQ-930).
     pub loop_hooks: Option<PathBuf>,
     /// `claude` typed in a pane is the binary's own (a conversation), in a shell that has the
     /// integration; then its attention comes from the engine and it is given no hooks (REQ-374).
@@ -146,13 +146,15 @@ pub struct Core {
     pub(crate) task_nodes: HashMap<Id, crate::tasklists::NodeEntry>,
     pub(crate) task_seen: HashSet<Id>,
     pub(crate) task_look: HashSet<Id>,
-    /// The loops over the lists, by workspace: in memory only (REQ-898).
+    /// The loops over the lists, by workspace: in memory only (REQ-915).
     pub(crate) loops: HashMap<Id, crate::tasklists::Loop>,
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
     pub convs: HashMap<Id, crate::engine::Conv>,
     pub conv_dir: Option<PathBuf>,
     /// The conversations get the Claude in Chrome tools unless they say otherwise (REQ-634).
     pub chrome: bool,
+    /// The version of `claude` that is installed, as the last check of the update read it (REQ-852).
+    installed_claude: Option<String>,
     /// `gh`, for what the person asks of GitHub; and the daemon's state folder, where the files
     /// that brief a review are written (REQ-584).
     pub gh: Option<PathBuf>,
@@ -160,6 +162,8 @@ pub struct Core {
     /// The daemon is being stopped: the shells that end then are not programs that ended, and
     /// what a restart brings back stays as it was.
     pub stopping: bool,
+    /// `jw stop` asked the daemon to stop: the process that runs it does (REQ-891).
+    pub stop_requested: bool,
     /// The operation that runs for each workspace and can be stopped: a push, a review being made
     /// (REQ-604).
     ops: HashMap<Id, crate::cancel::Cancel>,
@@ -216,9 +220,11 @@ impl Core {
             convs: HashMap::new(),
             conv_dir: None,
             chrome: false,
+            installed_claude: None,
             gh: None,
             state_dir: None,
             stopping: false,
+            stop_requested: false,
             ops: HashMap::new(),
             jobs: Vec::new(),
             job_clock: HashMap::new(),
@@ -301,7 +307,7 @@ impl Core {
     /// A conversation raised something for the person: what the agent had raised is over.
     pub fn raise_agent(&mut self, pane: &str, kind: AttentionKind) {
         // The turn ended after a task loop stopped for a reason that needs the person: it is
-        // a question and not a turn that is done (REQ-943), and only for this one turn.
+        // a question and not a turn that is done (REQ-960), and only for this one turn.
         let kind = if kind == AttentionKind::AgentDone && self.take_loop_ended(pane) {
             AttentionKind::Question
         } else {
@@ -617,7 +623,7 @@ impl Core {
             Job {
                 id: id.clone(),
                 kind,
-                workspace: workspace.to_owned(),
+                workspace: Some(workspace.to_owned()),
                 name,
                 state: JobState::Running,
                 started_at: crate::blocks::now_ms(),
@@ -649,6 +655,11 @@ impl Core {
                 }
             }
         }
+        self.trim_jobs();
+    }
+
+    /// Only the newest `FINISHED_JOBS` that ended are kept (REQ-653).
+    fn trim_jobs(&mut self) {
         let mut kept = 0;
         self.jobs.retain(|j| {
             if j.state == JobState::Running {
@@ -657,6 +668,54 @@ impl Core {
             kept += 1;
             kept <= FINISHED_JOBS
         });
+    }
+
+    /// A job that has no workspace and is already over, as the update of claude is: it is the
+    /// newest and the clients are told (REQ-849, REQ-850).
+    pub fn record_job(
+        &mut self,
+        kind: JobKind,
+        name: String,
+        took: Duration,
+        result: Result<(), String>,
+    ) {
+        let (state, detail) = match result {
+            Ok(()) => (JobState::Done, None),
+            Err(why) => (JobState::Failed, Some(why)),
+        };
+        let took_ms = took.as_millis() as u64;
+        self.jobs.insert(
+            0,
+            Job {
+                id: crate::model::new_id(),
+                kind,
+                workspace: None,
+                name,
+                state,
+                started_at: crate::blocks::now_ms().saturating_sub(took_ms),
+                duration_ms: Some(took_ms),
+                detail,
+                cancellable: false,
+            },
+        );
+        self.trim_jobs();
+        self.refresh();
+    }
+
+    /// The version of `claude` that is installed, as the last check read it; `None` while the
+    /// update is off. The clients are told when it changes (REQ-852, REQ-853).
+    pub fn set_installed_claude(&mut self, version: Option<String>) {
+        if self.remember_installed_claude(version) {
+            self.refresh();
+        }
+    }
+
+    /// The same, without telling the clients, for a caller that publishes once with whatever else
+    /// changed (REQ-853); true when it changed.
+    pub fn remember_installed_claude(&mut self, version: Option<String>) -> bool {
+        let changed = self.installed_claude != version;
+        self.installed_claude = version;
+        changed
     }
 
     pub fn end_job(&mut self, job: &str, result: Result<(), String>) {
@@ -1437,9 +1496,12 @@ impl Core {
                     conversation: self.convs.get(&p.id).map(|c| c.id.clone()),
                 }));
                 if let Some(c) = self.convs.get(&p.id) {
-                    nodes.push(Node::Conversation(Box::new(
-                        c.st.node(head(&c.id, Vec::new()), &p.id),
-                    )));
+                    let mut node = c.st.node(head(&c.id, Vec::new()), &p.id);
+                    node.engine_newer = self
+                        .installed_claude
+                        .clone()
+                        .filter(|v| node.engine_version.as_ref().is_some_and(|e| e != v));
+                    nodes.push(Node::Conversation(Box::new(node)));
                 }
                 if let (Some(id), Some((_, mode, blocks))) =
                     (self.blocks_ids.get(&p.id), self.blocks_views.get(&p.id))
@@ -1669,7 +1731,7 @@ mod tests {
         (model, ws, pane)
     }
 
-    /// REQ-893, REQ-894: a workspace is looked at once, and with no list anywhere nothing is read again
+    /// REQ-910, REQ-911: a workspace is looked at once, and with no list anywhere nothing is read again
     /// until an agent moves.
     #[test]
     fn with_no_task_list_anywhere_the_poll_has_nothing_to_look_at() {
@@ -1703,7 +1765,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// REQ-943: the turn of a conversation that ends after its loop stopped for a reason that needs the
+    /// REQ-960: the turn of a conversation that ends after its loop stopped for a reason that needs the
     /// person is a question, once; and a loop that ended with everything done is a turn done.
     #[test]
     fn the_turn_that_ends_after_a_loop_stopped_is_a_question_once() {
