@@ -139,8 +139,9 @@ pub fn check(shared: &Shared, mode: Mode, within: Duration) -> bool {
         Err(why) => failed(shared, mode, took, why),
         Ok(after) => {
             let mut core = shared.lock();
-            core.set_installed_claude(Some(after.clone()));
             if after != before {
+                // One refresh for the new version and the job (REQ-853).
+                core.remember_installed_claude(Some(after.clone()));
                 core.record_job(
                     JobKind::UpdateClaude,
                     format!("claude {before} → {after}"),

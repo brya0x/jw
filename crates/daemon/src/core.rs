@@ -678,10 +678,17 @@ impl Core {
     /// The version of `claude` that is installed, as the last check read it; `None` while the
     /// update is off. The clients are told when it changes (REQ-852, REQ-853).
     pub fn set_installed_claude(&mut self, version: Option<String>) {
-        if self.installed_claude != version {
-            self.installed_claude = version;
+        if self.remember_installed_claude(version) {
             self.refresh();
         }
+    }
+
+    /// The same, without telling the clients, for a caller that publishes once with whatever else
+    /// changed (REQ-853); true when it changed.
+    pub fn remember_installed_claude(&mut self, version: Option<String>) -> bool {
+        let changed = self.installed_claude != version;
+        self.installed_claude = version;
+        changed
     }
 
     pub fn end_job(&mut self, job: &str, result: Result<(), String>) {

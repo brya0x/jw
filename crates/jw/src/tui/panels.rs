@@ -208,6 +208,9 @@ pub fn status(conv: &Conversation, cwd: &str) -> Panel {
             ),
         ),
     ];
+    if let Some(v) = &conv.engine_version {
+        rows.insert(3, Row::new("motor", v.clone()));
+    }
     if let Some(l) = &conv.limits {
         let pct = |p: Option<u32>| p.map_or("—".to_owned(), |p| format!("{p} %"));
         rows.push(Row::new("límite de 5 horas", pct(l.five_hour)));
@@ -493,6 +496,21 @@ mod tests {
         assert_eq!(at("costo"), "$0.06");
         assert_eq!(at("límite de 5 horas"), "62 %");
         assert_eq!(at("límite de 7 días"), "31 %");
+    }
+
+    #[test]
+    fn status_says_which_claude_the_engine_is_when_it_said_it() {
+        let at = |c: &Conversation| {
+            status(c, "/work/app")
+                .rows
+                .iter()
+                .find(|r| r.label == "motor")
+                .map(|r| r.detail.clone())
+        };
+        let mut conv = fixture();
+        assert_eq!(at(&conv), None);
+        conv.engine_version = Some("2.1.309".into());
+        assert_eq!(at(&conv).as_deref(), Some("2.1.309"));
     }
 
     #[test]
