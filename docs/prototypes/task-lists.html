@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · listas de tareas</title>
+<style>
+/* the tokens of chats-area.html, groups.html, tui.html and mobile.html: One Dark */
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:22px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.note{max-width:920px}
+.row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none;display:inline-block;max-width:100%;overflow-x:auto}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.c-chip{background:var(--blue);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}.c-chipm{background:var(--magenta);color:var(--bg);font-weight:700}
+.ctl{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0;align-items:flex-start}
+.ctl fieldset{border:1px solid #2f3440;border-radius:8px;padding:6px 10px 8px;margin:0;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.ctl fieldset.dec{flex-direction:column;align-items:flex-start;gap:2px;min-width:230px;max-width:330px}
+.ctl legend{font-size:11px;color:var(--mut);padding:0 4px}
+button,select{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer;max-width:100%}
+button:hover,select:hover{border-color:var(--blue)}
+label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
+.tag-opt{display:inline-block;background:#2f3440;color:var(--ink);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.tag-dec{display:inline-block;background:var(--yellow);color:var(--bg);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.rec{color:var(--green)}
+/* the phone: 390 px, as in chats-area.html */
+.phone{position:relative;width:390px;max-width:100%;height:780px;background:var(--bg);border:1px solid var(--line);border-radius:36px;overflow:hidden;display:flex;flex-direction:column;font:13.5px/1.4 var(--mono);color:var(--fg)}
+.sbr{display:flex;justify-content:space-between;padding:10px 22px 4px;color:var(--dim);font-size:11px}
+.screen{flex:1;display:flex;flex-direction:column;min-height:0}
+.hd{display:flex;align-items:center;gap:10px;padding:8px 14px 6px}
+.hd b{font-size:15px;color:#e6e9ef}.hd .sub{color:var(--dim);font-size:11px}.hd .sp1{flex:1}
+.hd .tt{min-width:0;flex:1}.hd .tt b,.hd .tt .sub{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ib{position:relative;background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;padding:4px 8px;min-height:40px}
+.ib .bdg{position:absolute;top:-2px;right:-2px;background:var(--yellow);color:var(--bg);border-radius:8px;font-size:10px;padding:0 5px;font-weight:700}
+.list{flex:1;overflow:auto;padding:0 0 8px}
+.sec{color:var(--dim);font-size:11px;padding:12px 14px 4px;letter-spacing:.04em;display:flex;justify-content:space-between}
+.row1{display:flex;align-items:center;gap:8px;width:100%;min-height:54px;padding:6px 14px;background:none;border:0;border-left:3px solid transparent;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.row1 .o{width:14px;text-align:center}.row1 .nm{flex:1;min-width:0}
+.row1 .nm b{color:#e6e9ef;font-weight:700;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row1 .nm span{color:var(--dim);font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row1 .mk{font-size:12px;min-width:34px;text-align:right;white-space:nowrap}
+.row1.tk{min-height:50px;cursor:pointer}.row1.tk .lv{width:16px;color:var(--dim);font-size:11px;text-align:right}
+.row1.cur{background:var(--sel);border-left-color:var(--blue)}
+.emp{color:var(--dim);font-size:12px;padding:6px 14px 6px 28px;font-style:italic}
+.lnk{display:block;width:100%;text-align:left;background:none;border:0;color:var(--dim);font:inherit;font-size:12px;padding:8px 14px;cursor:pointer;min-height:40px}
+.card{margin:6px 14px 8px;padding:10px 12px;background:#232830;border:1px solid var(--line);border-radius:10px}
+.card .l1{display:flex;align-items:center;gap:8px}.card .l1 b{color:#e6e9ef;flex:1}
+.card .l2{color:var(--dim);font-size:11.5px;margin-top:4px}
+.bar{font-family:var(--mono);letter-spacing:-1px}
+.card button{min-height:36px;padding:0 12px;border-radius:8px}
+.status{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sel);font-size:11.5px;color:var(--dim)}
+.status .chipb{background:var(--blue);color:var(--bg);font-weight:700;padding:0 6px;border-radius:3px}.status .sp1{flex:1}
+.back{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none}.back.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:82%;overflow:auto;background:var(--panel);border-radius:14px 14px 0 0;padding:8px 14px 18px;border-top:1px solid var(--line)}
+.sheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 10px}
+.sheet h3{margin:4px 0 6px;font-size:14px;color:#e6e9ef}.sheet p{margin:4px 0;color:var(--fg);font-size:12.5px}
+.act{display:flex;justify-content:space-between;align-items:center;width:100%;min-height:48px;margin:6px 0;background:#2a2f3a;border:1px solid var(--line);border-radius:10px;color:var(--fg);font:inherit;cursor:pointer;text-align:left;padding:8px 14px}
+.act.red{color:var(--red);border-color:#6b3a40}.act small{color:var(--dim);font-size:11px}
+.chips{display:flex;gap:8px;margin:8px 0}.chip{flex:1;min-height:42px;background:#222630;border:1px solid var(--line);border-radius:10px;color:var(--dim);font:inherit;cursor:pointer}
+.chip[aria-pressed="true"]{color:#e6e9ef;border-color:var(--blue);background:var(--sel)}
+.inp{width:100%;min-height:44px;background:#1c2027;border:1px solid var(--line);border-radius:10px;color:#e6e9ef;font:inherit;padding:0 12px;margin:6px 0}
+.inp:focus{outline:none;border-color:var(--blue)}
+.cancel{display:block;text-align:center;color:var(--dim);padding:10px;cursor:pointer}
+#toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:7px 13px;border-radius:16px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:86%;text-align:center}
+#toast.on{opacity:1}
+</style></head><body>
+<h1>jw · listas de tareas</h1>
+<p class="note">Prototipo para aprobar antes del spec (N180). Una persona que trabaja con agentes escribe una <b>lista de tareas</b>; el agente la recorre <b>en bucle hasta terminarla</b> y la persona la <b>revisa en una sección de jw</b>. jw da capacidades, no un flujo: la lista es <b>un archivo de texto</b> que se edita a mano, <code>jw tasks</code> es el CLI que el agente llama (como <code>jw ls</code> o <code>jw prompt</code>), y el bucle es <b>el gancho de parada que jw ya instala</b>, activado por workspace y nunca por defecto. Abajo hay tres workspaces con lista: <b>api-v2</b> con el bucle en marcha, <b>checkout</b> parado por una tarea bloqueada y <b>export-pdf</b> terminado. La terminal, el teléfono, el CLI y el archivo leen el mismo estado.</p>
+
+<div class="ctl">
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde vive el archivo</legend>
+    <label><input type="radio" name="loc" data-o="loc" value="repo" checked> <span><b class="rec">en el repo del workspace</b>: <code>.jw/tasks.md</code> (recomendado)</span></label>
+    <label><input type="radio" name="loc" data-o="loc" value="state" > <span>en el estado de jw, fuera del repo</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>formato</legend>
+    <label><input type="radio" name="fmt" data-o="fmt" value="md" checked> <span><b class="rec">casillas de Markdown</b> con <code>(after: …)</code> (recomendado)</span></label>
+    <label><input type="radio" name="fmt" data-o="fmt" value="toml"> <span>TOML, un <code>[[task]]</code> por tarea</span></label>
+    <label><input type="radio" name="fmt" data-o="fmt" value="json"> <span>JSON, una tarea por línea</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde está la sección</legend>
+    <label><input type="radio" name="sec" data-o="sec" value="zone" checked> <span><b class="rec">zona TAREAS</b> bajo los workspaces, como CONVERSACIONES (recomendado)</span></label>
+    <label><input type="radio" name="sec" data-o="sec" value="screen"> <span>pantalla aparte (<kbd>T</kbd>; ☑ en el teléfono)</span></label>
+    <label><input type="radio" name="sec" data-o="sec" value="row"> <span>sin sección: una marca <code>3/7</code> en la fila del workspace</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>máximo de vueltas por defecto</legend>
+    <label><input type="radio" name="max" data-o="max" value="20" checked> <span><b class="rec">20</b> (recomendado)</span></label>
+    <label><input type="radio" name="max" data-o="max" value="10"> <span>10</span></label>
+    <label><input type="radio" name="max" data-o="max" value="40"> <span>40</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>una tarea bloqueada</legend>
+    <label><input type="radio" name="blk" data-o="blk" value="stop" checked> <span><b class="rec">el bucle se detiene</b> (recomendado)</span></label>
+    <label><input type="radio" name="blk" data-o="blk" value="go"> <span>sigue con las tareas listas que no dependen de ella</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span><code>jw tasks run</code> (en paralelo)</legend>
+    <label><input type="radio" name="par" data-o="par" value="later" checked> <span><b class="rec">aparte</b>, en otra parte (recomendado)</span></label>
+    <label><input type="radio" name="par" data-o="par" value="here"> <span>entra en esta parte (un worktree por tarea)</span></label>
+  </fieldset>
+</div>
+<div class="ctl">
+  <fieldset><legend><span class="tag-opt">para probar</span>casos, no decisiones</legend>
+    <label>pantalla <select id="f-cols"><option value="100">100 columnas</option><option value="60">60 (estrecha, &lt; 64)</option></select></label>
+    <button data-b="reset">reiniciar</button>
+    <button data-b="none">ninguna lista (como hoy)</button>
+  </fieldset>
+  <fieldset><legend>simular lo que hace el agente en la lista elegida (la de la terminal)</legend>
+    <button data-b="finish">termina la tarea y acaba el turno</button>
+    <button data-b="idle">acaba el turno sin marcarla hecha</button>
+    <button data-b="block">bloquea la tarea y acaba el turno</button>
+    <button data-b="perm">pide permiso</button>
+    <button data-b="allow">contestas el permiso</button>
+  </fieldset>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p class="note" style="max-width:800px">Teclas (la terminal tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · <kbd>↵</kbd> o <kbd>l</kbd> entrar en la lista · <kbd>T</kbd> ir a las tareas · <kbd>L</kbd> activa o detiene el bucle (pide el máximo de vueltas) · dentro de la lista: <kbd>j</kbd><kbd>k</kbd> elegir tarea, <kbd>d</kbd> hecha, <kbd>b</kbd> bloquear (pide el motivo), <kbd>u</kbd> reabrir o desbloquear, <kbd>e</kbd> abrir el archivo en el visor, <kbd>esc</kbd> vuelve. Ninguna lleva Alt.</p>
+  </div>
+  <div>
+    <div class="phone" id="phone">
+      <div class="sbr"><span>9:41</span><span>LTE · 92%</span></div>
+      <div class="screen" id="screen"></div>
+      <div class="back" id="back"><div class="sheet" id="sheet"></div></div>
+      <div id="toast"></div>
+    </div>
+    <p class="note" style="max-width:390px">Teléfono: toca una lista para entrar; toca una tarea para su hoja (hecha, bloquear, reabrir); el botón de la tarjeta activa o detiene el bucle.</p>
+  </div>
+</div>
+
+<h2>Lo mismo desde el CLI (<code>jw tasks</code>, lo que llama el agente)</h2>
+<div class="term"><pre id="cli"></pre></div>
+<p class="note"><code>ls</code>, <code>next</code>, <code>done</code> y <code>block</code> solo leen y escriben el archivo (sirven en una terminal sin daemon y no tocan nada más); <code>loop on|off|status</code> habla con el daemon, que es quien cuenta las vueltas.</p>
+<h2>El archivo</h2>
+<div class="term"><pre id="file"></pre></div>
+<p class="note" id="file-note"></p>
+<h2>Lo que lee el agente cuando el gancho lo deja seguir</h2>
+<div class="term"><pre id="hook"></pre></div>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>La lista es un archivo; el bucle es del daemon.</b> El archivo dice la <i>intención</i> (hecha, bloqueada, qué espera a qué). Lo que corre ahora (la tarea actual, la vuelta, el panel) no se escribe en el archivo: lo sabe el daemon. Si el daemon se reinicia, el bucle queda apagado (seguro) y el archivo sigue intacto.</li>
+  <li><b>Formato de una tarea:</b> <code>- [ ] t3 endpoints (after: t1, t2)</code>. El id (<code>t3</code>) es lo primero; <code>after:</code> es opcional; <code>[x]</code> hecha, <code>[!]</code> bloqueada con <code>blocked: motivo</code> dentro del mismo paréntesis. Una línea que no es tarea (títulos, notas) se respeta tal cual al escribir. Un id repetido o un <code>after</code> que no existe se dice en <code>jw tasks ls</code>, no se arregla solo.</li>
+  <li><b>El orden de ejecución</b> sale de las dependencias: cada tarea tiene un <b>nivel</b> (1 + el mayor de sus <code>after</code>); las del mismo nivel pueden ir en cualquier orden y <code>next</code> elige la primera del archivo. Estados: <span class="c-green">✓</span> hecha · <span class="c-blue">▶</span> corre ahora · ○ lista · <span class="c-dim">◌</span> espera a otra · <span class="c-yellow">✗</span> bloqueada. Un ciclo se detecta y se dice.</li>
+  <li><b>Activar:</b> <code>jw tasks loop on --max 20</code> o <kbd>L</kbd> / el botón del teléfono, <b>por workspace y nunca por defecto</b>. Empieza mandando al agente a la primera tarea lista (vuelta 1). Detener: <code>loop off</code>, <kbd>L</kbd> otra vez o el botón. Cada vez que el agente acaba un turno, el gancho <code>jw hook stop</code> decide en menos de su tiempo límite (5 s) y devuelve <code>{"decision":"block","reason":"…"}</code> con la tarea siguiente, o nada (y el agente para).</li>
+  <li><b>El bucle se detiene</b> (y lo dice en la fila y en el aviso): todas hechas (✓, un solo aviso «terminó» al final, no uno por vuelta); una tarea bloqueada (con la otra opción sigue con las que no dependen de ella); ninguna lista (lo que queda espera a una bloqueada o hay un ciclo); el <b>máximo de vueltas</b>; <b>sin avance</b> (la misma tarea 3 vueltas seguidas sin marcarla hecha); o tú.</li>
+  <li><b>Nunca contesta por la persona.</b> Un permiso, una pregunta (<code>AskUserQuestion</code>) o un plan son peticiones que dejan el turno sin terminar: <b>el gancho de parada ni se llama</b> (medido, <code>docs/claude-engine.md</code>). El bucle queda en pausa y la fila marca <span class="c-red">!</span>; la vuelta no cuenta. Una pregunta escrita en texto sí acaba el turno y no se distingue; por eso la <i>razón</i> que lee el agente le dice qué hacer en vez de preguntar: <code>jw tasks block t3 "motivo"</code>.</li>
+  <li><b>Vueltas:</b> las cuenta el daemon, no el campo <code>stop_hook_active</code> (que es solo «este fin de turno viene de un bloqueo»); Claude Code <b>no pone ningún tope propio</b> (medido: seis bloqueos seguidos, obedecidos). Por defecto 20, ajustable al activar.</li>
+  <li><b>Avisos:</b> mientras el bucle corre no hay «terminó» por turno. Al parar: ✓ si acabó; <span class="c-yellow">?</span> si necesita a la persona (bloqueada, sin avance, máximo, ninguna lista), reutilizando el aviso de pregunta; <span class="c-red">!</span> mientras espera un permiso. Cuentan en <code>avisos N</code> y en la campana, como cualquier otro.</li>
+  <li><b>La sección:</b> por workspace con lista. Cada fila: la marca de estado (⠋ corre, ✓, ?, ! o ○), el nombre y el progreso <code>3/7</code>. Al entrar: el orden con los niveles y las dependencias, la tarea que corre y en qué panel («panel 2 · claude»), las bloqueadas con su motivo y la línea del bucle (vuelta 4/20, o por qué paró). Es de revisión: marcar hecha, bloquear y reabrir escriben el archivo, igual que a mano. <b>Sin ninguna lista no cambia nada</b>: la zona no aparece.</li>
+  <li><b>Terminal estrecha (&lt; 64 columnas):</b> como el resto (REQ-738): un panel a la vez; la lista ocupa la pantalla y <kbd>esc</kbd> vuelve.</li>
+  <li><b>Teléfono:</b> la zona TAREAS al final de Home (o ☑ en la cabecera con la otra opción); entrar muestra la tarjeta del bucle y las tareas con su nivel. Mismas filas, mismos estados.</li>
+</ul>
+
+<h2>Lo medido con un claude real (2.1.309, 2026-10-25, detalle en <code>docs/claude-engine.md</code>)</h2>
+<ul class="note">
+  <li><code>{"decision":"block","reason":"…"}</code> del gancho <code>Stop</code> <b>sí</b> hace seguir al agente en el mismo turno; llega como «Stop hook feedback: …». Con el motor headless (stream-json) también, y el flujo trae <b>un solo</b> <code>result</code> para todo el turno alargado.</li>
+  <li><code>stop_hook_active</code> es <code>true</code> en cada parada que sigue a un bloqueo: es un flag, no un contador. Nada lo limita salvo el gancho.</li>
+  <li><b>El motor del daemon hoy no lo cumple</b>: no recibe el <code>--settings</code> de ganchos ni <code>JW_PANE_ID</code> (<code>jw hook</code> sale en silencio sin él). Para el bucle en una conversación (el motor) hay que dárselos; en un panel de terminal ya los tiene.</li>
+  <li>La <i>razón</i> funciona si nombra el archivo y la tarea (haiku la siguió porque coincidía con lo pedido); un modelo más fuerte podría negarse a una orden pelada: <b>sin verificar con sonnet/opus</b>.</li>
+</ul>
+
+<h2>Costo en el contrato</h2>
+<ul class="note">
+  <li><b>Nodo nuevo <code>tasks</code> por workspace, versionado (<code>v</code>)</b>: las tareas con su estado y nivel, y el bucle (<code>on</code>, <code>laps</code>, <code>max</code>, <code>current</code>, <code>pane</code>, <code>stopped</code> con su motivo). El envelope no cambia; <code>WorkspaceKind</code> no se toca.</li>
+  <li><b>Daemon:</b> lee el archivo de nuevo (como <code>.jw.toml</code>, <code>project.rs</code>) y vigila sus cambios; <code>jw hook stop</code> pasa de «avisar» a «avisar y, si el bucle está activo, contestar»; <code>loop_on</code>/<code>loop_off</code> son comandos nuevos. Android y TUI solo dibujan.</li>
+  <li><b>Nombres:</b> el nombre del directorio <code>.jw/</code> y el del archivo han de salir de <code>identity.toml</code> (hoy <code>.jw.toml</code> es literal en <code>project.rs</code>, una excepción con su test): no se escribe <code>jw</code> a mano.</li>
+</ul>
+
+<h2>PARA DECIDIR</h2>
+<ul class="note">
+  <li><b>Dónde vive el archivo.</b> <span class="rec">Recomiendo <code>.jw/tasks.md</code> en el repo del workspace.</span> Se versiona, el agente lo edita como cualquier archivo y se lee en git. Consecuencias: <b>cada worktree tiene su copia</b> (la lista de <code>feat/api-v2</code> viaja con su rama) y las casillas marcadas salen en el diff del PR (útil para revisar; ruido si no lo quieres, se pone en <code>.gitignore</code>). Alternativa: el estado de jw (<code>~/.local/state/jw/tasks/&lt;workspace&gt;.md</code>): no ensucia el repo, pero no se versiona y un agente de otro worktree no la ve.</li>
+  <li><b>Formato.</b> <span class="rec">Recomiendo casillas de Markdown.</span> Se lee sin herramienta, el visor de Markdown de jw ya la dibuja y es lo que la persona ya escribe. TOML y JSON son más estrictos pero nadie los escribe a mano a gusto.</li>
+  <li><b>Dónde está la sección.</b> <span class="rec">Recomiendo la zona TAREAS bajo los workspaces</span>, aparece solo si hay alguna lista y sigue el patrón de CONVERSACIONES (chats-area). La pantalla aparte (<kbd>T</kbd>) deja la barra limpia pero esconde los avisos tras una tecla; la marca en la fila no tiene sitio para el orden ni los motivos.</li>
+  <li><b>Máximo de vueltas.</b> <span class="rec">Recomiendo 20</span>: una lista típica tiene 5–10 tareas y una vuelta por tarea, con margen para reintentos. Se ajusta al activar. No ofrezco «sin tope»: Claude Code no pone ninguno.</li>
+  <li><b>Una tarea bloqueada.</b> <span class="rec">Recomiendo detener el bucle.</span> Es lo que dice la propuesta: si el agente pide a la persona, seguir construyendo sobre una base dudosa suele costar más. La otra opción sigue con las independientes y deja la bloqueada visible; pruébalas con <b>bloquea la tarea</b> en <b>api-v2</b>.</li>
+  <li><b><code>jw tasks run</code> (varios agentes en paralelo, un worktree por tarea con <code>jw worktree --task</code>).</b> <span class="rec">Recomiendo aparte</span>: añade integrar ramas, conflictos y un coste que el bucle no tiene, y se decide mejor cuando el bucle simple ya se use. Con «entra en esta parte» el prototipo muestra la línea del CLI y la tecla <kbd>R</kbd>, sin más.</li>
+  <li><b>Nombre.</b> «Tarea» ya significa otra cosa en <code>project-concept.html</code> y <code>factory.html</code> (una rama repartida en varios repos) y <code>hub.html</code> tiene un campo <code>task</code> en sus agentes: ninguno está aprobado ni en el código. Recomiendo <b><code>jw tasks</code></b> (es la palabra del usuario) y renombrar <code>--task</code> a <code>--for &lt;id&gt;</code> si algún día entra el paralelo.</li>
+</ul>
+
+<h2>Reutilizado de los prototipos viejos (sin comitear)</h2>
+<ul class="note">
+  <li><b><code>project-brain.html</code></b>: la forma <code>after[]</code> de las dependencias y su reintento acotado que acaba preguntando a la persona; ya está aquí (el «sin avance» a las 3 vueltas). <b>No</b> el brain, el roster ni el pipeline: el brain fijado se rechazó.</li>
+  <li><b><code>factory.html</code></b>: la línea de veredicto («lista para integrar») y el progreso en la fila; aquí es «3/7» y el motivo de parada. No sus pestañas ni el modelo de rama por repo.</li>
+  <li><b><code>project-concept.html</code> y <code>hub.html</code></b>: nada. El primero es una rama repartida en repos (no una lista) y el segundo es consumo y presupuesto; solo comparten la palabra «tarea».</li>
+</ul>
+
+<script>
+const SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const $=id=>document.getElementById(id);
+const ROWS=28;
+const STATE='~/.local/state/jw';     // what identity::state_dir() answers; never written by hand in the product
+const clip=(s,n)=>{s=[...String(s)];return n<=0?'':s.length<=n?s.join(''):s.slice(0,Math.max(0,n-1)).join('')+'…'};
+const wrap=(s,n)=>{const out=[];String(s).split('\n').forEach(p=>{let l='';p.split(' ').forEach(w=>{if(l&&[...(l+' '+w)].length>n){out.push(l);l=w}else l=l?l+' '+w:w});out.push(l)});return out};
+const spin=()=>SPIN[Math.floor(performance.now()/110)%SPIN.length];
+const KINDS={perm:{g:'!',c:'c-red'},ask:{g:'?',c:'c-yellow'},done:{g:'✓',c:'c-green'}};
+const opt={loc:'repo',fmt:'md',sec:'zone',max:'20',blk:'stop',par:'later'};
+const fx={cols:100};
+
+/* ---------- the model: pure, no drawing */
+let M,ui,ph;
+const wsById=id=>M.ws.find(w=>w.id===id);
+const listOf=id=>M.lists[id]||null;
+const withList=()=>M.ws.filter(w=>M.lists[w.id]);
+const T_=(id,t,after,st,why)=>({id,t,after:after||[],st:st||'todo',why:why||''});
+function seed(none){
+  M={ws:[
+    {id:'w1',name:'sales-assist',branch:'main',panes:2},
+    {id:'w2',name:'api-v2',repo:'jitsubai',branch:'feat/api-v2',panes:3},
+    {id:'w3',name:'checkout',repo:'design-studio',branch:'feat/checkout',panes:2},
+    {id:'w4',name:'export-pdf',repo:'design-studio',branch:'fix/export-pdf',panes:2},
+    {id:'w5',name:'dotfiles',branch:'',panes:1}],lists:{}};
+  if(none)return;
+  M.lists.w2={seen:true,tasks:[
+    T_('t1','esquema de la base',[],'done'),T_('t2','modelos',['t1'],'done'),T_('t3','migración de datos',['t1'],'done'),
+    T_('t4','endpoints v2',['t2','t3']),T_('t5','tests de integración',['t4']),T_('t6','documentación',['t4']),T_('t7','abrir el PR',['t5','t6'])],
+    loop:{on:true,laps:4,max:20,cur:'t4',last:'t4',stale:0,waiting:false,pane:'panel 2 · claude',stop:null}};
+  M.lists.w3={seen:true,tasks:[
+    T_('t1','carrito',[],'done'),T_('t2','tarifas de envío',[],'done'),
+    T_('t3','pago con Stripe',['t1','t2'],'blocked','falta STRIPE_KEY en .env'),
+    T_('t4','recibo por correo',['t3']),T_('t5','tests del pago',['t3','t4'])],
+    loop:{on:false,laps:6,max:20,cur:null,last:'t3',stale:0,waiting:false,pane:'panel 2 · claude',stop:{k:'blocked',text:'t3 bloqueada: falta STRIPE_KEY en .env'}}};
+  M.lists.w4={seen:false,tasks:[
+    T_('t1','plantilla',[],'done'),T_('t2','fuentes',[],'done'),T_('t3','cabecera',['t1'],'done'),T_('t4','pie de página',['t1'],'done'),
+    T_('t5','prueba visual',['t3','t4'],'done'),T_('t6','abrir el PR',['t5'],'done')],
+    loop:{on:false,laps:9,max:20,cur:null,last:'t6',stale:0,waiting:false,pane:'panel 2 · claude',stop:{k:'done',text:'6/6 hechas en 9 vueltas'}}};
+}
+const tById=(L,id)=>L.tasks.find(t=>t.id===id);
+const doneN=L=>L.tasks.filter(t=>t.st==='done').length;
+function level(L,t,seen=[]){
+  if(seen.includes(t.id))return 1;
+  const ds=t.after.map(a=>tById(L,a)).filter(Boolean);
+  return 1+Math.max(0,...ds.map(d=>level(L,d,seen.concat(t.id))));
+}
+const ordered=L=>L.tasks.map((t,i)=>({t,i,lv:level(L,t)})).sort((a,b)=>a.lv-b.lv||a.i-b.i);
+const isReady=(L,t)=>t.st==='todo'&&t.after.every(a=>{const d=tById(L,a);return d&&d.st==='done'});
+const readyTasks=L=>L.tasks.filter(t=>isReady(L,t));
+// the state of one task, as `jw tasks ls` says it
+function stateOf(L,t){
+  if(t.st==='done')return 'done';
+  if(t.st==='blocked')return 'blocked';
+  if(L.loop.on&&L.loop.cur===t.id)return 'run';
+  return isReady(L,t)?'ready':'wait';
+}
+const G={done:['✓','c-green'],run:['▶','c-blue'],ready:['○',''],wait:['◌','c-dim'],blocked:['✗','c-yellow']};
+// what the stop hook decides when the agent ends a turn: {go,next} or the list stops
+function stop(L,k,text){const lp=L.loop;lp.on=false;lp.cur=null;lp.stop={k,text};L.seen=false;return {go:false}}
+function hook(L){
+  const lp=L.loop;if(!lp.on)return {go:false};
+  lp.cur=null;
+  if(L.tasks.every(t=>t.st==='done'))return stop(L,'done',`${L.tasks.length}/${L.tasks.length} hechas en ${lp.laps} vuelta${lp.laps>1?'s':''}`);
+  const bl=L.tasks.find(t=>t.st==='blocked');
+  if(bl&&opt.blk==='stop')return stop(L,'blocked',`${bl.id} bloqueada: ${bl.why}`);
+  const next=readyTasks(L)[0];
+  if(!next)return stop(L,'idle',bl?`nada listo: lo que queda espera a ${bl.id}`:'nada listo: dependencias sin resolver');
+  if(lp.laps>=lp.max)return stop(L,'max',`máximo de vueltas (${lp.max}) con ${L.tasks.length-doneN(L)} sin hacer`);
+  lp.stale=lp.last===next.id?lp.stale+1:0;
+  if(lp.stale>=3)return stop(L,'stuck',`${next.id} sin avance tras 3 vueltas`);
+  lp.last=next.id;lp.laps++;lp.cur=next.id;lp.waiting=false;lp.stop=null;
+  return {go:true,next};
+}
+function activate(L,max){const lp=L.loop;Object.assign(lp,{on:true,laps:0,max,cur:null,last:null,stale:0,waiting:false,stop:null});return hook(L)}
+function deactivate(L){const lp=L.loop;lp.on=false;lp.cur=null;lp.waiting=false;lp.stop={k:'person',text:'detenido por ti en la vuelta '+lp.laps}}
+// the person's edits write the file, as by hand
+function setDone(L,t){t.st='done';t.why=''}
+function setBlocked(L,t,why){t.st='blocked';t.why=why.trim()||'sin motivo'}
+function reopen(L,t){t.st='todo';t.why=''}
+// 'perm' while waiting for a permission, 'ask' when the person is needed, 'done' unseen
+function attOf(L){
+  const lp=L.loop;
+  if(lp.on&&lp.waiting)return 'perm';
+  if(!lp.on&&lp.stop&&['blocked','stuck','max','idle'].includes(lp.stop.k))return 'ask';
+  if(lp.stop&&lp.stop.k==='done'&&!L.seen)return 'done';
+  return null;
+}
+const attTotal=()=>withList().filter(w=>attOf(listOf(w.id))).length;
+// the mark of a list in a row: spinner when it runs
+const markOf=L=>{const a=attOf(L),lp=L.loop;if(a)return KINDS[a];if(lp.on)return {g:'spin',c:'c-blue'};return {g:'○',c:'c-dim'}};
+const loopLine=L=>{
+  const lp=L.loop;
+  if(lp.on)return lp.waiting?`bucle en pausa: espera tu respuesta · vuelta ${lp.laps}/${lp.max}`:`bucle en marcha · vuelta ${lp.laps}/${lp.max}`;
+  if(lp.stop)return `bucle parado: ${lp.stop.text}`;
+  return 'bucle apagado';
+};
+const runLine=L=>{const t=L.loop.cur&&tById(L,L.loop.cur);return t?`${t.id} ${t.t} · ${L.loop.pane}`:''};
+const bar=(n,m,w)=>{const f=m?Math.round(w*n/m):0;return '█'.repeat(f)+'░'.repeat(w-f)};
+const filePath=w=>opt.loc==='repo'?`.jw/tasks.${opt.fmt}`:`${STATE}/tasks/${w.id}.${opt.fmt}`;
+const absPath=w=>opt.loc==='repo'?`~/ws/${w.repo||w.name}-wt/${w.branch.split('/').pop()}/.jw/tasks.${opt.fmt}`:`${STATE}/tasks/${w.id}.${opt.fmt}`;
+
+/* ---------- the screen grid, as in chats-area.html */
+function Scr(id){
+  return {id,cols:0,rows:0,g:[],
+    reset(c,r){this.cols=c;this.rows=r;this.g=Array.from({length:r},()=>Array.from({length:c},()=>[' ','']))},
+    put(r,c,t,cls){for(const ch of [...t]){if(r<0||r>=this.rows||c<0||c>=this.cols)return;this.g[r][c]=[ch,cls||''];c++}},
+    fill(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<this.cols&&r>=0&&r<this.rows)this.g[r][c+i]=[' ',cls||'']},
+    tint(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<this.cols){const x=this.g[r][c+i];x[1]=(x[1]+' '+cls).trim()}},
+    text(){return this.g.map(r=>r.map(x=>x[0]).join('').trimEnd()).join('\n')},
+    paint(){
+      const out=this.g.map(row=>{let s='',cur=null,buf='';
+        for(const [ch,cl] of row){if(cl!==cur){if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);buf='';cur=cl}buf+=ch}
+        if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);return s});
+      $(this.id).innerHTML=out.join('\n');
+    }};
+}
+const T=Scr('scr');
+
+/* ---------- state of the screens */
+function resetUi(){ui={sel:{t:'w',id:'w2'},mode:'nav',prev:'nav',det:null,ti:0,buf:'',oi:0,flash:'',fcls:'',from:'nav'}}
+function resetPh(){ph={screen:'home',id:null,sheet:null,tid:null,laps:+opt.max}}
+const keyOf=s=>s.t+':'+s.id;
+const selRows=()=>M.ws.map(w=>({t:'w',id:w.id})).concat(opt.sec==='zone'?withList().map(w=>({t:'t',id:w.id})):[]);
+function fixSel(){
+  const rows=selRows(),k=keyOf(ui.sel);
+  if(!rows.some(r=>keyOf(r)===k))ui.sel=rows[0];
+  if(ui.det&&!listOf(ui.det)){ui.det=null;ui.mode='nav'}
+  if(ui.mode==='over'&&opt.sec!=='screen')ui.mode='nav';
+}
+// the list the main area shows, if any
+const detId=()=>opt.sec==='zone'?(ui.sel.t==='t'?ui.sel.id:ui.det):ui.det;
+const curList=()=>{const id=detId();return id?listOf(id):null};
+// the list the buttons under "simular" act on: the one on screen, or else the selected row's
+const target=()=>listOf(detId())||listOf(ui.sel.id)||null;
+const say=(t,cls)=>{ui.flash=t;ui.fcls=cls||'c-green'};
+const seen=L=>{if(L&&L.loop.stop&&L.loop.stop.k==='done')L.seen=true};
+
+/* ---------- drawing the terminal */
+function markPut(S,y,x,L,w){
+  const m=markOf(L);
+  if(m.g==='spin')S.put(y,x,spin(),m.c);else S.put(y,x,m.g,m.c);
+}
+function drawSide(S,x0,w,y0){
+  const cur=keyOf(ui.sel);let y=y0;
+  S.put(y,x0+1,'WORKSPACES','c-dim');y++;
+  M.ws.forEach(wk=>{
+    const on=cur==='w:'+wk.id,L=listOf(wk.id);
+    S.put(y,x0+1,wk.panes?'●':'○',wk.panes?'c-green':'c-dim');
+    let right=0;
+    if(opt.sec==='row'&&L){const p=doneN(L)+'/'+L.tasks.length;S.put(y,x0+w-3-p.length-1,p,'c-dim');markPut(S,y,x0+w-3,L);right=p.length+3}
+    S.put(y,x0+3,clip(wk.name+(wk.branch&&wk.branch!=='main'?' ⎇ '+wk.branch:''),w-8-right),on?'c-blue c-bold':'');
+    if(on)S.tint(y,x0,w-1,'c-sel');y++});
+  if(opt.sec==='zone'&&withList().length){
+    y++;S.put(y,x0+1,'TAREAS','c-dim');S.put(y,x0+w-3,String(withList().length),'c-dim');y++;
+    withList().forEach(wk=>{
+      const on=cur==='t:'+wk.id,L=listOf(wk.id),p=doneN(L)+'/'+L.tasks.length;
+      markPut(S,y,x0+1,L);
+      S.put(y,x0+3,clip(wk.name,w-6-p.length),on?'c-blue c-bold':'');
+      S.put(y,x0+w-2-p.length,p,'c-dim');
+      if(on)S.tint(y,x0,w-1,'c-sel');y++});
+  }
+  y++;S.put(y,x0+1,'CONVERSACIONES','c-dim');S.put(y,x0+w-3,'2','c-dim');
+  S.put(ROWS-4,x0+1,clip('● workspace  ▪ lista de tareas',w-2),'c-dim');
+  S.put(ROWS-3,x0+1,clip(opt.sec==='screen'?'T tareas · L bucle':opt.sec==='row'?'T entra · L bucle':'↵ entra · L bucle',w-2),'c-dim');
+}
+function taskLine(S,x0,w,y,L,r,on){
+  const {t,lv}=r,st=stateOf(L,t),[g,gc]=G[st];
+  if(on)S.fill(y,x0,w-1,'c-sel');
+  S.put(y,x0+1,on?'❯':' ','c-blue');
+  S.put(y,x0+3,String(lv),'c-dim');
+  S.put(y,x0+5,g,gc);
+  let right='';
+  if(st==='run')right=spin()+' '+L.loop.pane;
+  else if(t.after.length)right='← '+t.after.join(', ');
+  const rw=[...right].length,nw=w-11-(rw?rw+1:0);
+  S.put(y,x0+7,t.id,on?'c-blue c-bold':'c-bold');
+  S.put(y,x0+10,clip(t.t,nw-3),st==='done'?'c-dim':st==='wait'?'c-dim':'');
+  if(rw)S.put(y,x0+w-2-rw,right,st==='run'?'c-blue':'c-dim');
+  if(on)S.tint(y,x0,w-1,'c-sel');
+}
+function drawList(S,x0,w,y0,id){
+  const wk=wsById(id),L=listOf(id),lp=L.loop,n=doneN(L),tot=L.tasks.length;
+  S.put(y0,x0+1,clip(wk.name+(wk.repo?' · '+wk.repo:'')+(wk.branch?' ⎇ '+wk.branch:''),w-3),'c-bold');
+  S.put(y0+1,x0+1,clip(filePath(wk)+' · '+n+'/'+tot+' ',w-3),'c-dim');
+  S.put(y0+1,x0+1+[...(filePath(wk)+' · '+n+'/'+tot+' ')].length,bar(n,tot,Math.max(0,Math.min(14,w-30))),n===tot?'c-green':'c-blue');
+  const lc=lp.on?(lp.waiting?'c-red':'c-blue'):lp.stop&&lp.stop.k==='done'?'c-green':lp.stop&&lp.stop.k==='person'?'c-dim':'c-yellow';
+  S.put(y0+2,x0+1,lp.on&&!lp.waiting?spin():lp.on?'!':lp.stop&&lp.stop.k==='done'?'✓':lp.stop&&lp.stop.k!=='person'?'?':'○',lc);
+  S.put(y0+2,x0+3,clip(loopLine(L),w-5),lc);
+  for(let i=0;i<w-2;i++)S.put(y0+3,x0+1+i,'─','c-dim');
+  S.put(y0+4,x0+1,'NIVEL  TAREA','c-dim');
+  let y=y0+5;const rows=ordered(L);
+  if(!rows.length)S.put(y,x0+2,'la lista está vacía','c-dim');
+  rows.forEach((r,i)=>{
+    const on=ui.mode==='list'&&ui.ti===i;
+    taskLine(S,x0,w,y,L,r,on);y++;
+    if(r.t.st==='blocked'){S.put(y,x0+10,clip('bloqueada: '+r.t.why,w-12),'c-yellow');y++}
+  });
+  y++;
+  const ln=runLine(L);
+  if(ln)S.put(y,x0+1,clip('corre ahora: '+ln,w-3),'c-blue');
+  else if(lp.stop&&lp.stop.k==='done')S.put(y,x0+1,clip('✓ '+lp.stop.text,w-3),'c-green');
+  else if(lp.stop)S.put(y,x0+1,clip((lp.stop.k==='person'?'○ ':'✗ ')+lp.stop.text,w-3),lp.stop.k==='person'?'c-dim':'c-yellow');
+  y+=2;
+  const ready=readyTasks(L);
+  if(ready.length&&!lp.on)S.put(y,x0+1,clip('jw tasks next → '+ready[0].id+' '+ready[0].t,w-3),'c-dim');
+  if(opt.par==='here'&&ready.length>1)S.put(y+1,x0+1,clip('R ejecuta '+ready.length+' en paralelo (un worktree cada una)',w-3),'c-dim');
+}
+function drawOver(S,x0,w,y0){
+  S.put(y0,x0+1,'TAREAS','c-bold');S.put(y0,x0+9,withList().length+' listas · '+attTotal()+' piden algo','c-dim');
+  for(let i=0;i<w-2;i++)S.put(y0+1,x0+1+i,'─','c-dim');
+  let y=y0+2;
+  withList().forEach((wk,i)=>{
+    const L=listOf(wk.id),on=ui.oi===i,p=doneN(L)+'/'+L.tasks.length;
+    if(on)S.fill(y,x0,w-1,'c-sel');
+    markPut(S,y,x0+1,L);S.put(y,x0+3,clip(wk.name,16),on?'c-blue c-bold':'c-bold');
+    S.put(y,x0+20,p,'c-dim');S.put(y,x0+25,bar(doneN(L),L.tasks.length,8),doneN(L)===L.tasks.length?'c-green':'c-blue');
+    S.put(y,x0+35,clip(L.loop.on?(runLine(L)||loopLine(L)):L.loop.stop?L.loop.stop.text:'apagado',w-37),L.loop.on?'c-blue':'c-dim');
+    if(on)S.tint(y,x0,w-1,'c-sel');y++;
+  });
+  if(!withList().length)S.put(y,x0+2,'ninguna lista: crea .jw/tasks.md o pídesela a un agente','c-dim');
+}
+function drawBox(S,x0,y,w,lines){
+  const bw=Math.min(w-2,Math.max(...lines.map(l=>[...l[0]].length))+4);
+  const bx=x0+Math.floor((w-bw)/2);
+  S.fill(y,bx,bw,'c-box');S.put(y,bx+1,'┌'+'─'.repeat(bw-4)+'┐','c-box c-dim');
+  lines.forEach(([t,cl],i)=>{S.fill(y+1+i,bx,bw,'c-box');S.put(y+1+i,bx+2,clip(t,bw-4),'c-box '+(cl||''))});
+  S.fill(y+1+lines.length,bx,bw,'c-box');S.put(y+1+lines.length,bx+1,'└'+'─'.repeat(bw-4)+'┘','c-box c-dim');
+}
+function drawTui(){
+  fixSel();
+  const S=T,COLS=fx.cols,narrow=COLS<64;S.reset(COLS,ROWS);
+  const L=curList(),inMain=ui.mode!=='nav';
+  let sx=0,sw=30,mx=31,mw=COLS-32;
+  const showMain=ui.mode==='over'||!!L;
+  if(narrow){
+    const mainOn=inMain&&showMain;
+    S.put(0,1,' lista ',!mainOn?'c-chip':'c-dim');S.put(0,9,' tareas ',mainOn?'c-chip':'c-dim');S.put(0,18,'↵ / esc cambian','c-dim');
+    sw=COLS;mx=0;mw=COLS;
+  }else{for(let r=0;r<ROWS-1;r++)S.put(r,30,'│',ui.mode==='nav'?'c-blue':'c-dim');S.put(0,1,'jw','c-bold c-dim')}
+  const y0=1,mainOn=narrow?(inMain&&showMain):true;
+  if(!narrow||!mainOn)drawSide(S,sx,sw,y0);
+  if(mainOn){
+    if(ui.mode==='over')drawOver(S,mx,mw,y0);
+    else if(L)drawList(S,mx,mw,y0,detId());
+    else{const w=wsById(ui.sel.id);if(w){S.put(y0,mx+1,clip(w.name,mw-3),'c-bold');
+      S.put(y0+2,mx+1,clip(listOf(w.id)?'tiene una lista · '+(opt.sec==='row'?'T la abre':'↵ la abre'):'un workspace, como hoy: shell | claude',mw-3),'c-dim')}}
+  }
+  const bx=narrow?0:mx,bw=narrow?COLS:mw,tl=target();
+  if(ui.mode==='box'){drawBox(S,bx,8,bw,[['activar el bucle en '+clip(wsById(ui.boxId).name,22),'c-bold'],['máximo de vueltas:',''],[ui.buf+'▏','c-yellow'],['el agente empieza por la primera tarea lista','c-dim']])}
+  if(ui.mode==='input'&&tl){drawBox(S,bx,8,bw,[['bloquear '+ui.tid+': ¿por qué?','c-bold'],[ui.buf+'▏','c-yellow'],['queda escrito en el archivo, como blocked:','c-dim']])}
+  drawBar(S);
+  S.paint();
+}
+function drawBar(S){
+  const COLS=fx.cols,y=ROWS-1;S.fill(y,0,COLS,'c-sel');
+  const chips={nav:ui.sel.t==='t'?' TAREAS ':' WORKSPACE ',list:' LISTA ',over:' TAREAS ',box:' BUCLE ',input:' BLOQUEAR '};
+  const chip=chips[ui.mode];S.put(y,0,chip,ui.mode==='nav'||ui.mode==='list'||ui.mode==='over'?'c-chip':'c-chipy');
+  const hints={nav:'j k · ↵ entra · L bucle'+(opt.sec==='screen'?' · T tareas':opt.sec==='row'?' · T abre':''),
+    list:'j k · d hecha · b bloquea · u reabre · L bucle · e archivo · esc',over:'j k · ↵ entra · L bucle · esc',box:'↵ activa · esc cancela',input:'↵ bloquea · esc cancela'};
+  const av=attTotal(),right=av?'avisos '+av:'',room=COLS-chip.length-(right?right.length+2:0)-3;
+  if(ui.flash)S.put(y,chip.length+1,clip(ui.flash,room),ui.fcls+' c-sel');else S.put(y,chip.length+1,clip(hints[ui.mode],room),'c-dim c-sel');
+  if(right)S.put(y,COLS-right.length-1,right,'c-yellow c-sel');
+}
+
+/* ---------- terminal keys */
+function move(d){const rows=selRows(),k=keyOf(ui.sel);let i=rows.findIndex(r=>keyOf(r)===k);i=Math.max(0,Math.min(rows.length-1,i+d));ui.sel=rows[i]}
+function enterList(id){ui.det=id;ui.mode='list';ui.ti=0;seen(listOf(id))}
+function toggleLoop(id){
+  const L=listOf(id);if(!L){say('esa fila no tiene lista','c-dim');return}
+  if(L.loop.on){deactivate(L);say('bucle detenido','c-dim')}
+  else{ui.mode='box';ui.boxId=id;ui.buf=opt.max}
+}
+function onTermKey(e){
+  const k=e.key;if(k==='Meta'||k==='Control'||k==='Shift'||k==='Alt'||e.metaKey||e.ctrlKey||e.altKey)return;
+  const m=ui.mode;ui.flash='';
+  const typing=m==='box'||m==='input';
+  if(m==='nav'){
+    const L=listOf(ui.sel.id);
+    if(k==='j'||k==='ArrowDown')move(1);else if(k==='k'||k==='ArrowUp')move(-1);
+    else if(k==='Enter'||k==='l'||k==='Tab'){if(L&&ui.sel.t==='t')enterList(ui.sel.id);else say(L&&opt.sec==='row'?'T abre su lista':'entra al workspace, como hoy','c-dim')}
+    else if(k==='T'){
+      if(opt.sec==='zone'){const t=withList()[0];if(t)ui.sel={t:'t',id:t.id};else say('ninguna lista','c-dim')}
+      else if(opt.sec==='screen'){ui.mode='over';ui.oi=0}
+      else if(L)enterList(ui.sel.id);else say('este workspace no tiene lista','c-dim');
+    }
+    else if(k==='L'){const id=ui.sel.id;ui.prev='nav';toggleLoop(id)}
+    else return;
+  }else if(m==='over'){
+    const W=withList();
+    if(k==='Escape'){ui.mode='nav'}
+    else if(k==='j'||k==='ArrowDown')ui.oi=Math.min(W.length-1,ui.oi+1);else if(k==='k'||k==='ArrowUp')ui.oi=Math.max(0,ui.oi-1);
+    else if((k==='Enter'||k==='l')&&W[ui.oi]){ui.prevOver=true;enterList(W[ui.oi].id)}
+    else if(k==='L'&&W[ui.oi]){ui.prev='over';toggleLoop(W[ui.oi].id)}
+    else return;
+  }else if(m==='list'){
+    const id=detId(),L=listOf(id),rows=ordered(L),r=rows[ui.ti];
+    if(k==='Escape'||k==='h'){ui.mode=opt.sec==='screen'&&ui.prevOver?'over':'nav';if(opt.sec!=='zone'&&ui.mode==='nav')ui.det=null;ui.prevOver=false}
+    else if(k==='j'||k==='ArrowDown')ui.ti=Math.min(rows.length-1,ui.ti+1);else if(k==='k'||k==='ArrowUp')ui.ti=Math.max(0,ui.ti-1);
+    else if(k==='d'&&r){setDone(L,r.t);say(r.t.id+' hecha · escrito en '+filePath(wsById(id)),'c-green')}
+    else if(k==='u'&&r){reopen(L,r.t);say(r.t.id+' reabierta','c-dim')}
+    else if(k==='b'&&r){ui.mode='input';ui.tid=r.t.id;ui.buf='';ui.back='list'}
+    else if(k==='L'){ui.prev='list';toggleLoop(id)}
+    else if(k==='e')say('abre '+filePath(wsById(id))+' en el visor de Markdown (N150)','c-dim');
+    else if(k==='R'&&opt.par==='here')say('jw tasks run: '+readyTasks(L).length+' worktrees (aparte, sin implementar)','c-yellow');
+    else return;
+  }else if(m==='box'){
+    if(k==='Escape'){ui.mode=ui.prev}
+    else if(k==='Enter'){const n=Math.max(1,Math.min(99,parseInt(ui.buf,10)||+opt.max)),L=listOf(ui.boxId);
+      const r=activate(L,n);ui.mode=ui.prev;say(r.go?'bucle en marcha: vuelta 1/'+n+', empieza '+r.next.id:'no arranca: '+L.loop.stop.text,r.go?'c-green':'c-yellow')}
+    else if(k==='Backspace')ui.buf=ui.buf.slice(0,-1);
+    else if(/^[0-9]$/.test(k)&&ui.buf.length<2)ui.buf+=k;else return;
+  }else if(m==='input'){
+    if(k==='Escape')ui.mode='list';
+    else if(k==='Enter'){const id=detId(),L=listOf(id);setBlocked(L,tById(L,ui.tid),ui.buf);ui.mode='list';say(ui.tid+' bloqueada','c-yellow')}
+    else if(k==='Backspace')ui.buf=[...ui.buf].slice(0,-1).join('');
+    else if(k.length===1)ui.buf+=k;else return;
+  }
+  e.preventDefault&&e.preventDefault();drawAll();
+}
+
+/* ---------- the phone */
+const mk=L=>{const m=markOf(L);return m.g==='spin'?`<span class="sp ${m.c}">${SPIN[0]}</span>`:`<span class="${m.c}">${m.g}</span>`};
+function rowSub(L){return L.loop.on?(runLine(L)||loopLine(L)):L.loop.stop?L.loop.stop.text:'bucle apagado'}
+function listRow(w){const L=listOf(w.id);return `<button class="row1" data-list="${w.id}"><span class="o">${mk(L)}</span><span class="nm"><b>${esc(w.name)}</b><span>${esc(rowSub(L))}</span></span><span class="mk c-dim">${doneN(L)}/${L.tasks.length}</span></button>`}
+function homeHtml(){
+  const av=attTotal(),W=withList();
+  let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span>${opt.sec==='screen'&&W.length?`<button class="ib" data-go="over" aria-label="tareas">☑${av?`<span class="bdg">${av}</span>`:''}</button>`:''}<button class="ib">🔔${av?`<span class="bdg">${av}</span>`:''}</button></div><div class="list">`;
+  h+=`<div class="sec"><span>WORKSPACES · ${M.ws.length}</span></div>`;
+  M.ws.forEach(w=>{const L=listOf(w.id),chip=opt.sec==='row'&&L?`<span class="mk">${mk(L)} <span class="c-dim">${doneN(L)}/${L.tasks.length}</span></span>`:'';
+    h+=`<button class="row1" data-ws="${w.id}"><span class="o ${w.panes?'c-green':'c-dim'}">●</span><span class="nm"><b>${esc(w.name)}</b><span>${esc(w.branch||'carpeta')} · ${w.panes} panel${w.panes>1?'es':''}</span></span>${chip}</button>`});
+  if(opt.sec==='zone'&&W.length){h+=`<div class="sec"><span>TAREAS · ${W.length}</span></div>`;W.forEach(w=>{h+=listRow(w)})}
+  h+=`<div class="sec"><span>CONVERSACIONES · 2</span></div>`;
+  return h+'</div>';
+}
+function overHtml(){
+  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div class="tt"><b>tareas</b><span class="sub">${withList().length} listas · ${attTotal()} piden algo</span></div></div><div class="list">`;
+  withList().forEach(w=>{h+=listRow(w)});return h+'</div>';
+}
+function detHtml(){
+  const L=listOf(ph.id);if(!L)return homeHtml();
+  const w=wsById(ph.id),lp=L.loop,n=doneN(L),tot=L.tasks.length;
+  seen(L);
+  let h=`<div class="hd"><button class="ib" data-go="${opt.sec==='screen'?'over':'home'}">‹</button><div class="tt"><b>${esc(w.name)}</b><span class="sub">${esc(filePath(w))}</span></div><button class="ib" data-act="file">⋯</button></div><div class="list">`;
+  const lc=lp.on?(lp.waiting?'c-red':'c-blue'):lp.stop&&lp.stop.k==='done'?'c-green':lp.stop&&lp.stop.k==='person'?'c-dim':'c-yellow';
+  h+=`<div class="card"><div class="l1"><span class="${lc}">${lp.on&&!lp.waiting?`<span class="sp">${SPIN[0]}</span>`:lp.on?'!':lp.stop&&lp.stop.k==='done'?'✓':lp.stop&&lp.stop.k!=='person'?'?':'○'}</span><b>${esc(lp.on?'vuelta '+lp.laps+'/'+lp.max:lp.stop?'parado':'bucle apagado')}</b>`
+    +`<span class="bar ${n===tot?'c-green':'c-blue'}">${bar(n,tot,8)}</span><span class="c-dim">${n}/${tot}</span></div>`
+    +`<div class="l2">${esc(lp.on?(lp.waiting?'espera tu respuesta en '+lp.pane:(runLine(L)||'')):lp.stop?lp.stop.text:'la lista no corre sola: actívala')}</div>`
+    +`<div style="margin-top:8px"><button data-act="${lp.on?'off':'loop'}">${lp.on?'detener el bucle':'activar el bucle…'}</button></div></div>`;
+  ordered(L).forEach(r=>{
+    const st=stateOf(L,r.t),[g,gc]=G[st],sub=r.t.st==='blocked'?'bloqueada: '+r.t.why:st==='run'?L.loop.pane+' · vuelta '+L.loop.laps:r.t.after.length?'← '+r.t.after.join(', '):'sin dependencias';
+    h+=`<button class="row1 tk ${st==='run'?'cur':''}" data-task="${r.t.id}"><span class="lv">${r.lv}</span><span class="o ${gc}">${st==='run'?`<span class="sp">${SPIN[0]}</span>`:g}</span><span class="nm"><b>${esc(r.t.id+' '+r.t.t)}</b><span class="${r.t.st==='blocked'?'c-yellow':''}">${esc(sub)}</span></span></button>`});
+  return h+'</div>';
+}
+function sheetHtml(){
+  const L=listOf(ph.id);if(!ph.sheet||!L)return '';
+  if(ph.sheet==='loop')return `<div class="grab"></div><h3>activar el bucle</h3><p>El agente empieza por la primera tarea lista y sigue hasta terminar, bloquearse o llegar al máximo.</p>
+  <div class="chips">${[10,20,40].map(n=>`<button class="chip" data-laps="${n}" aria-pressed="${ph.laps===n}">${n} vueltas</button>`).join('')}</div>
+  <button class="act" data-act="go"><span><span class="c-blue">▶</span>  empezar</span><small>máx ${ph.laps}</small></button><div class="cancel" data-act="cancel">cancelar</div>`;
+  if(ph.sheet==='block')return `<div class="grab"></div><h3>bloquear ${esc(ph.tid)}</h3><input class="inp" id="why" placeholder="¿por qué?" autocomplete="off">
+  <button class="act" data-act="doblock"><span>bloquear</span><small>queda en el archivo</small></button><div class="cancel" data-act="cancel">cancelar</div>`;
+  const t=tById(L,ph.tid);if(!t)return '';
+  return `<div class="grab"></div><h3>${esc(clip(t.id+' '+t.t,34))}</h3>
+  ${t.st==='todo'?`<button class="act" data-act="done"><span><span class="c-green">✓</span>  marcar hecha</span></button><button class="act" data-act="block"><span><span class="c-yellow">✗</span>  bloquear…</span><small>con motivo</small></button>`:`<button class="act" data-act="reopen"><span>reabrir</span><small>${t.st==='done'?'hecha':'bloqueada'} → pendiente</small></button>`}
+  <div class="cancel" data-act="cancel">cancelar</div>`;
+}
+function renderPhone(){
+  const l=document.querySelector('.list'),st=l?l.scrollTop:0;
+  const body=ph.screen==='det'?detHtml():ph.screen==='over'&&opt.sec==='screen'?overHtml():homeHtml();
+  const chip=ph.screen==='det'?'LISTA':ph.screen==='over'?'TAREAS':'HOME',run=withList().filter(w=>listOf(w.id).loop.on).length;
+  $('screen').innerHTML=body+`<div class="status"><span class="chipb">${chip}</span><span>wifi · conectado</span><span class="sp1"></span>${run?`<span class="c-blue"><span class="sp">${SPIN[0]}</span> ${run}</span>`:''}</div>`;
+  const l2=document.querySelector('.list');if(l2)l2.scrollTop=st;
+  const keep=$('why')?$('why').value:'';
+  $('sheet').innerHTML=sheetHtml();$('back').classList.toggle('on',!!ph.sheet);
+  if($('why')){$('why').value=keep;$('why').focus()}
+}
+let toastT;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2600)}
+function onPhoneClick(t){
+  const q=s=>t.closest(s);let el;const L=listOf(ph.id);
+  if(q('#back')&&!q('.sheet')){ph.sheet=null}
+  else if((el=q('[data-laps]'))){ph.laps=+el.dataset.laps}
+  else if((el=q('[data-act]'))){
+    const a=el.dataset.act;
+    if(a==='cancel')ph.sheet=null;
+    else if(a==='loop'){ph.laps=+opt.max;ph.sheet='loop'}
+    else if(a==='off'){deactivate(L);toast('bucle detenido')}
+    else if(a==='go'){const r=activate(L,ph.laps);ph.sheet=null;toast(r.go?'en marcha: empieza '+r.next.id:'no arranca: '+L.loop.stop.text)}
+    else if(a==='done'){setDone(L,tById(L,ph.tid));ph.sheet=null;toast(ph.tid+' hecha')}
+    else if(a==='reopen'){reopen(L,tById(L,ph.tid));ph.sheet=null;toast(ph.tid+' reabierta')}
+    else if(a==='block'){ph.sheet='block'}
+    else if(a==='doblock'){setBlocked(L,tById(L,ph.tid),$('why').value);ph.sheet=null;toast(ph.tid+' bloqueada')}
+    else if(a==='file')toast('abre '+filePath(wsById(ph.id))+' en el visor');
+  }
+  else if((el=q('[data-list]'))){ph.id=el.dataset.list;ph.screen='det'}
+  else if((el=q('[data-task]'))){ph.tid=el.dataset.task;ph.sheet='task'}
+  else if((el=q('[data-go]'))){ph.screen=el.dataset.go;ph.sheet=null}
+  else if((el=q('[data-ws]'))){const w=el.dataset.ws;if(opt.sec==='row'&&listOf(w)){ph.id=w;ph.screen='det'}else toast('entra al workspace, como hoy')}
+  drawAll();
+}
+
+/* ---------- the CLI, the file and what the hook says: same state */
+function fileText(w){
+  const L=listOf(w.id);if(!L)return '(sin lista)';
+  const T=L.tasks,ch={done:'x',blocked:'!',todo:' '};
+  if(opt.fmt==='json')return T.map(t=>JSON.stringify({id:t.id,title:t.t,after:t.after,status:t.st,...(t.why?{why:t.why}:{})})).join('\n');
+  if(opt.fmt==='toml')return T.map(t=>`[[task]]\nid = "${t.id}"\ntitle = "${t.t}"\n`+(t.after.length?`after = [${t.after.map(a=>'"'+a+'"').join(', ')}]\n`:'')+`status = "${t.st}"`+(t.why?`\nwhy = "${t.why}"`:'')).join('\n\n');
+  return `# ${w.name}\n\n`+T.map(t=>{
+    const keys=[];if(t.after.length)keys.push('after: '+t.after.join(', '));if(t.st==='blocked')keys.push('blocked: '+t.why);
+    return `- [${ch[t.st]}] ${t.id} ${t.t}`+(keys.length?` (${keys.join('; ')})`:'');
+  }).join('\n');
+}
+function drawCli(){
+  const w=wsById(target()?(detId()||ui.sel.id):ui.sel.id)||M.ws[1],L=listOf(w.id),pad=(s,n)=>(s+' '.repeat(n)).slice(0,n);
+  if(!L){$('cli').textContent=`$ jw tasks ls\nsin lista en ${w.name}: ${filePath(w)} no existe\n`;$('file').textContent='(sin lista)';$('hook').textContent='(el bucle no está activo)';$('file-note').textContent='';return}
+  let o=`# en ${w.name}\n$ jw tasks ls\n`+pad('NIVEL',7)+pad('ID',5)+pad('ESTADO',10)+pad('TAREA',28)+'ESPERA A\n';
+  const nm={done:'hecha',run:'corre',ready:'lista',wait:'espera',blocked:'bloqueada'};
+  ordered(L).forEach(r=>{const s=stateOf(L,r.t);o+=pad(r.lv,7)+pad(r.t.id,5)+pad(nm[s],10)+pad(clip(r.t.t,26),28)+(r.t.after.join(', ')||'—')+(r.t.st==='blocked'?'   «'+r.t.why+'»':'')+'\n'});
+  o+=`${doneN(L)}/${L.tasks.length} hechas · ${loopLine(L)}\n`;
+  const nx=readyTasks(L)[0],run=L.loop.cur&&tById(L,L.loop.cur);
+  o+=`\n$ jw tasks next\n`+(run?`${run.id} ${run.t}   # la que corre ahora\n`:nx?`${nx.id} ${nx.t}\n`:'nada listo\n');
+  const t0=run||nx;
+  o+=`$ jw tasks done ${t0?t0.id:'t1'}\n$ jw tasks block ${t0?t0.id:'t1'} "falta la clave de Stripe"\n$ jw tasks loop status\n${loopLine(L)}\n$ jw tasks loop on --max ${opt.max}    # off para detenerlo\n`;
+  if(opt.par==='here')o+=`$ jw tasks run --parallel 3    # un worktree por tarea lista, un agente en cada una (aparte)\n`;
+  $('cli').textContent=o;
+  $('file').textContent='# '+filePath(w)+'\n'+fileText(w);
+  $('file-note').textContent=opt.loc==='repo'
+    ?`Ruta completa de esta lista: ${absPath(w)}. En el repo: se versiona, cada worktree tiene su copia y las casillas marcadas salen en el diff del PR.`
+    :`Ruta completa: ${absPath(w)}. Fuera del repo: no sale en git ni en el PR, y un agente de otro worktree no la ve.`;
+  const h=L.loop.on&&!L.loop.waiting&&nx&&!run?nx:run;
+  $('hook').textContent=L.loop.on&&h
+    ?`# lo que devuelve jw hook stop (vuelta ${L.loop.laps}/${L.loop.max}), llega como «Stop hook feedback»\n{"decision":"block","reason":"Siguiente tarea lista en ${filePath(w)}: ${h.id} ${h.t}${h.after.length?' (after: '+h.after.join(', ')+')':''}.\\nHazla, márcala con \`jw tasks done ${h.id}\` y acaba el turno.\\nSi necesitas a la persona, no preguntes: \`jw tasks block ${h.id} \\"motivo\\"\`."}`
+    :`# el bucle no está en marcha: jw hook stop no escribe nada y el agente para.\n${L.loop.stop?'# último motivo: '+L.loop.stop.text:''}`;
+}
+
+/* ---------- the buttons "simular": what the agent does in the chosen list */
+function onControl(b){
+  const id=detId()||ui.sel.id,L=listOf(id);
+  if(b==='reset'){seed(false);resetUi();resetPh()}
+  else if(b==='none'){seed(true);resetUi();resetPh()}
+  else if(!L){say('elige una fila con lista','c-dim')}
+  else{
+    const lp=L.loop,cur=lp.cur&&tById(L,lp.cur);
+    if(b==='perm'){if(lp.on)lp.waiting=true;else say('el bucle no está en marcha','c-dim')}
+    else if(b==='allow')lp.waiting=false;
+    else if(!lp.on)say('el bucle no está en marcha: actívalo con L','c-dim');
+    else if(lp.waiting)say('espera un permiso: el gancho no se llama hasta que contestes','c-yellow');
+    else{
+      if(b==='finish'&&cur)setDone(L,cur);
+      else if(b==='block'&&cur)setBlocked(L,cur,'falta una decisión de producto');
+      hook(L);
+    }
+  }
+  drawAll();
+}
+function drawAll(){drawTui();renderPhone();drawCli()}
+function tick(){drawTui();if(typeof document.querySelectorAll==='function')document.querySelectorAll('.sp').forEach(e=>e.textContent=spin())}
+
+seed(false);resetUi();resetPh();
+if(typeof document!=='undefined'&&typeof document.addEventListener==='function'){
+  $('term').addEventListener('keydown',onTermKey);
+  document.addEventListener('click',e=>{const t=e.target;if(!t.closest)return;
+    if(t.closest('.ctl')){const b=t.dataset.b;if(b)onControl(b);return}
+    if(t.closest('#phone'))onPhoneClick(t)});
+  document.addEventListener('change',e=>{const t=e.target;
+    if(t.dataset&&t.dataset.o){opt[t.dataset.o]=t.value;ui.det=null;ui.mode='nav';resetPh();drawAll()}
+    else if(t.id==='f-cols'){fx.cols=+t.value;drawAll()}});
+  drawAll();
+  if(typeof setInterval==='function'&&typeof window!=='undefined'){setInterval(tick,110);$('term').focus()}
+}
+</script></body></html>
