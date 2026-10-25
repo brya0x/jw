@@ -19,12 +19,9 @@ fn hook(env: &Env, pane: Option<&str>, event: &str, stdin: &str) -> std::process
         cmd.env(identity::env_var("PANE_ID"), p);
     }
     let mut child = cmd.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
+    // The hook leaves without reading stdin for an event it does not know or outside a pane, so
+    // the pipe may be closed already.
+    let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
     child.wait().unwrap()
 }
 

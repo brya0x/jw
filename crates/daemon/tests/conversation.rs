@@ -2229,7 +2229,8 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
     });
     let starts: Vec<String> = log_lines(&log)
         .into_iter()
-        .filter(|l| l.starts_with("start"))
+        // the pane that comes back runs `claude --resume` too: only the engine says `stream-json`
+        .filter(|l| l.starts_with("start") && l.contains("stream-json"))
         .collect();
     assert!(
         starts.last().unwrap().contains("--resume") && starts.last().unwrap().contains(&session)
