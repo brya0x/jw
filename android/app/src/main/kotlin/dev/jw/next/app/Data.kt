@@ -38,6 +38,7 @@ import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
+import dev.jw.next.contract.TaskOp
 import dev.jw.next.contract.TextDoc
 import dev.jw.next.contract.Verdict
 import dev.jw.next.contract.ViewKind
@@ -108,6 +109,10 @@ class FixtureSource(context: Context) : AppSource() {
 
     override fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
         reply(found(nodes.values.filterIsInstance<Node.Commits>().firstOrNull { !it.more }))
+    }
+
+    override fun openTasks(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(found(nodes.values.filterIsInstance<Node.Tasks>().firstOrNull()))
     }
 }
 
@@ -189,6 +194,22 @@ abstract class ProtocolSource : AppSource() {
 
     override fun openArtifacts(workspace: Id, reply: (Result<Id>) -> Unit) {
         command(Cmd.OpenArtifacts(workspace)) { reply(it.nodeId()) }
+    }
+
+    override fun openTasks(workspace: Id, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenTasks(workspace)) { reply(it.nodeId()) }
+    }
+
+    override fun editTask(workspace: Id, op: TaskOp, id: String, text: String?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.TasksEdit(workspace, op, id, text)) { reply(it.done("el PC no pudo cambiar la tarea")) }
+    }
+
+    override fun loopOn(workspace: Id, max: Int, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.TasksLoopOn(workspace, max)) { reply(it.done("el PC no pudo encender el bucle")) }
+    }
+
+    override fun loopOff(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.TasksLoopOff(workspace)) { reply(it.done("el PC no pudo apagar el bucle")) }
     }
 
     override fun readArtifact(id: Id, n: Int?, reply: (Result<ArtifactDoc>) -> Unit) {

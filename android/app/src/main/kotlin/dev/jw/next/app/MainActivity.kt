@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -25,6 +26,9 @@ import dev.jw.next.client.Look
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Pairing
 import dev.jw.next.client.Screen
+import dev.jw.next.client.TASKS_TAB
+import dev.jw.next.client.TasksNotice
+import dev.jw.next.client.TasksNotices
 import dev.jw.next.client.parsePairLink
 import kotlinx.coroutines.flow.first
 
@@ -185,6 +189,12 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(state.seen) { store.save(state.seen) }
         LaunchedEffect(state.folded) { folds.save(pc, state.folded) }
         BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos || state.screen is Screen.Archived) { state = nav.back(state) }
+        // A loop that stops while the app is open is said over any screen; the first session of a connection says nothing (REQ-933).
+        val notices = remember(source, epoch) { TasksNotices() }
+        var banner by remember(source) { mutableStateOf<TasksNotice?>(null) }
+        val version = source.tick.intValue
+        LaunchedEffect(version) { notices.update(source.session()).lastOrNull()?.let { banner = it } }
+        Box(Modifier.fillMaxSize()) {
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
             is Screen.Archived -> ArchivedScreen(source, state, nav) { state = it }
@@ -197,6 +207,8 @@ class MainActivity : ComponentActivity() {
                 SettingsScreen(state, nav, look, osDark, pc, setLook) { state = it }
             }
             else -> HomeScreen(source, state, nav) { state = it }
+        }
+        banner?.let { b -> TasksBanner(b, open = { banner = null; state = nav.openWorkspace(state, b.workspace, TASKS_TAB) }, dismiss = { banner = null }) }
         }
     }
 }

@@ -89,6 +89,8 @@ class TasksTest {
         assertEquals("checkout: t3 blocked: needs STRIPE_KEY in .env", news[0].text)
         assertFalse(news[0].good)
         assertTrue(notices.update(session).isEmpty())
+        val off = session.copy(workspaces = session.workspaces.map { if (it.name == "api-v2") it.copy(tasks = it.tasks?.copy(on = false, stop = LoopStop(StopKind.Person, "apagado"))) else it })
+        assertTrue(notices.update(off).isEmpty(), "a loop the person turned off is not news")
         val first = TasksNotices()
         assertTrue(first.update(session).isEmpty())
     }
@@ -102,5 +104,34 @@ class TasksTest {
         assertTrue(w.want(have = false, listed = true, nowMs = 3000))
         assertFalse(w.want(have = true, listed = true, nowMs = 3100))
         assertTrue(w.want(have = false, listed = true, nowMs = 3200))
+    }
+
+    private val ws = node("snapshot-workspace-views") as Node.Workspace
+    private fun navigatorOver(listed: Boolean): Navigator {
+        val w = ws.copy(id = session.workspaces[1].id)
+        val s = if (listed) session else session.copy(workspaces = session.workspaces.map { it.copy(tasks = null) })
+        return Navigator(object : NodeSource {
+            override val epoch = s.epoch
+            override fun session() = s
+            override fun node(id: String): Node? = if (id == w.id) w else null
+        })
+    }
+
+    @Test
+    fun theTasksTabStaysWhileTheRowHasAListAndGivesWayToTheFirstPaneWhenItGoes() {
+        val id = session.workspaces[1].id
+        val at = ClientState(screen = Screen.Workspace(id, TASKS_TAB))
+        assertEquals(at, navigatorOver(true).settle(at))
+        assertEquals(ws.panes.first().id, (navigatorOver(false).settle(at).screen as Screen.Workspace).pane)
+    }
+
+    @Test
+    fun theTasksTabLeavesNoFakeNodeInTheSeenRecord() {
+        val id = session.workspaces[1].id
+        val nav = navigatorOver(true)
+        val at = nav.selectPane(ClientState(screen = Screen.Workspace(id, null)), TASKS_TAB)
+        assertEquals(Screen.Workspace(id, TASKS_TAB), at.screen)
+        assertFalse(at.seen.toJson().contains(TASKS_TAB))
+        assertFalse(nav.openWorkspace(ClientState(), id, TASKS_TAB).seen.toJson().contains(TASKS_TAB))
     }
 }

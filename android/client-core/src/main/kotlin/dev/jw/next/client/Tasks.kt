@@ -138,7 +138,8 @@ class TasksNotices {
         if (before == null) return emptyList()
         return session.workspaces.mapNotNull { w ->
             val stop = w.tasks?.stop ?: return@mapNotNull null
-            if (before[w.id] == stop) null
+            // A loop the person turned off was seen by whoever pressed the button (REQ-911).
+            if (before[w.id] == stop || stop.kind == StopKind.Person) null
             else TasksNotice(w.id, "${w.shown()}: ${stop.text}", stop.kind == StopKind.Done)
         }
     }

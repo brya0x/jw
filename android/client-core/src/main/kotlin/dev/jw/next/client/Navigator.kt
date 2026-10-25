@@ -389,7 +389,7 @@ class Navigator(private val source: NodeSource) {
         val ws = source.node(id) as? Node.Workspace
         val target = pane ?: ws?.panes?.firstOrNull()?.id
         var seen = markNode(s.seen, id)
-        if (target != null) seen = markNode(seen, target)
+        if (target != null && target != TASKS_TAB) seen = markNode(seen, target)
         // The workspace's group opens, so that the list shows where it is on the way back (REQ-697).
         val group = source.session().workspaces.firstOrNull { it.id == id }?.group
         return ClientState(
@@ -421,7 +421,8 @@ class Navigator(private val source: NodeSource) {
 
     fun selectPane(s: ClientState, pane: Id): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s
-        return s.copy(screen = at.copy(pane = pane), seen = markNode(s.seen, pane))
+        // The tasks tab is no node: it has nothing to mark seen.
+        return s.copy(screen = at.copy(pane = pane), seen = if (pane == TASKS_TAB) s.seen else markNode(s.seen, pane))
     }
 
     /** A tap on the line of an attention in a Home row, or on an Avisos item: open the pane it names (REQ-34). */
