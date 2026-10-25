@@ -80,7 +80,8 @@
             "output": { "type": "array", "items": { "type": "string" } },
             "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
             "url": { "type": "string" },
-            "by": { "type": "string" }
+            "by": { "type": "string" },
+            "lost": { "const": true }
           }
         },
         {
@@ -140,7 +141,8 @@
         "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
         "plan": { "type": "array", "items": { "type": "string" } },
         "options": { "type": "array", "items": { "$ref": "#/$defs/AskOption" }, "minItems": 1 },
-        "multi": { "const": true }
+        "multi": { "const": true },
+        "restored": { "const": true }
       }
     },
     "TaskKind": { "enum": ["agent", "bash", "monitor", "loop", "other"] },

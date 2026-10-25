@@ -123,6 +123,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }
     }
 

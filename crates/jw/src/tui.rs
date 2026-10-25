@@ -14959,6 +14959,7 @@ mod tests {
                 option("no", "Seguir planeando"),
             ],
             multi: false,
+            restored: false,
         }
     }
 

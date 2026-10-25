@@ -39,6 +39,7 @@ pub(crate) fn advisor_row(id: &str) -> Item {
         diff: Vec::new(),
         url: None,
         by: None,
+        lost: false,
     }
 }
 
@@ -523,6 +524,8 @@ struct Pending {
     input: Value,
     tool_use_id: Option<String>,
     session_rule: Option<String>,
+    /// The request came from a subagent (`agent_id`): not kept for a restart (REQ-848).
+    nested: bool,
 }
 
 /// What a conversation is. The first group is saved; the rest is about now.
@@ -561,6 +564,8 @@ pub struct State {
     pub status: ConvStatus,
     pub since: Option<u64>,
     pending: Option<Pending>,
+    /// The permission the saved file kept, until the transcript says whether it still waits (REQ-847).
+    saved_pending: Option<SavedPending>,
     queue: VecDeque<Queued>,
     pub tasks: Vec<Task>,
     pub todos: Vec<Todo>,
@@ -651,6 +656,20 @@ pub struct Saved {
     /// The `/` list the engine gave, so a conversation that comes back has it before its engine does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<ConvCommand>,
+    /// The permission that waited when it was saved: the transcript cannot tell it from a tool that runs (REQ-847).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<SavedPending>,
+}
+
+/// A permission that waits, as the saved file keeps it (REQ-847, REQ-848).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedPending {
+    pub tool_use_id: String,
+    pub tool: String,
+    pub input: Value,
+    /// «Allow for this session» was offered.
+    #[serde(default)]
+    pub suggested: bool,
 }
 
 pub const SAVED_VERSION: u32 = 1;
@@ -778,6 +797,7 @@ impl State {
             status: ConvStatus::Idle,
             since: None,
             pending: None,
+            saved_pending: None,
             queue: VecDeque::new(),
             tasks: Vec::new(),
             todos: Vec::new(),
@@ -825,6 +845,7 @@ impl State {
         st.mode = saved.mode;
         st.before_plan = saved.before_plan.filter(|_| saved.mode == Mode::Plan);
         st.has_transcript = saved.has_transcript;
+        st.saved_pending = saved.pending;
         st.first = saved.first;
         st.legacy = !saved.items.is_empty();
         st.stamps = vec![(saved.saved_at, true); saved.items.len()];
@@ -891,6 +912,15 @@ impl State {
         self.first = u32::try_from(skip + from).unwrap_or(u32::MAX);
         self.live_texts.clear();
         self.followed_queue = t.waiting();
+        // The items are made again: the tool that asks stays the one that asks.
+        let asking = self
+            .pending
+            .as_ref()
+            .filter(|p| p.ask.restored)
+            .and_then(|p| p.tool_use_id.clone());
+        if let Some(id) = asking {
+            self.set_tool(&id, |t| t.0 = ToolState::Ask);
+        }
         if let Some(mode) = t.mode {
             self.change_mode(mode);
         }
@@ -1097,7 +1127,61 @@ impl State {
             model_arg: None,
             effort_arg: None,
             commands: self.commands.clone(),
+            pending: self.pending.as_ref().and_then(|p| {
+                if !matches!(p.kind, Kind::Permission) || p.nested {
+                    return None;
+                }
+                Some(SavedPending {
+                    tool_use_id: p.tool_use_id.clone()?,
+                    tool: p.ask.tool.clone(),
+                    input: p.input.clone(),
+                    suggested: p.session_rule.is_some(),
+                })
+            }),
         }
+    }
+
+    /// Whether a permission waits that the saved file keeps: answering it takes it out of the file (REQ-848).
+    pub fn records_permission(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, Kind::Permission) && !p.nested)
+    }
+
+    /// Ask again what the conversation was waiting for when the daemon stopped (REQ-846, REQ-847): a
+    /// question or a plan the transcript ends with, or the permission the saved file kept if the
+    /// transcript still has its call and no result. A session another `claude` holds is not asked in.
+    pub fn restore_ask(&mut self, parser: Option<&crate::transcript::Parser>) -> Vec<Effect> {
+        let record = self.saved_pending.take();
+        let Some(parser) = parser.filter(|_| self.held.is_none()) else {
+            return Vec::new();
+        };
+        let (tool, input, id, suggested) = if let Some(a) = parser
+            .open_ask
+            .as_ref()
+            .filter(|a| a.tool != "AskUserQuestion" || !parse_questions(&a.input).is_empty())
+        {
+            (a.tool.clone(), a.input.clone(), a.id.clone(), false)
+        } else if let Some(r) = record.filter(|r| parser.has_no_result(&r.tool_use_id)) {
+            (r.tool, r.input, r.tool_use_id, r.suggested)
+        } else {
+            return Vec::new();
+        };
+        // The same road a live request takes, so the ask, the tool's state and the attention are the same.
+        let mut request = json!({
+            "subtype": "can_use_tool",
+            "tool_name": tool,
+            "input": input,
+            "tool_use_id": id,
+        });
+        if suggested {
+            request["permission_suggestions"] = json!([{}]);
+        }
+        let fx = self.control_request(&json!({"request_id": id, "request": request}));
+        if let Some(p) = &mut self.pending {
+            p.ask.restored = true;
+        }
+        fx
     }
 
     /// The node's document.
@@ -1289,6 +1373,12 @@ impl State {
         let Some(p) = self.pending.as_ref().filter(|p| p.ask.id == ask) else {
             return Err("that question is not waiting".into());
         };
+        // Its engine is gone: the answer that starts another comes with N179b.
+        if p.ask.restored {
+            return Err(
+                "that question was waiting before a restart and cannot be answered yet".into(),
+            );
+        }
         // The keys of a question are the numbers of its options, many at once for a choice of several.
         if !matches!(p.kind, Kind::Question(_)) && !p.ask.options.iter().any(|o| o.key == key) {
             return Err(format!("{key} is not one of its answers"));
@@ -1931,6 +2021,7 @@ impl State {
                         output: Vec::new(),
                         url: None,
                         by: None,
+                        lost: false,
                     });
                 }
                 // The advisor is consulted by the API itself: the call and its answer are blocks
@@ -2314,6 +2405,7 @@ impl State {
         let tool = req["tool_name"].as_str().unwrap_or("").to_owned();
         let input = req["input"].clone();
         let tool_use_id = req["tool_use_id"].as_str().map(str::to_owned);
+        let nested = !req["agent_id"].is_null();
         // What Claude asks the person (a choice, a plan) is not a permission: it has its own box (REQ-435, REQ-436).
         let questions = parse_questions(&input);
         if tool == "AskUserQuestion" && !questions.is_empty() {
@@ -2329,6 +2421,7 @@ impl State {
                     input,
                     tool_use_id,
                     session_rule: None,
+                    nested,
                 },
                 AttentionKind::Question,
             );
@@ -2343,6 +2436,7 @@ impl State {
                     input,
                     tool_use_id,
                     session_rule: None,
+                    nested,
                 },
                 AttentionKind::Plan,
             );
@@ -2383,6 +2477,7 @@ impl State {
             plan: Vec::new(),
             options,
             multi: false,
+            restored: false,
         };
         self.wait(
             Pending {
@@ -2392,6 +2487,7 @@ impl State {
                 input,
                 tool_use_id,
                 session_rule: suggested.then_some(rule),
+                nested,
             },
             AttentionKind::Permission,
         )
@@ -2891,6 +2987,7 @@ fn question_ask(request: &str, at: usize, q: &Q) -> Ask {
             })
             .collect(),
         multi: q.multi,
+        restored: false,
     }
 }
 
@@ -2934,6 +3031,7 @@ fn plan_ask(request: &str, input: &Value, back: Option<Mode>) -> Ask {
             },
         ],
         multi: false,
+        restored: false,
     }
 }
 
@@ -3400,6 +3498,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }];
         let back = State::restored(saved, "20:00");
         assert!(matches!(
@@ -3648,6 +3747,74 @@ mod tests {
     fn can_use(id: &str, tool: &str, input: Value, suggested: bool) -> Value {
         json!({"type": "control_request", "request_id": id, "request": {"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": "toolu_x",
             "permission_suggestions": if suggested { json!([{"type": "addRules"}]) } else { json!([]) }}})
+    }
+
+    /// REQ-848: a permission is kept for a restart unless a subagent asked it; a question or a plan is not kept (the transcript has them).
+    #[test]
+    fn only_a_permission_that_the_main_agent_asked_is_kept_for_a_restart() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&can_use("r1", "Bash", json!({"command": "ls"}), true), 1);
+        let kept = s.saved(0).pending.expect("a permission waits");
+        assert_eq!(
+            (
+                kept.tool.as_str(),
+                kept.tool_use_id.as_str(),
+                kept.suggested
+            ),
+            ("Bash", "toolu_x", true)
+        );
+        let mut nested = can_use("r2", "Bash", json!({"command": "ls"}), false);
+        nested["request"]["agent_id"] = json!("a1");
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&nested, 1);
+        assert!(s.pending.is_some() && s.saved(0).pending.is_none());
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(
+            &can_use("r3", "ExitPlanMode", json!({"plan": "# Plan"}), false),
+            1,
+        );
+        assert!(s.pending.is_some() && s.saved(0).pending.is_none());
+    }
+
+    /// REQ-846: the items are made again when the transcript grows, and the tool of a restored ask is still the one that asks.
+    #[test]
+    fn making_the_items_again_leaves_the_tool_of_a_restored_ask_asking() {
+        let call = json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"}]}]}}]}});
+        let text = json!({"type":"user","message":{"role":"user","content":"hola"}}).to_string()
+            + "\n"
+            + &call.to_string()
+            + "\n";
+        let parser = crate::transcript::parse(&text);
+        let mut s = State::resumed("old".into(), Some(&parser));
+        let fx = s.restore_ask(Some(&parser));
+        assert!(matches!(
+            fx.as_slice(),
+            [Effect::Raise(AttentionKind::Question)]
+        ));
+        assert!(s.pending.as_ref().is_some_and(|p| p.ask.restored));
+        s.follow(&parser);
+        assert!(
+            matches!(
+                s.items.last(),
+                Some(Item::Tool {
+                    state: ToolState::Ask,
+                    ..
+                })
+            ),
+            "{:?}",
+            s.items.last()
+        );
+        // a session another `claude` holds is not asked in
+        let mut held = State::resumed("old".into(), Some(&parser));
+        held.set_held(Some(Held {
+            pid: 1,
+            cwd: "/x".into(),
+            busy: false,
+        }));
+        assert!(held.restore_ask(Some(&parser)).is_empty() && held.pending.is_none());
     }
 
     /// REQ-605: a plan entered from `auto` offers to go back to it; from any other mode, or when the
@@ -4710,6 +4877,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }
     }
 
@@ -4943,6 +5111,7 @@ mod tests {
                 diff: Vec::new(),
                 url: None,
                 by: None,
+                lost: false,
             },
         );
         s.follow(&t);

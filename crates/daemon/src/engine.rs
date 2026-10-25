@@ -489,7 +489,11 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
         drop(core);
         // A turn that ended is on disk at once: a daemon stopped by a signal has no last save.
         // So is the answer to a reload's `initialize`, which comes after its `result` (REQ-758).
-        if msg["type"] == "result" || msg["type"] == "control_response" {
+        // A permission that waits is on disk as well: a restart finds it there (REQ-848).
+        if msg["type"] == "result"
+            || msg["type"] == "control_response"
+            || (msg["type"] == "control_request" && msg["request"]["subtype"] == "can_use_tool")
+        {
             save_due(shared, true);
         }
     }
@@ -797,8 +801,11 @@ pub fn open_conversation(
             file.display()
         ));
     }
+    let mut asked = Vec::new();
     if lazy {
         st.set_held(crate::sessions::holder(env.as_ref(), &st.session, None));
+        // What it was waiting for when the daemon stopped is asked again, once we know no other `claude` has it (REQ-846).
+        asked = st.restore_ask(source.as_ref().map(|s| &s.parser));
     }
     let mut extra: Vec<String> = Vec::new();
     for d in &parsed.add_dirs {
@@ -851,6 +858,7 @@ pub fn open_conversation(
                 stub_seen: false,
             },
         );
+        run_effects(&mut core, pane, asked);
         core.refresh();
     }
     if !lazy && let Err(e) = start_engine(shared, pane) {
@@ -1020,15 +1028,24 @@ pub fn answer(
 ) -> Done {
     let mut core = shared.lock();
     let pane = pane_of(&core, node)?;
-    let fx = {
+    let (fx, recorded) = {
         let c = core
             .convs
             .get_mut(&pane)
             .ok_or_else(|| no_conversation(node))?;
         c.dirty = true;
-        c.st.answer(ask, key, text, by)
-            .map_err(|m| err(ErrorCode::Conflict, m))?
+        let recorded = c.st.records_permission();
+        let fx =
+            c.st.answer(ask, key, text, by)
+                .map_err(|m| err(ErrorCode::Conflict, m))?;
+        (fx, recorded)
     };
+    // The file stops saying the permission waits before the engine is told it was answered (REQ-848).
+    if recorded {
+        drop(core);
+        save_due(shared, true);
+        core = shared.lock();
+    }
     run_effects(&mut core, &pane, fx);
     core.refresh();
     Ok(None)
@@ -1052,11 +1069,20 @@ pub fn stop_task(shared: &Shared, node: &str, task: &str) -> Done {
 pub fn interrupt(shared: &Shared, node: &str) -> Done {
     let mut core = shared.lock();
     let pane = pane_of(&core, node)?;
+    let recorded = core
+        .convs
+        .get(&pane)
+        .is_some_and(|c| c.st.records_permission());
     let fx = core
         .convs
         .get_mut(&pane)
         .map(|c| c.st.interrupt())
         .unwrap_or_default();
+    if recorded {
+        drop(core);
+        save_due(shared, true);
+        core = shared.lock();
+    }
     run_effects(&mut core, &pane, fx);
     core.refresh();
     Ok(None)
@@ -1445,6 +1471,9 @@ type Due = (PathBuf, Saved, Option<Probe>);
 /// The conversations that changed and are due are written without the lock: only what is
 /// to be written is copied under it.
 pub fn save_due(shared: &Shared, force: bool) {
+    // One save at a time, from the copy to the rename: a copy made earlier must not land over a later one (REQ-848).
+    static SAVING: Mutex<()> = Mutex::new(());
+    let _one = SAVING.lock().unwrap_or_else(|p| p.into_inner());
     type Cached = Option<(PathBuf, Vec<ConvCommand>)>;
     let (due, chosen, cached): (Vec<Due>, Option<(PathBuf, Mode)>, Cached) = {
         let mut core = shared.lock();

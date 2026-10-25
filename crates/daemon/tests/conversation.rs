@@ -2670,3 +2670,153 @@ fn a_verdict_for_a_pane_without_a_conversation_or_a_pane_that_is_gone_is_kept_an
         .join("\n");
     assert_eq!(kept.matches("\"delivered\":\"none\"").count(), 2);
 }
+
+/// The file that a conversation is saved in, read (REQ-392).
+fn saved_file(r: &Rig) -> Option<Value> {
+    let dir = r.sb.dir.join("state/conversations");
+    let file = std::fs::read_dir(dir).ok()?.flatten().find_map(|e| {
+        let p = e.path();
+        (p.extension()? == "json").then_some(p)
+    })?;
+    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
+fn tool_call(tool: &str, id: &str, input: &str) -> String {
+    format!(
+        r#"{{"type":"assistant","timestamp":"2026-10-13T19:00:02.000Z","message":{{"model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{id}","name":"{tool}","input":{input}}}]}}}}"#
+    )
+}
+
+const QUESTION: &str = r#"{"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"},{"label":"B","description":"b"}],"multiSelect":false}]}"#;
+
+/// REQ-848: a permission that waits is in the saved file at once, and the file stops saying so before
+/// the engine is told it was answered.
+#[test]
+fn a_permission_that_waits_is_in_the_saved_file_until_it_is_answered() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "please edit auth");
+    let v = r.until(&node, "the permission", |v| v["status"] == "asking");
+    wait_for("the permission in the saved file", || {
+        saved_file(&r).is_some_and(|s| s["pending"]["tool"] == "Edit")
+    });
+    let saved = saved_file(&r).unwrap();
+    assert!(
+        saved["pending"]["tool_use_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("toolu_e")),
+        "{saved}"
+    );
+    assert_eq!(saved["pending"]["input"]["file_path"], "src/auth.rs");
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: v["ask"]["id"].as_str().unwrap().to_owned(),
+        key: "yes".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    assert!(
+        saved_file(&r).unwrap().get("pending").is_none(),
+        "the answer returned with the file still saying the permission waits"
+    );
+    r.stop();
+}
+
+/// REQ-846, REQ-849: the question or the plan that a transcript ends with is asked again, marked and
+/// with its tool asking, and no engine starts to show it; REQ-859's lines of a settled one are not asked.
+#[test]
+fn a_question_or_a_plan_that_the_transcript_ends_with_comes_back_asked_with_no_engine() {
+    for (tool, input, kind) in [
+        ("AskUserQuestion", QUESTION, "question"),
+        ("ExitPlanMode", r##"{"plan":"# Plan\n1. hacer"}"##, "plan"),
+    ] {
+        let mut r = rig();
+        let call = tool_call(tool, "toolu_open", input);
+        let (_file, env) = old_session(&r, &[FIRST, REPLY, &call]);
+        let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+        let v = r.conv(&node);
+        assert_eq!(v["ask"]["kind"], kind, "{v:#}");
+        assert_eq!(v["ask"]["restored"], true);
+        // The id is the call's, and a question's gets the number of the one asked (as when live).
+        let id = if kind == "plan" {
+            "toolu_open"
+        } else {
+            "toolu_open:0"
+        };
+        assert_eq!(v["ask"]["id"], id);
+        assert_eq!(v["status"], "asking");
+        assert_eq!(items(&v, "tool").last().unwrap()["state"], "ask");
+        wait_for("the mark of the ask", || {
+            let _ = r.client.poll(Duration::from_millis(20));
+            kinds(&r.client, &r.pane) == [kind]
+        });
+        assert!(log_lines(&r.log).is_empty(), "no engine starts to show it");
+        // Until what answers it exists, an answer is refused and the ask stays (N179b).
+        let e = r
+            .cmd(Cmd::ConversationAnswer {
+                node: node.clone(),
+                ask: id.into(),
+                key: if kind == "plan" { "accept" } else { "0" }.into(),
+                text: None,
+                by: None,
+            })
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Conflict);
+        assert_eq!(r.conv(&node)["ask"]["restored"], true);
+        r.stop();
+    }
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let settled = r#"{"type":"user","timestamp":"2026-10-13T19:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_open","is_error":true,"content":"[Tool call interrupted: the session ended before this call's result was recorded]"}]}}"#;
+    let (_file, env) = old_session(&r, &[FIRST, REPLY, &call, settled]);
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let v = r.conv(&node);
+    assert!(v.get("ask").is_none(), "{v:#}");
+    assert_ne!(v["status"], "asking");
+    r.stop();
+}
+
+/// REQ-847: a permission comes back only when the saved file kept it and the transcript still has its
+/// call with no result; a tool that has no result and no record may be running, so nothing is asked.
+#[test]
+fn a_permission_comes_back_only_with_its_record_and_a_call_with_no_result() {
+    let case = |record: bool, result: bool| -> Value {
+        let mut r = rig();
+        let call = tool_call("Bash", "toolu_b1", r#"{"command":"touch probe-file"}"#);
+        let done = r#"{"type":"user","timestamp":"2026-10-13T19:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b1","content":"ok"}]}}"#;
+        let mut lines = vec![FIRST, REPLY, call.as_str()];
+        if result {
+            lines.push(done);
+        }
+        let (_file, env) = old_session(&r, &lines);
+        if record {
+            let dir = r.sb.dir.join("state/conversations");
+            std::fs::create_dir_all(&dir).unwrap();
+            let saved = serde_json::json!({
+                "v": 1, "saved_at": 1, "name": "x", "named": false, "accent": "blue", "model": "claude",
+                "effort": "high", "mode": "manual", "session": "old-session", "has_transcript": true,
+                "first": 0, "items": [], "cost": 0,
+                "pending": {"tool_use_id": "toolu_b1", "tool": "Bash", "input": {"command": "touch probe-file"}},
+            });
+            std::fs::write(dir.join(format!("{}.json", r.pane)), saved.to_string()).unwrap();
+        }
+        let (node, _) = r.open_with(Some("old-session"), Vec::new(), Some(env));
+        let v = r.conv(&node);
+        r.stop();
+        v
+    };
+    let v = case(true, false);
+    assert_eq!(v["ask"]["kind"], "permission", "{v:#}");
+    assert_eq!(v["ask"]["restored"], true);
+    assert_eq!(v["ask"]["command"], "touch probe-file");
+    assert_eq!(v["status"], "asking");
+    assert!(
+        case(true, true).get("ask").is_none(),
+        "the call has its result: it was answered"
+    );
+    assert!(
+        case(false, false).get("ask").is_none(),
+        "no record: the call may be running, so it is not asked again"
+    );
+}

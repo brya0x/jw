@@ -1415,6 +1415,7 @@ impl Ui {
                 diff,
                 url,
                 by,
+                ..
             } => {
                 let mut head = vec![
                     ("● ".to_owned(), Style::fg(state_colour(*state))),
@@ -5006,6 +5007,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }];
         let (_, rows) = frame(&Ui::default(), &conv);
         let joined = rows.join("\n");
@@ -7415,6 +7417,7 @@ mod tests {
                 })
                 .collect(),
             multi,
+            restored: false,
         });
         c
     }
@@ -7717,6 +7720,7 @@ mod tests {
                 },
             ],
             multi: false,
+            restored: false,
         });
         let mut ui = Ui::default();
         let (_, rows) = frame(&ui, &c);
@@ -7827,6 +7831,7 @@ mod tests {
                 },
             ],
             multi: false,
+            restored: false,
         });
         let mut ui = Ui::default();
         let (_, rows) = frame(&ui, &c);

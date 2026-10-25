@@ -5,7 +5,7 @@
 //! conversation is opened and then the lines that are added, so a session another `claude` is
 //! writing is followed. The engine does not send any of it again when it resumes.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -41,9 +41,22 @@ pub struct Stamped {
 }
 
 /// What the lines read so far say of a conversation.
+/// The last question or plan Claude asked that nothing has answered, nor anything been written
+/// after: what a conversation that comes back asks again (REQ-846).
+#[derive(Debug, Clone)]
+pub struct OpenAsk {
+    pub tool: String,
+    pub id: String,
+    pub input: Value,
+}
+
 #[derive(Debug, Default)]
 pub struct Parser {
     pub items: Vec<Stamped>,
+    /// The question or the plan that waits for the person at the end of the lines, if one does.
+    pub open_ask: Option<OpenAsk>,
+    /// The tools that have a result in the lines, so one that has none is told from one that has.
+    results: HashSet<String>,
     /// The mode it was in last.
     pub mode: Option<Mode>,
     /// The model of Claude's last message, as the engine names it.
@@ -77,6 +90,11 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// Whether the lines have this tool's call and no result for it: it waited, ran or was left behind.
+    pub fn has_no_result(&self, id: &str) -> bool {
+        self.tools.contains_key(id) && !self.results.contains(id)
+    }
+
     /// The start of the turn that is open, when the last lines say one is.
     pub fn turn_since(&self) -> Option<u64> {
         self.turn
@@ -333,6 +351,7 @@ impl Parser {
                 "text" => {
                     let text = block["text"].as_str().unwrap_or("");
                     if !text.trim().is_empty() {
+                        self.open_ask = None;
                         self.push(Item::Text {
                             blocks: crate::markdown::conversation_blocks(text),
                             text: text.to_owned(),
@@ -347,6 +366,13 @@ impl Parser {
                         continue;
                     }
                     let id = block["id"].as_str().unwrap_or("").to_owned();
+                    if matches!(name, "AskUserQuestion" | "ExitPlanMode") {
+                        self.open_ask = Some(OpenAsk {
+                            tool: name.to_owned(),
+                            id: id.clone(),
+                            input: block["input"].clone(),
+                        });
+                    }
                     self.tools_in_turn += 1;
                     self.tools.insert(id.clone(), self.items.len());
                     // In an open turn a tool with no result yet runs; in one that ended, a tool
@@ -369,6 +395,7 @@ impl Parser {
                         diff: edit_diff(name, &block["input"]),
                         url: None,
                         by: None,
+                        lost: false,
                     });
                 }
                 // The advisor is consulted by the API itself: the call and its answer are blocks
@@ -440,6 +467,9 @@ impl Parser {
             ),
         };
         let t = text.trim();
+        if !t.is_empty() {
+            self.open_ask = None;
+        }
         if self.own
             && (t.starts_with("[Request interrupted")
                 || t.starts_with("<command-")
@@ -482,6 +512,12 @@ impl Parser {
 
     /// What a tool answered: its state, a line that says it and the first lines of its output.
     fn result(&mut self, block: &Value, detail: &Value) {
+        if let Some(id) = block["tool_use_id"].as_str() {
+            self.results.insert(id.to_owned());
+            if self.open_ask.as_ref().is_some_and(|a| a.id == id) {
+                self.open_ask = None;
+            }
+        }
         let Some(at) = block["tool_use_id"]
             .as_str()
             .and_then(|id| self.tools.get(id))
@@ -1166,6 +1202,76 @@ mod tests {
         line(
             serde_json::json!({"type":who,"timestamp":"2026-10-13T19:52:42.093Z","message":{"role":who,"content":[{"type":"text","text":text}],"model":"m"}}),
         )
+    }
+
+    fn calls(tool: &str, id: &str, input: Value) -> String {
+        line(serde_json::json!({"type":"user","message":{"role":"user","content":"pregunta"}}))
+            + &line(
+                serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":id,"name":tool,"input":input}]}}),
+            )
+    }
+
+    fn answers(id: &str, text: &str) -> String {
+        line(
+            serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":id,"is_error":true,"content":text}]}}),
+        )
+    }
+
+    /// REQ-846: a question or a plan that nothing answered, with nothing written after it, is what waits.
+    #[test]
+    fn a_question_or_a_plan_with_no_result_and_nothing_after_it_is_open() {
+        let q = serde_json::json!({"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"}]}]});
+        let t = parse(&calls("AskUserQuestion", "q1", q.clone()));
+        let open = t.open_ask.as_ref().expect("the question waits");
+        assert_eq!(
+            (open.tool.as_str(), open.id.as_str()),
+            ("AskUserQuestion", "q1")
+        );
+        assert_eq!(open.input, q);
+        let t = parse(&calls(
+            "ExitPlanMode",
+            "p1",
+            serde_json::json!({"plan":"# Plan"}),
+        ));
+        assert_eq!(t.open_ask.as_ref().map(|a| a.id.as_str()), Some("p1"));
+        assert!(
+            parse(&calls("Bash", "b1", serde_json::json!({"command":"ls"})))
+                .open_ask
+                .is_none()
+        );
+    }
+
+    /// REQ-846: what Claude writes after the call (a result, the interruption, a message of its own or of the person's) closes it.
+    #[test]
+    fn anything_written_after_the_call_closes_the_open_question() {
+        let call = calls("AskUserQuestion", "q1", serde_json::json!({"questions":[]}));
+        let closing = [
+            answers(
+                "q1",
+                "[Tool call interrupted: the session ended before this call's result was recorded]",
+            ),
+            line(
+                serde_json::json!({"type":"user","message":{"role":"user","content":"[Request interrupted by user for tool use]"}}),
+            ),
+            say("assistant", "No response requested."),
+            say("user", "elegí la B"),
+        ];
+        for after in closing {
+            assert!(
+                parse(&(call.clone() + &after)).open_ask.is_none(),
+                "{after}"
+            );
+        }
+        assert!(parse(&call).open_ask.is_some());
+    }
+
+    /// REQ-847: a call with no result is told from one that has it, and from one the lines do not have.
+    #[test]
+    fn a_tool_without_a_result_is_told_from_one_that_has_it() {
+        let call = calls("Bash", "b1", serde_json::json!({"command":"ls"}));
+        assert!(parse(&call).has_no_result("b1"));
+        assert!(!parse(&(call.clone() + &answers("b1", "x"))).has_no_result("b1"));
+        assert!(!parse(&call).has_no_result("other"));
     }
 
     /// REQ-545: what is added to the transcript is read when it is whole, and only that.
