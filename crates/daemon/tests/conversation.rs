@@ -2682,6 +2682,408 @@ fn a_verdict_for_a_pane_without_a_conversation_or_a_pane_that_is_gone_is_kept_an
     assert_eq!(kept.matches("\"delivered\":\"none\"").count(), 2);
 }
 
+/// The file that a conversation is saved in, read (REQ-392).
+fn saved_file(r: &Rig) -> Option<Value> {
+    let dir = r.sb.dir.join("state/conversations");
+    let file = std::fs::read_dir(dir).ok()?.flatten().find_map(|e| {
+        let p = e.path();
+        (p.extension()? == "json").then_some(p)
+    })?;
+    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
+fn tool_call(tool: &str, id: &str, input: &str) -> String {
+    format!(
+        r#"{{"type":"assistant","timestamp":"2026-10-13T19:00:02.000Z","message":{{"model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{id}","name":"{tool}","input":{input}}}]}}}}"#
+    )
+}
+
+const QUESTION: &str = r#"{"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"},{"label":"B","description":"b"}],"multiSelect":false}]}"#;
+
+/// REQ-877: a permission that waits is in the saved file at once, and the file stops saying so before
+/// the engine is told it was answered.
+#[test]
+fn a_permission_that_waits_is_in_the_saved_file_until_it_is_answered() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "please edit auth");
+    let v = r.until(&node, "the permission", |v| v["status"] == "asking");
+    wait_for("the permission in the saved file", || {
+        saved_file(&r).is_some_and(|s| s["pending"]["tool"] == "Edit")
+    });
+    let saved = saved_file(&r).unwrap();
+    assert!(
+        saved["pending"]["tool_use_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("toolu_e")),
+        "{saved}"
+    );
+    assert_eq!(saved["pending"]["input"]["file_path"], "src/auth.rs");
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: v["ask"]["id"].as_str().unwrap().to_owned(),
+        key: "yes".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    assert!(
+        saved_file(&r).unwrap().get("pending").is_none(),
+        "the answer returned with the file still saying the permission waits"
+    );
+    r.stop();
+}
+
+/// REQ-875, REQ-878: the question or the plan that a transcript ends with is asked again, marked and
+/// with its tool asking, and no engine starts to show it; REQ-888's lines of a settled one are not asked.
+#[test]
+fn a_question_or_a_plan_that_the_transcript_ends_with_comes_back_asked_with_no_engine() {
+    for (tool, input, kind) in [
+        ("AskUserQuestion", QUESTION, "question"),
+        ("ExitPlanMode", r##"{"plan":"# Plan\n1. hacer"}"##, "plan"),
+    ] {
+        let mut r = rig();
+        let call = tool_call(tool, "toolu_open", input);
+        let (_file, env) = old_session(&r, &[FIRST, REPLY, &call]);
+        let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+        let v = r.conv(&node);
+        assert_eq!(v["ask"]["kind"], kind, "{v:#}");
+        assert_eq!(v["ask"]["restored"], true);
+        // The id is the call's, and a question's gets the number of the one asked (as when live).
+        let id = if kind == "plan" {
+            "toolu_open"
+        } else {
+            "toolu_open:0"
+        };
+        assert_eq!(v["ask"]["id"], id);
+        assert_eq!(v["status"], "asking");
+        assert_eq!(items(&v, "tool").last().unwrap()["state"], "ask");
+        wait_for("the mark of the ask", || {
+            let _ = r.client.poll(Duration::from_millis(20));
+            kinds(&r.client, &r.pane) == [kind]
+        });
+        assert!(log_lines(&r.log).is_empty(), "no engine starts to show it");
+        // Its answer starts an engine that resumes the session, in the mode the answer means, and is its first message (REQ-879, REQ-880).
+        let (key, mode, said) = if kind == "plan" {
+            (
+                "accept",
+                "acceptEdits",
+                "Aprobado: seguí con el plan y editá sin preguntar.",
+            )
+        } else {
+            ("1", "manual", "Elegí «B» para «¿Letra?»")
+        };
+        r.cmd(Cmd::ConversationAnswer {
+            node: node.clone(),
+            ask: id.into(),
+            key: key.into(),
+            text: None,
+            by: None,
+        })
+        .unwrap();
+        wait_for("the answer as the first message", || {
+            log_lines(&r.log)
+                .iter()
+                .any(|l| *l == format!("user {}", serde_json::to_string(said).unwrap()))
+        });
+        let started = log_lines(&r.log);
+        assert!(
+            started[0].contains("\"--resume\", \"old-session\"")
+                && started[0].contains(&format!("\"--permission-mode\", \"{mode}\"")),
+            "{started:?}"
+        );
+        let v = r.until(&node, "the ask gone", |v| v.get("ask").is_none());
+        assert!(items(&v, "user").iter().any(|u| u["text"] == said), "{v:#}");
+        assert_ne!(
+            items(&v, "tool").last().unwrap()["state"],
+            "run",
+            "the call of before the restart has no result on the stream: it ends with the answer"
+        );
+        r.stop();
+    }
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let settled = r#"{"type":"user","timestamp":"2026-10-13T19:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_open","is_error":true,"content":"[Tool call interrupted: the session ended before this call's result was recorded]"}]}}"#;
+    let (_file, env) = old_session(&r, &[FIRST, REPLY, &call, settled]);
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let v = r.conv(&node);
+    assert!(v.get("ask").is_none(), "{v:#}");
+    assert_ne!(v["status"], "asking");
+    r.stop();
+}
+
+/// REQ-876: a permission comes back only when the saved file kept it and the transcript still has its
+/// call with no result; a tool that has no result and no record may be running, so nothing is asked.
+#[test]
+fn a_permission_comes_back_only_with_its_record_and_a_call_with_no_result() {
+    let case = |record: bool, result: bool| -> Value {
+        let mut r = rig();
+        let call = tool_call("Bash", "toolu_b1", r#"{"command":"touch probe-file"}"#);
+        let done = r#"{"type":"user","timestamp":"2026-10-13T19:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b1","content":"ok"}]}}"#;
+        let mut lines = vec![FIRST, REPLY, call.as_str()];
+        if result {
+            lines.push(done);
+        }
+        let (_file, env) = old_session(&r, &lines);
+        if record {
+            let dir = r.sb.dir.join("state/conversations");
+            std::fs::create_dir_all(&dir).unwrap();
+            let saved = serde_json::json!({
+                "v": 1, "saved_at": 1, "name": "x", "named": false, "accent": "blue", "model": "claude",
+                "effort": "high", "mode": "manual", "session": "old-session", "has_transcript": true,
+                "first": 0, "items": [], "cost": 0,
+                "pending": {"tool_use_id": "toolu_b1", "tool": "Bash", "input": {"command": "touch probe-file"}},
+            });
+            std::fs::write(dir.join(format!("{}.json", r.pane)), saved.to_string()).unwrap();
+        }
+        let (node, _) = r.open_with(Some("old-session"), Vec::new(), Some(env));
+        let v = r.conv(&node);
+        r.stop();
+        v
+    };
+    let v = case(true, false);
+    assert_eq!(v["ask"]["kind"], "permission", "{v:#}");
+    assert_eq!(v["ask"]["restored"], true);
+    assert_eq!(v["ask"]["command"], "touch probe-file");
+    assert_eq!(v["status"], "asking");
+    assert!(
+        case(true, true).get("ask").is_none(),
+        "the call has its result: it was answered"
+    );
+    assert!(
+        case(false, false).get("ask").is_none(),
+        "no record: the call may be running, so it is not asked again"
+    );
+}
+
+/// REQ-881, REQ-882: a permission that waited before a restart, answered yes, starts the engine with the
+/// message, and the call Claude makes again for it is allowed once, not asked a second time.
+#[test]
+fn a_restored_permission_answered_yes_is_allowed_when_claude_proposes_it_again() {
+    let mut r = rig();
+    let call = tool_call(
+        "Edit",
+        "toolu_e9",
+        r#"{"file_path":"src/auth.rs","old_string":"a < b","new_string":"a <= b"}"#,
+    );
+    let (_file, env) = old_session(&r, &[FIRST, REPLY, &call]);
+    let dir = r.sb.dir.join("state/conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = serde_json::json!({
+        "v": 1, "saved_at": 1, "name": "x", "named": false, "accent": "blue", "model": "claude",
+        "effort": "high", "mode": "manual", "session": "old-session", "has_transcript": true,
+        "first": 0, "items": [], "cost": 0,
+        "pending": {"tool_use_id": "toolu_e9", "tool": "Edit",
+            "input": {"file_path": "src/auth.rs", "old_string": "a < b", "new_string": "a <= b"}},
+    });
+    std::fs::write(dir.join(format!("{}.json", r.pane)), saved.to_string()).unwrap();
+    let (node, _) = r.open_with(Some("old-session"), Vec::new(), Some(env));
+    let v = r.conv(&node);
+    assert_eq!(v["ask"]["restored"], true, "{v:#}");
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: "toolu_e9".into(),
+        key: "yes".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    let v = r.idle_after(&node, 1);
+    assert!(v.get("ask").is_none(), "asked a second time: {v:#}");
+    assert!(
+        items(&v, "text").iter().any(|t| t["text"] == "Hecho."),
+        "the engine was told yes and the edit ran: {v:#}"
+    );
+    assert!(
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l == r#"user "Sí, adelante con Edit src/auth.rs""#)
+    );
+    r.stop();
+}
+
+/// REQ-883: an answer whose engine cannot start is refused and the ask stays as it was.
+#[test]
+fn an_answer_whose_engine_cannot_start_is_refused_and_the_ask_stays() {
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let (_file, mut env) = old_session(&r, &[FIRST, REPLY, &call]);
+    env.insert("PATH".into(), "/nonexistent".into());
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let e = r
+        .cmd(Cmd::ConversationAnswer {
+            node: node.clone(),
+            ask: "toolu_open:0".into(),
+            key: "0".into(),
+            text: None,
+            by: None,
+        })
+        .unwrap_err();
+    assert_ne!(e.code, ErrorCode::Conflict, "the answer was fine: {e:?}");
+    let v = r.conv(&node);
+    assert_eq!(v["ask"]["restored"], true, "{v:#}");
+    assert_eq!(v["status"], "asking");
+    r.stop();
+}
+
+/// A message sent while a restored ask is shown starts the engine; the answer then goes to that engine and
+/// does not start a second one on the same session.
+#[test]
+fn answering_a_restored_ask_after_a_message_started_the_engine_starts_no_second_one() {
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let (_file, env) = old_session(&r, &[FIRST, REPLY, &call]);
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    r.send(&node, "hola otra vez");
+    wait_for("the engine to start", || {
+        log_lines(&r.log).iter().any(|l| l.starts_with("start "))
+    });
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: "toolu_open:0".into(),
+        key: "0".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    wait_for("the answer as a message", || {
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l.starts_with("user \"Elegí"))
+    });
+    let starts = log_lines(&r.log)
+        .iter()
+        .filter(|l| l.starts_with("start "))
+        .count();
+    assert_eq!(starts, 1, "{:?}", log_lines(&r.log));
+    r.stop();
+}
+
+/// REQ-885: a daemon that stops ends the group of an engine that has an ask waiting at once, with its input
+/// still open (Claude would answer the ask itself and retry it), and keeps the ask in the saved file; an engine
+/// that has none has its input closed and ends by itself.
+#[test]
+fn a_daemon_that_stops_ends_an_engine_with_an_ask_waiting_at_once_and_closes_the_others() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "please edit auth");
+    r.until(&node, "the permission", |v| v["status"] == "asking");
+    wait_for("the permission in the saved file", || {
+        saved_file(&r).is_some_and(|s| s["pending"]["tool"] == "Edit")
+    });
+    r.daemon.take().unwrap().stop();
+    assert!(
+        !log_lines(&r.log).iter().any(|l| l == "eof"),
+        "its input was closed: {:?}",
+        log_lines(&r.log)
+    );
+    assert_eq!(saved_file(&r).unwrap()["pending"]["tool"], "Edit");
+    r.stop();
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "hola");
+    r.idle_after(&node, 1);
+    r.daemon.take().unwrap().stop();
+    assert!(
+        log_lines(&r.log).iter().any(|l| l == "eof"),
+        "its input was closed: {:?}",
+        log_lines(&r.log)
+    );
+    r.stop();
+}
+
+/// REQ-886: an engine that ends by itself with an ask waiting does not take it away: it waits as after a restart,
+/// and its answer starts another engine whose first message says it (the call is allowed once, REQ-882).
+#[test]
+fn an_engine_that_dies_with_an_ask_waiting_leaves_it_asked_and_its_answer_starts_another() {
+    let sb = Sandbox::new();
+    let pidfile = sb.dir.join("engine.pid");
+    let mut r = rig_with(
+        sb,
+        vec![(
+            "FAKE_PIDFILE".into(),
+            pidfile.to_string_lossy().into_owned(),
+        )],
+    );
+    let (node, _) = r.open();
+    r.send(&node, "please edit auth");
+    let v = r.until(&node, "the permission", |v| v["status"] == "asking");
+    let ask = v["ask"]["id"].as_str().unwrap().to_owned();
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    // only the pid it recorded
+    std::process::Command::new("kill")
+        .args(["-9", &pid])
+        .status()
+        .unwrap();
+    let v = r.until(&node, "the engine gone", |v| {
+        items(v, "note")
+            .iter()
+            .any(|n| n["text"].as_str().is_some_and(|t| t.contains("el motor")))
+    });
+    assert_eq!(v["status"], "asking", "{v:#}");
+    assert_eq!(v["ask"]["restored"], true);
+    assert_eq!(items(&v, "tool").last().unwrap()["state"], "ask");
+    wait_for("the mark of the ask", || {
+        let _ = r.client.poll(Duration::from_millis(20));
+        kinds(&r.client, &r.pane) == ["permission"]
+    });
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask,
+        key: "yes".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    let v = r.idle_after(&node, 1);
+    assert!(
+        items(&v, "text").iter().any(|t| t["text"] == "Hecho."),
+        "{v:#}"
+    );
+    assert!(v.get("ask").is_none());
+    r.stop();
+}
+
+/// A conversation stopped in its first turn is saved with its own items and no transcript: what it asked is
+/// still found in the transcript the engine had written, and its answer resumes the session (REQ-875, REQ-754).
+#[test]
+fn a_conversation_stopped_in_its_first_turn_brings_its_question_back() {
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let (_file, env) = old_session(&r, &[FIRST, &call]);
+    let dir = r.sb.dir.join("state/conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = serde_json::json!({
+        "v": 1, "saved_at": 1, "name": "x", "named": true, "accent": "blue", "model": "claude",
+        "effort": "high", "mode": "manual", "session": "old-session", "has_transcript": false,
+        "first": 0, "cost": 0,
+        "items": [
+            {"t": "user", "text": "hola"},
+            {"t": "tool", "id": "toolu_open", "name": "AskUserQuestion", "arg": "¿Letra?", "state": "run"},
+        ],
+    });
+    std::fs::write(dir.join(format!("{}.json", r.pane)), saved.to_string()).unwrap();
+    let (node, _) = r.open_with(Some("old-session"), Vec::new(), Some(env));
+    let v = r.conv(&node);
+    assert_eq!(v["ask"]["restored"], true, "{v:#}");
+    assert_eq!(v["ask"]["kind"], "question");
+    assert_eq!(items(&v, "tool").last().unwrap()["state"], "ask");
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: "toolu_open:0".into(),
+        key: "1".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    wait_for("the engine to resume the session", || {
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l.starts_with("start ") && l.contains("\"--resume\", \"old-session\""))
+    });
+    r.stop();
+}
+
 /// A rig whose installed `claude` (the stand-in, which says `installed` when asked its version)
 /// is only read, never updated (`notify`), and whose engine says 2.1.309 in its `init`.
 fn rig_installed(installed: &str) -> Rig {

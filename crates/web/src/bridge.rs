@@ -389,7 +389,8 @@ fn admit<S: Link>(ws: &mut WebSocket<S>, ctx: &Ctx, key: &str) -> Option<String>
     .then_some(device)
 }
 
-/// The reply to a command a phone must not send, which only the PC's own tools may: `mobile_*`
+/// The reply to a command a phone must not send, which only the PC's own tools may: `stop` (the daemon is
+/// stopped from the PC) and `mobile_*`
 /// (REQ-84, the phone link cannot be reconfigured through the phone link) and the two that put
 /// an artifact in or take it out (REQ-774, the phone only looks and decides). Everything else
 /// is forwarded: this forbids what it names, it does not allow by a list (RISK-110).
@@ -404,6 +405,8 @@ fn refused_control(text: &str) -> Option<String> {
         "the phone link is controlled from the PC"
     } else if matches!(cmd, "artifact_publish" | "artifact_rm") {
         "artifacts are published and removed from the PC"
+    } else if cmd == "stop" {
+        "the daemon is stopped from the PC"
     } else {
         return None;
     };
@@ -513,11 +516,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_mobile_and_the_two_artifact_commands_are_refused() {
+    fn only_mobile_stop_and_the_two_artifact_commands_are_refused() {
         for (id, cmd) in [
             ("c1", "mobile_stop"),
             ("c3", "artifact_publish"),
             ("c4", "artifact_rm"),
+            ("c5", "stop"),
         ] {
             let text = format!(r#"{{"t":"cmd","id":"{id}","cmd":{{"cmd":"{cmd}"}}}}"#);
             let v: serde_json::Value =

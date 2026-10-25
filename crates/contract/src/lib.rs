@@ -496,6 +496,9 @@ pub enum Cmd {
     },
     /// Turn the phone link off; connected phones are dropped, paired devices are kept.
     MobileStop {},
+    /// Stop the daemon as it stops when it ends by itself: its engines are ended as REQ-638 and
+    /// REQ-885 say, what waits is saved, and the socket goes. The reply comes before it ends.
+    Stop {},
     /// Open the conversation of `pane` (the pane runs `claude`): a new one, or the one of
     /// `resume`. `args` are the flags `claude` was typed with that the engine serves; `env`
     /// is the environment it was typed in, which the engine runs with. The result is

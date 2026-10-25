@@ -283,6 +283,16 @@ impl Daemon {
     }
 
     /// Block until the daemon is stopped (it is stopped by killing the process).
+    /// A client asked the daemon to stop (`Cmd::Stop`).
+    pub fn stop_requested(&self) -> bool {
+        self.shared.lock().stop_requested
+    }
+
+    /// Whether the daemon still takes connections.
+    pub fn accepting(&self) -> bool {
+        self.accept.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
     pub fn wait(mut self) {
         if let Some(h) = self.accept.take() {
             let _ = h.join();

@@ -1,0 +1,67 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000e1",
+    "type": "conversation",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 3,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "session": "2cab1f5a-3d20-4cd2-9d13-485b39b26147",
+    "name": "crea probe-file con la fecha",
+    "accent": "magenta",
+    "model": "sonnet-5.5",
+    "effort": "high",
+    "mode": "manual",
+    "status": "asking",
+    "first": 0,
+    "items": [
+      {
+        "t": "user",
+        "text": "crea probe-file con la fecha"
+      },
+      {
+        "t": "tool",
+        "id": "toolu_20",
+        "name": "Bash",
+        "arg": "cargo test auth",
+        "state": "failed",
+        "summary": "sin resultado · pudo terminar",
+        "lost": true
+      },
+      {
+        "t": "tool",
+        "id": "toolu_21",
+        "name": "Bash",
+        "arg": "touch probe-file && date > probe-file",
+        "state": "ask"
+      }
+    ],
+    "ask": {
+      "id": "toolu_21",
+      "kind": "permission",
+      "tool": "Bash",
+      "title": "Bash",
+      "command": "touch probe-file && date > probe-file",
+      "options": [
+        {
+          "key": "yes",
+          "label": "Sí"
+        },
+        {
+          "key": "no",
+          "label": "No, y decirle a Claude qué hacer distinto"
+        }
+      ],
+      "restored": true
+    },
+    "queue": [],
+    "tasks": [],
+    "todos": [],
+    "artifacts": [],
+    "commands": [],
+    "cost": 0,
+    "cwd": "/work/app/crates"
+  }
+}

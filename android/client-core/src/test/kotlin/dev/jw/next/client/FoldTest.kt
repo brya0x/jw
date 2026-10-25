@@ -8,7 +8,7 @@ import kotlin.test.assertNull
 
 /** REQ-558: consecutive tools are one row, and what is not a tool of a class that has ended breaks the run. */
 class FoldTest {
-    private fun tool(name: String, state: ToolState = ToolState.Ok) = ConvItem.Tool(name, name, "", state)
+    private fun tool(name: String, state: ToolState = ToolState.Ok, lost: Boolean = false) = ConvItem.Tool(name, name, "", state, lost = lost)
     private val text = ConvItem.Text("x")
 
     @Test
@@ -22,6 +22,13 @@ class FoldTest {
             ),
             foldRuns(items),
         )
+    }
+
+    /** REQ-889: a tool with no result may still run as far as anyone saw: it is not folded with the commands that ended. */
+    @Test
+    fun aToolWithNoResultIsNotFoldedIntoARun() {
+        val items = listOf(tool("Bash"), tool("Bash", ToolState.Failed, lost = true), tool("Bash"))
+        assertEquals(listOf(FoldRun(0, 0, "Ejecutó 1 comando"), FoldRun(2, 2, "Ejecutó 1 comando")), foldRuns(items))
     }
 
     @Test

@@ -465,3 +465,49 @@ fn worktree_task_goes_to_the_new_agents_conversation_as_a_message() {
     });
     w.stop();
 }
+
+/// REQ-891, REQ-885: `jw stop` asks the daemon to stop (it does not signal it), so an engine with an ask waiting
+/// is ended at once with its input open (Claude would reject the ask itself) and an engine with none has its
+/// input closed and ends by itself. Through the real binary: the daemon's own tests call `Daemon::stop` and
+/// never saw that a signal does not run it.
+#[test]
+fn jw_stop_asks_the_daemon_to_stop_so_an_ask_is_kept_and_the_other_engines_are_closed() {
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    for (said, asks) in [("please edit auth", true), ("hola", false)] {
+        let mut w = World::new("claude-stop-ask", &shell, true);
+        w.open_conversation();
+        let node = w.conversation().unwrap();
+        w.env.cmd(&format!(
+            r#"{{"cmd":"conversation_send","node":"{node}","text":"{said}"}}"#
+        ));
+        let mut c = w.client();
+        c.open(&node).unwrap();
+        let want = if asks { "asking" } else { "idle" };
+        c.wait_until(Duration::from_secs(10), |c| {
+            c.nodes.get(&node).is_some_and(|n| {
+                n["status"] == want
+                    && (asks
+                        || n["items"]
+                            .as_array()
+                            .is_some_and(|i| i.iter().any(|i| i["t"] == "result")))
+            })
+        })
+        .unwrap();
+        let child = w.daemon.take().unwrap();
+        w.env.stop(child);
+        if !asks {
+            wait_for("the engine's input to close", || {
+                w.engine_log().iter().any(|l| l == "eof")
+            });
+        }
+        let eof = w.engine_log().iter().any(|l| l == "eof");
+        assert_eq!(
+            eof,
+            !asks,
+            "ask waiting: {asks}; engine log: {:?}",
+            w.engine_log()
+        );
+    }
+}

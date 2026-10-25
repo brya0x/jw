@@ -245,6 +245,15 @@ class ConformanceTest {
         assertEquals(1250L, node.tokens)
     }
 
+    /** A question that was waiting when the daemon stopped says so, and a tool that has no result says that it may have finished (REQ-875, REQ-887). */
+    @Test
+    fun aRestoredAskAndALostToolAreRead() {
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-restored.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
+        assertEquals(true, node.ask?.restored)
+        assertEquals(listOf(true, false), node.items.filterIsInstance<ConvItem.Tool>().map { it.lost })
+    }
+
     /** The idle conversation fixture carries what Claude proposes next (REQ-572). */
     @Test
     fun anIdleConversationCarriesWhatClaudeProposesNext() {

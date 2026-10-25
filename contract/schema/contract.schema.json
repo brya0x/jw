@@ -80,7 +80,8 @@
             "output": { "type": "array", "items": { "type": "string" } },
             "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
             "url": { "type": "string" },
-            "by": { "type": "string" }
+            "by": { "type": "string" },
+            "lost": { "const": true }
           }
         },
         {
@@ -140,7 +141,8 @@
         "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
         "plan": { "type": "array", "items": { "type": "string" } },
         "options": { "type": "array", "items": { "$ref": "#/$defs/AskOption" }, "minItems": 1 },
-        "multi": { "const": true }
+        "multi": { "const": true },
+        "restored": { "const": true }
       }
     },
     "TaskKind": { "enum": ["agent", "bash", "monitor", "loop", "other"] },
@@ -723,6 +725,7 @@
         { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
         { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_stop" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "stop" } } },
         {
           "type": "object",
           "required": ["cmd", "pane"],

@@ -1415,11 +1415,16 @@ impl Ui {
                 diff,
                 url,
                 by,
+                lost,
+                ..
             } => {
-                let mut head = vec![
-                    ("● ".to_owned(), Style::fg(state_colour(*state))),
-                    (name.clone(), plain.bold()),
-                ];
+                // A tool with no result may have finished unseen: not a failure, so not red (REQ-889).
+                let dot = if *lost {
+                    ("⏸ ".to_owned(), dim)
+                } else {
+                    ("● ".to_owned(), Style::fg(state_colour(*state)))
+                };
+                let mut head = vec![dot, (name.clone(), plain.bold())];
                 // A tool with nothing to say of its argument has no parentheses, and the advisor
                 // says its model as Claude Code does: `Advising using Opus 5.5`.
                 if name == "Advising" && !arg.is_empty() {
@@ -1931,6 +1936,10 @@ impl Ui {
             g.put(tx, row, &clip(text, tw), style);
             row += 1;
         };
+        // What was waiting before a restart says so, and that the answer goes as a message (REQ-884).
+        if ask.restored {
+            text_row(g, RESTORED_NOTE, Style::fg(look::yellow()).on(ground));
+        }
         text_row(g, &ask.title, Style::fg(look::fg()).bold().on(ground));
         if let Some(c) = &ask.command {
             text_row(g, &format!("$ {c}"), Style::fg(look::green()).on(ground));
@@ -3952,9 +3961,13 @@ fn permission_hint(ask: &Ask) -> &'static str {
     }
 }
 
+/// The line over an ask that was waiting when the daemon stopped (REQ-884).
+const RESTORED_NOTE: &str = "↻ se retomó tras reiniciar · tu respuesta irá como un mensaje";
+
 /// Rows the box that asks takes: its borders, its title, what it is about, the options and the hint.
 fn ask_rows(a: &Ask) -> usize {
-    3 + usize::from(a.command.is_some())
+    3 + usize::from(a.restored)
+        + usize::from(a.command.is_some())
         + a.plan.len().min(8)
         + a.diff.len().min(DIFF_SHOWN)
         + a.options.len()
@@ -5036,6 +5049,37 @@ mod tests {
         assert_eq!(ui.editor.text(), "a?", "a question mark in a line is text");
     }
 
+    /// REQ-889: a tool with no result is drawn with `⏸`, dim, and its summary; a failed one keeps its red dot.
+    #[test]
+    fn a_tool_that_may_have_finished_unseen_is_drawn_paused_and_not_as_a_failure() {
+        let tool = |name: &str, lost: bool| Item::Tool {
+            id: "t1".into(),
+            name: name.into(),
+            arg: "cargo test".into(),
+            state: ToolState::Failed,
+            summary: Some("sin resultado · pudo terminar".into()),
+            output: Vec::new(),
+            diff: Vec::new(),
+            url: None,
+            by: None,
+            lost,
+        };
+        let mut conv = idle();
+        conv.items = vec![tool("Bash", true)];
+        let (_, rows) = frame(&Ui::default(), &conv);
+        let joined = rows.join("\n");
+        assert!(joined.contains("⏸ Bash(cargo test)"), "{joined}");
+        assert!(!joined.contains("● Bash"), "{joined}");
+        assert!(
+            joined.contains("⎿  sin resultado · pudo terminar"),
+            "{joined}"
+        );
+        // a failed tool that folds says it in the row of its run; one that is drawn by itself keeps the red dot
+        conv.items = vec![tool("Write", false)];
+        let (_, rows) = frame(&Ui::default(), &conv);
+        assert!(rows.join("\n").contains("● Write(cargo test)"), "{rows:?}");
+    }
+
     /// REQ-570: a consultation of the advisor is drawn as Claude Code draws it: `● Advising`, and
     /// under it what the advisor did.
     #[test]
@@ -5051,6 +5095,7 @@ mod tests {
             diff: Vec::new(),
             url: None,
             by: None,
+            lost: false,
         }];
         let (_, rows) = frame(&Ui::default(), &conv);
         let joined = rows.join("\n");
@@ -7460,8 +7505,31 @@ mod tests {
                 })
                 .collect(),
             multi,
+            restored: false,
         });
         c
+    }
+
+    /// REQ-884: an ask that was waiting before a restart has the line that says so above its title, and its
+    /// options and keys are where they were.
+    #[test]
+    fn an_ask_from_before_a_restart_says_so_above_its_title_and_keeps_its_options() {
+        let mut ask = asking(false);
+        let (_, rows) = frame(&Ui::default(), &ask);
+        assert!(
+            !rows.join("\n").contains("se retomó"),
+            "a live ask has no such line"
+        );
+        ask.ask.as_mut().unwrap().restored = true;
+        let (_, rows) = frame(&Ui::default(), &ask);
+        let note = row_of(
+            &rows,
+            "↻ se retomó tras reiniciar · tu respuesta irá como un mensaje",
+        );
+        assert!(note < row_of(&rows, "¿Qué lenguajes?"), "{rows:#?}");
+        assert!(note > row_of(&rows, "pregunta") - 1);
+        row_of(&rows, "Rust: sistemas");
+        row_of(&rows, "1 2 3 · ↑↓ ↵");
     }
 
     #[test]
@@ -7762,6 +7830,7 @@ mod tests {
                 },
             ],
             multi: false,
+            restored: false,
         });
         let mut ui = Ui::default();
         let (_, rows) = frame(&ui, &c);
@@ -7872,6 +7941,7 @@ mod tests {
                 },
             ],
             multi: false,
+            restored: false,
         });
         let mut ui = Ui::default();
         let (_, rows) = frame(&ui, &c);

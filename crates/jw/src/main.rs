@@ -72,6 +72,8 @@ type Res = Result<ExitCode, String>;
 
 /// How long a daemon started for the client has to answer on its socket.
 const DAEMON_WAIT: Duration = Duration::from_secs(5);
+/// How long `jw stop` waits for a daemon that was asked to stop: the engines' grace (3 s) and the save, with margin.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// The terminal client, with a daemon to talk to: the one that answers, else one started
 /// here in the background (REQ-186). It keeps running when the client or its terminal ends.
@@ -137,7 +139,16 @@ fn run_daemon() -> Res {
     let daemon =
         Daemon::start(Config::from_identity()).map_err(|e| format!("cannot start: {e}"))?;
     daemon::warm_highlighting();
-    daemon.wait();
+    // `jw stop` asks over the socket: the daemon stops as it stops by itself, ending its engines and
+    // saving what waits, which a signal would not let it do (REQ-891).
+    while daemon.accepting() && !daemon.stop_requested() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if daemon.stop_requested() {
+        daemon.stop();
+    } else {
+        daemon.wait();
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -155,6 +166,19 @@ fn stop() -> Res {
     // not let the daemon stop it.
     if let Ok(mut client) = wire::Client::connect(&config.socket, &identity::peer("stop")) {
         let _ = client.cmd(contract::Cmd::MobileStop {});
+    }
+    // The daemon is asked to stop itself, so its engines end as they should (REQ-891); a daemon
+    // that does not know the command, or does not go, is signalled as before.
+    if let Ok(mut client) = wire::Client::connect(&config.socket, &identity::peer("stop"))
+        && matches!(client.cmd(contract::Cmd::Stop {}), Ok(Ok(_)))
+    {
+        let end = std::time::Instant::now() + STOP_WAIT;
+        while std::time::Instant::now() < end {
+            if !config.socket.exists() {
+                return Ok(ExitCode::SUCCESS);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     let pid_file = config.pid_file();
     let pid = std::fs::read_to_string(&pid_file)

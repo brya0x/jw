@@ -196,6 +196,9 @@ pub enum Item {
         /// Where the answer to its permission came from (`el móvil`, `modo accept edits`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<String>,
+        /// It has no result and may have finished unseen: drawn as such, not as a failure (REQ-887).
+        #[serde(default, skip_serializing_if = "is_false")]
+        lost: bool,
     },
     /// A subagent: a card with its progress and its totals.
     Agent {
@@ -306,6 +309,9 @@ pub struct Ask {
     pub options: Vec<AskOption>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub multi: bool,
+    /// It was waiting when the daemon stopped and is shown again; the answer goes as a message (REQ-875).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub restored: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
