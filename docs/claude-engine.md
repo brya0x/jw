@@ -115,6 +115,14 @@ Three runs of `claude -p --model haiku` in a private temp directory, with `JW_PA
 | Can the daemon say something to the agent when the person approves a plan in the engine? | No text channel: approval is `{behavior:"allow", updatedInput}` with the input unchanged (`conversation.rs` `answer_plan`, `permission_reply`); only a refusal carries text. *read in code* |
 | Is the nudge available in the engine? | Same as the Stop hook: the engine gets no hooks `--settings` and no `JW_PANE_ID` today. *read in code* |
 
+**When the person calls the skill** (`/jw-tasks …` as the message; haiku, `-p`, one run each, with a `package.json` of three dependencies and nothing installed):
+
+| Question | Measured |
+|---|---|
+| A goal in one sentence, `/jw-tasks actualizar las dependencias del proyecto`? | The skill ran as a normal turn (the path the engine already has for skills typed as a message). The agent read the project, drafted seven tasks with `after:` plus the closing `fin`, wrote `.jw/tasks.md` and, as the skill said, **stopped to ask the person to review it**. *tested, one run* |
+| A list pasted after the command (four bullets)? | The agent **kept the wording and the order**, numbered them `t1…`, added `fin`, and — as the skill said — went on to work the list. Where npm was refused it did what it could, ticked three tasks and, for the one it could not do, wrote `(bloqueado: …)` in free text instead of using `[!]`; it also added notes in parentheses to the lines it finished. So the agent edits the file by hand and writes free text: the parser has to tolerate it (and `jw tasks block`/`note` are what give it structure). *tested, one run* |
+| Name | `/tasks` is claude's own command (answered «isn't available in this environment» in the engine, see above), so a skill called `tasks` would collide with it; `jw-tasks` does not. *read in this doc* |
+
 Not measured: the same with sonnet or opus; a plan made in plan mode (`ExitPlanMode`) and a `PostToolUse` hook on it answering with `additionalContext`; the interactive terminal; how many runs out of ten take the nudge.
 
 ## Cost and limits
