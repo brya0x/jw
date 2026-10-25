@@ -339,6 +339,14 @@ sealed interface Cmd {
     @Serializable @SerialName("tasks_edit")
     data class TasksEdit(val workspace: Id, val op: TaskOp, val id: String, val text: String? = null) : Cmd
 
+    /** Turn on the loop over the workspace's list (N180): [max] laps (1 to 99, 20 when absent); [pane] is the agent's own. */
+    @Serializable @SerialName("tasks_loop_on")
+    data class TasksLoopOn(val workspace: Id, val max: Int? = null, val pane: Id? = null) : Cmd
+
+    /** Turn the loop off. */
+    @Serializable @SerialName("tasks_loop_off")
+    data class TasksLoopOff(val workspace: Id) : Cmd
+
     /**
      * Publish an artifact (N171): the next version of the one named [name] in [workspace]. The result is
      * `{id, n, hash, new}`. Only the CLI sends it: the bridge refuses it from a phone.

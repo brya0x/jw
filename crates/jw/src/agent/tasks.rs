@@ -1,12 +1,14 @@
 //! `tasks`: what an agent does with its workspace's task list (N180c, REQ-919 to REQ-924): `ls`,
 //! `next`, `done`, `block`, `reopen` and `note`. They read and write the list's file and nothing else,
-//! so they work with no daemon; the loop's commands are N180d.
+//! so they work with no daemon. `loop on|off|status` are the loop's, which the daemon runs (N180d).
 
 use std::path::{Path, PathBuf};
 
+use contract::Cmd;
+use contract::WorkspaceSummary;
 use daemon::tasks::{self, Edit, Error, List, State};
 
-use super::{Args, Fail, Out, bin, fail};
+use super::{Args, Fail, Link, Out, bin, fail, own_pane};
 
 pub(super) fn run(args: &[&str]) -> Out {
     match args {
@@ -16,6 +18,9 @@ pub(super) fn run(args: &[&str]) -> Out {
         ["block", rest @ ..] => change(rest, "block"),
         ["reopen", rest @ ..] => change(rest, "reopen"),
         ["note", rest @ ..] => change(rest, "note"),
+        ["loop", "on", rest @ ..] => loop_on(rest),
+        ["loop", "off", rest @ ..] => loop_off(rest),
+        ["loop", "status", rest @ ..] => loop_status(rest),
         _ => Err(Fail::Usage(String::new())),
     }
 }
@@ -185,10 +190,93 @@ fn change(args: &[&str], verb: &str) -> Out {
     }
 }
 
+/// The workspace a loop command is about: the one `--in` names, else the one the agent's own pane is in.
+fn target(a: &Args, s: &mut Link) -> Out<WorkspaceSummary> {
+    if let Some(word) = a.value("in") {
+        return s.workspace(word);
+    }
+    let Some(pane) = own_pane() else {
+        return Err(Fail::Usage(
+            "run it in a pane of the daemon's, or name the workspace with --in".into(),
+        ));
+    };
+    match s.workspace_of(&pane)? {
+        Some(ws) => Ok(ws),
+        None => fail("this pane is in no workspace"),
+    }
+}
+
+/// `loop on [--max N]`: the first task is printed as `next` prints it (REQ-921).
+fn loop_on(args: &[&str]) -> Out {
+    let a = Args::parse(args, &["max", "in"], &[])?;
+    a.words::<0>()?;
+    let max = match a.value("max") {
+        None => None,
+        Some(n) => Some(
+            n.parse::<u32>()
+                .map_err(|_| Fail::Usage("--max is a number of laps".into()))?,
+        ),
+    };
+    let mut s = Link::connect()?;
+    let ws = target(&a, &mut s)?;
+    // an agent that asks for the loop on its own workspace is the loop's agent and is sent nothing
+    let pane = if a.value("in").is_none() {
+        own_pane()
+    } else {
+        None
+    };
+    let reply = s.cmd(Cmd::TasksLoopOn {
+        workspace: ws.id,
+        max,
+        pane,
+    })?;
+    let task = &reply["task"];
+    println!(
+        "{} {}",
+        task["id"].as_str().unwrap_or(""),
+        task["title"].as_str().unwrap_or("")
+    );
+    Ok(())
+}
+
+fn loop_off(args: &[&str]) -> Out {
+    let a = Args::parse(args, &["in"], &[])?;
+    a.words::<0>()?;
+    let mut s = Link::connect()?;
+    let ws = target(&a, &mut s)?;
+    s.cmd(Cmd::TasksLoopOff { workspace: ws.id })?;
+    println!("loop off");
+    Ok(())
+}
+
+/// `loop status`: whether it is on, and in which lap, or why it is not.
+fn loop_status(args: &[&str]) -> Out {
+    let a = Args::parse(args, &["in"], &[])?;
+    a.words::<0>()?;
+    let mut s = Link::connect()?;
+    let ws = target(&a, &mut s)?;
+    let node = s.cmd(Cmd::OpenTasks { workspace: ws.id })?;
+    let node = node["node"].as_str().unwrap_or("").to_owned();
+    let doc: serde_json::Value = s.node(&node)?;
+    let lp = &doc["loop"];
+    if lp["on"] == true {
+        let at = lp["task"]
+            .as_str()
+            .map(|t| format!(", on {t}"))
+            .unwrap_or_default();
+        println!("loop on: lap {}/{}{at}", lp["laps"], lp["max"]);
+    } else if let Some(text) = lp["stop"]["text"].as_str() {
+        println!("loop off: {text}");
+    } else {
+        println!("loop off");
+    }
+    Ok(())
+}
+
 /// What `jw tasks` says of itself.
 pub(super) fn usage() -> String {
     let b = bin();
     format!(
-        "usage: {b} tasks ls [--json] [--file <path>]\n       {b} tasks next [--file <path>]\n       {b} tasks done <id>\n       {b} tasks block <id> <reason>\n       {b} tasks reopen <id>\n       {b} tasks note <id> <text>"
+        "usage: {b} tasks ls [--json] [--file <path>]\n       {b} tasks next [--file <path>]\n       {b} tasks done <id>\n       {b} tasks block <id> <reason>\n       {b} tasks reopen <id>\n       {b} tasks note <id> <text>\n       {b} tasks loop on [--max N] [--in <workspace>]\n       {b} tasks loop off [--in <workspace>]\n       {b} tasks loop status [--in <workspace>]"
     )
 }

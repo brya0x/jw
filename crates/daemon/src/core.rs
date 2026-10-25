@@ -144,6 +144,8 @@ pub struct Core {
     pub(crate) task_nodes: HashMap<Id, crate::tasklists::NodeEntry>,
     pub(crate) task_seen: HashSet<Id>,
     pub(crate) task_look: HashSet<Id>,
+    /// The loops over the lists, by workspace: in memory only (REQ-898).
+    pub(crate) loops: HashMap<Id, crate::tasklists::Loop>,
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
     pub convs: HashMap<Id, crate::engine::Conv>,
     pub conv_dir: Option<PathBuf>,
@@ -208,6 +210,7 @@ impl Core {
             task_nodes: HashMap::new(),
             task_seen: HashSet::new(),
             task_look: HashSet::new(),
+            loops: HashMap::new(),
             convs: HashMap::new(),
             conv_dir: None,
             chrome: false,
@@ -1223,6 +1226,8 @@ impl Core {
         self.task_lists.retain(|ws, _| live.contains(ws));
         self.task_nodes.retain(|_, e| live.contains(&e.workspace));
         self.task_seen.retain(|ws| live.contains(ws));
+        self.loops.retain(|ws, _| live.contains(ws));
+        self.loops_check_panes();
         self.model
             .viewed
             .retain(|key, _| key.split('|').next().is_some_and(|w| live.contains(w)));

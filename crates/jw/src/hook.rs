@@ -1,6 +1,7 @@
 //! `jwn hook <event>`: the command an agent's hooks run (REQ-132). It tells the daemon, by
 //! the pane's id in the environment, what the agent is doing, and never gets in the agent's
-//! way: whatever goes wrong it says nothing and exits 0.
+//! way: whatever goes wrong it says nothing and exits 0. The one thing it ever says is the daemon's
+//! answer to a `stop` while a task loop is on: keep going, with the next task as the reason.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
@@ -36,7 +37,7 @@ pub fn run(event: &str) -> ExitCode {
     else {
         return ExitCode::SUCCESS;
     };
-    let _ = client.cmd_within(
+    let reply = client.cmd_within(
         Cmd::AgentEvent {
             pane,
             event,
@@ -45,5 +46,14 @@ pub fn run(event: &str) -> ExitCode {
         },
         REPLY_WAIT,
     );
+    // The daemon answers a `stop` with a reason when a task loop goes on (REQ-903): claude keeps going.
+    if let Ok(Ok(Some(result))) = reply
+        && let Some(reason) = result["block"]["reason"].as_str()
+    {
+        println!(
+            "{}",
+            serde_json::json!({ "decision": "block", "reason": reason })
+        );
+    }
     ExitCode::SUCCESS
 }

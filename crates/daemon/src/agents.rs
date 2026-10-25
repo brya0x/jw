@@ -4,6 +4,7 @@
 use contract::{AgentEvent, AttentionKind, ErrorCode, Id};
 
 use crate::commands::{Done, err};
+use crate::core::Core;
 use crate::model::Own;
 use crate::server::Shared;
 
@@ -51,6 +52,27 @@ fn change(event: AgentEvent, notification_type: Option<&str>, tool: Option<&str>
     }
 }
 
+/// Ends what an agent had raised on `pane` and raises `raise`, which is how a loop ends its turn
+/// (REQ-909, REQ-910).
+pub(crate) fn settle(core: &mut Core, pane: &str, raise: Option<AttentionKind>) {
+    let own = core
+        .model
+        .workspaces
+        .iter_mut()
+        .flat_map(|w| w.panes.iter_mut())
+        .find(|p| p.id == pane);
+    if let Some(p) = own {
+        p.attention.retain(|o| !KINDS.contains(&o.kind));
+        if let Some(kind) = raise {
+            p.attention.push(Own {
+                kind,
+                exit_code: None,
+                rev: None,
+            });
+        }
+    }
+}
+
 pub fn event(
     shared: &Shared,
     pane: &Id,
@@ -58,6 +80,12 @@ pub fn event(
     notification_type: Option<&str>,
     tool: Option<&str>,
 ) -> Done {
+    // A loop that is on for this pane decides what the end of its turn is (REQ-905).
+    if event == AgentEvent::Stop
+        && let Some(done) = crate::tasklists::on_stop(shared, pane)
+    {
+        return done;
+    }
     let mut core = shared.lock();
     let p = core
         .model

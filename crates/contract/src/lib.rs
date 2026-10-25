@@ -428,6 +428,21 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
     },
+    /// Turn on the loop of the workspace's agent over its task list (N180, REQ-899 to REQ-901):
+    /// up to `max` laps (1 to 99, 20 when absent). `pane` is the agent's own pane when the agent
+    /// asks (nothing is sent to it); without it the daemon tells the workspace's agent the first
+    /// task. The result is `{laps, max, task: {id, title, text}}`.
+    TasksLoopOn {
+        workspace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane: Option<Id>,
+    },
+    /// Turn the loop off (REQ-911).
+    TasksLoopOff {
+        workspace: Id,
+    },
     /// Publish an artifact (N171): the next version of the one named `name` in `workspace`. The
     /// result is `{id, n, hash, new}`; `new` is false when the bytes equal the latest version.
     /// Only the CLI sends it: the bridge refuses it from a phone.

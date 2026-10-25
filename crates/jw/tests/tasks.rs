@@ -207,3 +207,153 @@ fn a_task_that_is_not_there_a_duplicate_and_a_use_that_is_wrong_are_said_and_cha
     }
     assert_eq!(file(&dir), text);
 }
+
+// ---- the loop through the binary (N180d): `jw tasks loop …` and `jw hook stop`, against a private daemon
+
+/// The private daemon of a test, stopped when the test ends, even by a failed assertion: `jw stop`
+/// signals only the pid it recorded in that test's own state directory.
+struct Daemon<'a>(&'a Env, Option<std::process::Child>);
+
+impl Drop for Daemon<'_> {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.1.take() {
+            let _ = self.0.jw().arg("stop").status();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// A private daemon with a workspace that has a list and a pane in it: the ids.
+fn live(env: &Env) -> (Daemon<'_>, String, String) {
+    let dir = repo(
+        env,
+        "app",
+        Some("- [ ] t1 first\n- [ ] t2 second (after: t1)\n"),
+    );
+    let daemon = env.start();
+    let ws = env.cmd(&format!(
+        r#"{{"cmd":"open_folder","path":"{}"}}"#,
+        std::fs::canonicalize(&dir).unwrap().display()
+    ))["result"]["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let pane = env.cmd(&format!(r#"{{"cmd":"new_pane","workspace":"{ws}"}}"#))["result"]["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (Daemon(env, Some(daemon)), ws, pane)
+}
+
+/// `jw hook stop` as an agent's hook runs it in that pane.
+fn stop_hook(env: &Env, pane: &str) -> Output {
+    env.jw()
+        .args(["hook", "stop"])
+        .env(identity::env_var("PANE_ID"), pane)
+        .output()
+        .unwrap()
+}
+
+fn in_pane(env: &Env, pane: &str, args: &[&str]) -> Output {
+    let mut all = vec!["tasks"];
+    all.extend(args);
+    env.jw()
+        .args(all)
+        .env(identity::env_var("PANE_ID"), pane)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn loop_on_status_and_off_run_from_the_agents_own_pane() {
+    let env = Env::new("tk-loop");
+    let (_daemon, _ws, pane) = live(&env);
+    let o = in_pane(&env, &pane, &["loop", "on", "--max", "5"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(out(&o), "t1 first\n", "the first task, as `next` prints it");
+    let o = in_pane(&env, &pane, &["loop", "status"]);
+    assert_eq!(out(&o), "loop on: lap 1/5, on t1\n", "{}", err(&o));
+    // the workspace can be named instead of the pane
+    let o = env
+        .jw()
+        .args(["tasks", "loop", "status", "--in", "app"])
+        .output()
+        .unwrap();
+    assert_eq!(out(&o), "loop on: lap 1/5, on t1\n", "{}", err(&o));
+    let o = in_pane(&env, &pane, &["loop", "off"]);
+    assert_eq!(out(&o), "loop off\n");
+    let o = in_pane(&env, &pane, &["loop", "status"]);
+    assert_eq!(out(&o), "loop off: stopped by the person in lap 1\n");
+    // a laps number that is not one, and no pane and no --in, are a wrong use
+    assert_eq!(
+        in_pane(&env, &pane, &["loop", "on", "--max", "many"])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(
+        env.jw()
+            .args(["tasks", "loop", "on"])
+            .env_remove(identity::env_var("PANE_ID"))
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(2)
+    );
+    // from outside the workspace's folder the loop still finds it by the pane
+    assert_eq!(
+        in_pane(&env, &pane, &["loop", "on", "--max", "100"])
+            .status
+            .code(),
+        Some(1)
+    );
+}
+
+#[test]
+fn the_stop_hook_says_to_go_on_only_while_a_loop_is_on() {
+    let env = Env::new("tk-hook");
+    let (_daemon, _ws, pane) = live(&env);
+    // no loop: the hook says nothing and the agent stops
+    let o = stop_hook(&env, &pane);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(out(&o), "");
+    let on = in_pane(&env, &pane, &["loop", "on"]);
+    assert_eq!(on.status.code(), Some(0), "{}", err(&on));
+    assert_eq!(
+        run(&env, &env.dir.join("app"), &["done", "t1"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let o = stop_hook(&env, &pane);
+    assert_eq!(o.status.code(), Some(0));
+    let v: serde_json::Value =
+        serde_json::from_str(&out(&o)).unwrap_or_else(|e| panic!("{e}: {}", out(&o)));
+    assert_eq!(v["decision"], "block");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("t2 second (after: t1)") && reason.contains("tasks done t2"),
+        "{reason}"
+    );
+    assert_eq!(v.as_object().unwrap().len(), 2, "nothing else is said");
+    // off again: nothing
+    in_pane(&env, &pane, &["loop", "off"]);
+    assert_eq!(out(&stop_hook(&env, &pane)), "");
+    // a hook outside a pane of the daemon's says nothing either
+    let o = env
+        .jw()
+        .args(["hook", "stop"])
+        .env_remove(identity::env_var("PANE_ID"))
+        .output()
+        .unwrap();
+    assert_eq!((o.status.code(), out(&o)), (Some(0), String::new()));
+}
+
+#[test]
+fn with_no_daemon_the_stop_hook_says_nothing_and_does_not_fail() {
+    let env = Env::new("tk-hook-none");
+    let o = stop_hook(&env, "00000000-0000-4000-8000-0000000000c1");
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!((out(&o), err(&o)), (String::new(), String::new()));
+}

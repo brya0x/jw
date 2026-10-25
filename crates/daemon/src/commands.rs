@@ -159,6 +159,12 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             id,
             text,
         } => crate::tasklists::edit(shared, &workspace, op, &id, text.as_deref()),
+        Cmd::TasksLoopOn {
+            workspace,
+            max,
+            pane,
+        } => crate::tasklists::loop_on(shared, &workspace, max, pane.as_ref()),
+        Cmd::TasksLoopOff { workspace } => crate::tasklists::loop_off(shared, &workspace),
         Cmd::ArtifactPublish {
             workspace,
             name,
