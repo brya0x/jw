@@ -1631,7 +1631,12 @@ pub fn stop_all(convs: &mut std::collections::HashMap<Id, Conv>) -> Vec<Leaving>
         if let Some(en) = c.engine.take() {
             // Its threads ignore what follows: a daemon that stops is not an engine that died.
             c.generation += 1;
-            let _ = en.tx.send(Out::Close);
+            if c.st.has_ask() {
+                // Closing its input makes Claude answer the ask itself and retry it until the grace ends: its group ends now, and the transcript is left as after a crash (REQ-856).
+                kill_group(en.pid);
+            } else {
+                let _ = en.tx.send(Out::Close);
+            }
             leaving.push((en.pid, en.exited.clone()));
         }
     }

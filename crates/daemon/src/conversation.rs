@@ -2795,13 +2795,22 @@ impl State {
 
     /// The engine's process ended while the conversation was open.
     pub fn engine_gone(&mut self, reason: &str) -> Vec<Effect> {
-        let had_ask = self.pending.take().is_some();
+        // What it asked is not lost with it: it waits again as after a restart, and its answer starts another engine (REQ-857).
+        let had_ask = self.pending.as_mut().is_some_and(|p| {
+            p.ask.restored = true;
+            true
+        });
         self.suggestion = None;
         self.inflight = None;
         self.auto = false;
         self.interrupting = false;
         self.finish_live();
+        // The tool of the ask that stays is still the one that asks.
+        let asking = self.pending.as_ref().and_then(|p| p.tool_use_id.clone());
         for id in self.running_tools() {
+            if asking.as_deref() == Some(id.as_str()) {
+                continue;
+            }
             self.set_tool(&id, |t| {
                 t.0 = ToolState::Failed;
                 t.1 = Some("El motor se detuvo".into());
@@ -2809,14 +2818,19 @@ impl State {
         }
         self.cut_agents(true);
         self.task_links.clear();
-        self.status = ConvStatus::Dead;
+        self.status = if had_ask {
+            ConvStatus::Asking
+        } else {
+            ConvStatus::Dead
+        };
         self.since = None;
         self.note(reason.to_owned(), Some(Tone::Error));
-        if had_ask {
-            vec![Effect::ClearAsk]
-        } else {
-            Vec::new()
-        }
+        Vec::new()
+    }
+
+    /// Whether an ask waits for the person: the engine that has it is ended at once when the daemon stops (REQ-856).
+    pub fn has_ask(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// The engine is being started for a message: show it.

@@ -65,6 +65,7 @@ def wait_response(request_id):
         if m.get("type") == "control_request" and m["request"]["subtype"] == "interrupt":
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {"still_queued": []}}})
             return {"behavior": "interrupt"}
+    logline("eof")
     sys.exit(0)
 def edit(n, suggested):
     tid = "toolu_e%d" % n
@@ -268,6 +269,7 @@ for line in sys.stdin:
         result()
     if "monitor" in text:
         threading.Thread(target=auto).start()
+logline("eof")
 # A stubborn engine does not end when its input does (a turn or a background task still runs).
 if os.environ.get("FAKE_STUBBORN"):
     time.sleep(600)

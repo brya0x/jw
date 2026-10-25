@@ -1960,7 +1960,7 @@ REQ-855, REQ-860 by N179e and N179f: `crates/jw/src/tui/conversation.rs` tests (
 | N179 ✓ | what comes back after a restart: measurement (`docs/claude-engine.md`), prototype `restore-pending-asks.html` and this spec | 846-861 | `docs/spec.md`, `docs/claude-engine.md`, `docs/prototypes/restore-pending-asks.html` |
 | N179a ✓ | `Ask.restored`, tool `lost`, `Saved.pending`, the restore at open of a question, a plan and a permission, the marks | 846-849, 861 | `contract/`, `crates/contract`, `android/contract`, `crates/daemon/src/{conversation,engine,transcript}.rs` |
 | N179b ✓ | the answers of a restored `ask` as a message, the mode, the allowance | 850-854 | `crates/daemon/src/{conversation,engine}.rs` |
-| N179c | `jw stop` ends the group of an engine with something pending; an engine that ends by itself keeps its `ask` | 856, 857 | `crates/daemon/src/{engine,core,conversation}.rs` |
+| N179c ✓ | `jw stop` ends the group of an engine with something pending; an engine that ends by itself keeps its `ask` | 856, 857 | `crates/daemon/src/{engine,core,conversation}.rs` |
 | N179d | a tool without result is `lost`; the lines that settle an orphan are not drawn | 858, 859 | `crates/daemon/src/transcript.rs` |
 | N179e | the terminal client: the note above a restored `ask` and `⏸` | 855, 860 | `crates/jw/src/tui/conversation.rs` |
 | N179f | the phone: the row of the card and `⏸` | 855, 860 | `android/{client-core,app}/` |

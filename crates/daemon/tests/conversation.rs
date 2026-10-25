@@ -2947,3 +2947,88 @@ fn answering_a_restored_ask_after_a_message_started_the_engine_starts_no_second_
     assert_eq!(starts, 1, "{:?}", log_lines(&r.log));
     r.stop();
 }
+
+/// REQ-856: a daemon that stops ends the group of an engine that has an ask waiting at once, with its input
+/// still open (Claude would answer the ask itself and retry it), and keeps the ask in the saved file; an engine
+/// that has none has its input closed and ends by itself.
+#[test]
+fn a_daemon_that_stops_ends_an_engine_with_an_ask_waiting_at_once_and_closes_the_others() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "please edit auth");
+    r.until(&node, "the permission", |v| v["status"] == "asking");
+    wait_for("the permission in the saved file", || {
+        saved_file(&r).is_some_and(|s| s["pending"]["tool"] == "Edit")
+    });
+    r.daemon.take().unwrap().stop();
+    assert!(
+        !log_lines(&r.log).iter().any(|l| l == "eof"),
+        "its input was closed: {:?}",
+        log_lines(&r.log)
+    );
+    assert_eq!(saved_file(&r).unwrap()["pending"]["tool"], "Edit");
+    r.stop();
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "hola");
+    r.idle_after(&node, 1);
+    r.daemon.take().unwrap().stop();
+    assert!(
+        log_lines(&r.log).iter().any(|l| l == "eof"),
+        "its input was closed: {:?}",
+        log_lines(&r.log)
+    );
+    r.stop();
+}
+
+/// REQ-857: an engine that ends by itself with an ask waiting does not take it away: it waits as after a restart,
+/// and its answer starts another engine whose first message says it (the call is allowed once, REQ-853).
+#[test]
+fn an_engine_that_dies_with_an_ask_waiting_leaves_it_asked_and_its_answer_starts_another() {
+    let sb = Sandbox::new();
+    let pidfile = sb.dir.join("engine.pid");
+    let mut r = rig_with(
+        sb,
+        vec![(
+            "FAKE_PIDFILE".into(),
+            pidfile.to_string_lossy().into_owned(),
+        )],
+    );
+    let (node, _) = r.open();
+    r.send(&node, "please edit auth");
+    let v = r.until(&node, "the permission", |v| v["status"] == "asking");
+    let ask = v["ask"]["id"].as_str().unwrap().to_owned();
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    // only the pid it recorded
+    std::process::Command::new("kill")
+        .args(["-9", &pid])
+        .status()
+        .unwrap();
+    let v = r.until(&node, "the engine gone", |v| {
+        items(v, "note")
+            .iter()
+            .any(|n| n["text"].as_str().is_some_and(|t| t.contains("el motor")))
+    });
+    assert_eq!(v["status"], "asking", "{v:#}");
+    assert_eq!(v["ask"]["restored"], true);
+    assert_eq!(items(&v, "tool").last().unwrap()["state"], "ask");
+    wait_for("the mark of the ask", || {
+        let _ = r.client.poll(Duration::from_millis(20));
+        kinds(&r.client, &r.pane) == ["permission"]
+    });
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask,
+        key: "yes".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    let v = r.idle_after(&node, 1);
+    assert!(
+        items(&v, "text").iter().any(|t| t["text"] == "Hecho."),
+        "{v:#}"
+    );
+    assert!(v.get("ask").is_none());
+    r.stop();
+}
