@@ -194,7 +194,8 @@ Errors are the codes that exist: `bad_request` for a text too big, a bad name, a
 | restoring a `Pending` | `State::control_request` (`conversation.rs:2308`) split so a restore builds the same `Pending` from `(tool, input, tool_use_id, suggested)` | `request` and `ask.id` are the call's `tool_use_id` (a question's `ask.id` takes `:0` as when live), `restored` true |
 | the orphan ask | `transcript.rs` `Parser.open_ask` | `{tool, tool_use_id, input}` of the last `AskUserQuestion`/`ExitPlanMode` without result and with no later user or assistant line |
 | the allowance | `State.allow_once` | `(tool, input)`, set by a restored permission's `yes`/`session`, cleared by its match or by the turn's `result` |
-| stop | `engine::stop_all` / `finish` (`engine.rs:1553`, `:1569`) | an engine with `pending` is ended at once, not closed |
+| stop | `engine::stop_all` / `finish` (`engine.rs`) | an engine with `pending` is ended at once, not closed |
+| `stop` command | `Cmd::Stop` (`crates/contract/src/lib.rs`, schema, Kotlin, `contract/fixtures/client/cmd-stop.json`) | `{"cmd":"stop"}`, no fields; the daemon sets `stop_requested`, `run_daemon` (`crates/jw/src/main.rs`) sees it and calls `Daemon::stop`; refused to a phone (`bridge.rs`) |
 
 What a restored answer sends (`engine::answer` starts the engine as `send` does, `engine.rs:980`, then writes `user_line`, `conversation.rs:2743`):
 
@@ -1060,6 +1061,7 @@ What a restored answer sends (`engine::answer` starts the engine as `send` does,
 - REQ-859 THE daemon SHALL NOT draw what Claude writes to settle an orphan as lines of the conversation: the `assistant` line of `model: "<synthetic>"` (which also names no model) is dropped, and the `tool_result` with `toolDenialKind: "interrupted"` is not what the tool said but the `lost` mark of REQ-858, never a failure with Claude's text.
 - REQ-860 THE terminal client and the phone SHALL draw a tool with `lost` with `⏸`, dim, and its summary, not as a failure; a client that does not know `lost` SHALL draw it as `failed`.
 - REQ-861 THE contract SHALL gain `Ask.restored` and the tool's `lost` as optional booleans, and no node's `v` SHALL change (REQ-7).
+- REQ-862 WHEN `jw stop` runs, THE binary SHALL send the command `stop` to the daemon and wait up to 10 s for its socket to go, and THE daemon SHALL then stop as REQ-638 and REQ-856 say, with its engines ended and its asks saved; IF the daemon does not take the command or its socket outlives the wait, THEN `jw stop` SHALL signal the recorded pid as it did; a phone's `stop` SHALL be refused, and `stop` SHALL be an additive command (REQ-7).
 
 ---
 ## Rationale
@@ -1353,6 +1355,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-128 A permission of a subagent (`agent_id`) pending at the stop, a restored multi-question call and a restored `multiSelect` were not measured; REQ-848 records only a permission without `agent_id`, so a subagent's is left to Claude to settle («sin resultado»).
 - RISK-129 REQ-846's «nothing after it» also restores an orphan that Claude's own terminal left (the person quit there with a question open). Showing it is accepted; its answer is a message as any other.
 - RISK-130 The fixtures of REQ-846 to REQ-859 are written by hand from the measured lines of `docs/claude-engine.md`: the transcripts of the probe were deleted with it. N179a has to check them against a real orphan transcript before it is called done.
+- RISK-132 `jw stop` is the only way the daemon stops as REQ-638 and REQ-856 say: a `SIGTERM` from elsewhere, a crash or `SIGKILL` leave the engines orphaned, rejecting what they asked (OPEN-70).
 - RISK-131 Two saves for each permission (REQ-848) write the whole file; the file has no items when the transcript exists (`engine.rs:1497-1506`), so it is small, but a conversation of the old format (`legacy`) keeps its items up to 2 MiB.
 
 ## Open questions
@@ -1424,6 +1427,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - OPEN-66 (N174) Files outside the workspace for `@` (`/…`, `~/…`, `../…` typed after the `@`, listing a folder of the disk, which is what Claude Code does): left out, since the tree shows only the workspace and `find_files` lists it with `git ls-files`. Recommended: a later part that gives the daemon a command to list one folder, if the tree and `@` over the workspace do not cover the use.
 - OPEN-67 The lines of the table in Interfaces use the user's own wording («elegí», «sí, adelante con»); the UI speaks `tú`. Defaulted to the user's wording since they only go to Claude.
 - OPEN-68 REQ-857 (an engine that ends by itself also keeps its `ask`) goes beyond what was asked (`jw stop`); defaulted to yes since it is the same mechanism. Strike it to keep today's `ClearAsk`.
+- OPEN-70 A real handler for `SIGTERM` in the daemon (REQ-862 asks over the socket instead, so no `unsafe` and no `libc` are added): without it a `kill`, a logout or a crash still loses what waits. Not asked for.
 - OPEN-69 A restored permission whose tool is `Write`/`Edit` shows its diff as REQ-404 does, from the saved `input`; whether the person wants the diff drawn from the file as it is now was not asked.
 
 ## Corrections
@@ -1553,6 +1557,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - The first form of N173, a workspace `kind: "chat"`, was false: `WorkspaceKind` is a closed enum in Rust and Kotlin (`crates/contract/src/lib.rs:1175`, `android/contract/.../Contract.kt:58`) and a value it does not know fails to read on an installed phone. N173 uses the optional `chat` object (RAT-122). The ids of the groups were first taken for N161 and the narrow layout for N165d; they are N163 and REQ-738. The prototype drew the narrow terminal as the list or the conversation, one at a time; the terminal client keeps its sidebar at any width and only the panes change (REQ-738), which REQ-824 now says. Home never wired the long press on its title that REQ-201 and REQ-827 name (only the workspace's screen did): N173c wires it. The prototype also let `l` and `Tab` enter a chat: they do not enter a workspace either, so REQ-820 has only `↵`.
 - The task's first design rebuilt **everything** from the transcript «so it works even if the daemon died without stopping cleanly». False for a permission (RAT-132) and false after a clean `jw stop` (RAT-131).
 - It also assumed `jw stop` leaves the transcript alone. False: closing stdin makes Claude write error results (and a plan or a permission is retried until the kill).
+- REQ-638 and N150 (the daemon that stops closes its engines, waits and ends their groups) only ever ran through `Daemon::stop`, which the daemon's own tests call: `jw stop` was `kill <pid>` of the daemon and the daemon has no handler, so it died at once, its engines read the end of their input when its pipes closed and rejected what they asked. Found 2026-10-25 with the real engine (N179c2); REQ-856 and all of N179 were a no-op on a real stop until `jw stop` asked over the socket (REQ-862).
 - The prototype's phase 1 text said «interrumpida» for a tool that was running at the stop. False: it can finish (RAT-135); the mark reads «sin resultado · pudo terminar».
 
 ## Tests
@@ -1767,6 +1772,7 @@ REQ-844 and REQ-845 by N175a: `crates/daemon/src/blocks.rs` (`a_store_not_integr
 REQ-846, REQ-847, REQ-849 by N179a: `crates/daemon/tests/conversation.rs` against the fake engine and a daemon of its own in a private directory, over transcripts in `crates/daemon/tests/captures/` (orphan question, orphan plan, orphan `Bash`, settled orphan, with and without `pending`): the `ask` with `restored`, the attention, no engine started; contract conformance for `restored` and `lost` (schema, fixtures, Rust, Kotlin `ConformanceTest`). REQ-848 by N179a: a test that reads the saved file at the moment `ask` is set and after the answer.
 REQ-850 to REQ-854 by N179b: the same tests, answering each restored `ask` and reading what the fake engine received (its argv for the mode, its stdin for the line) and the allowance (match, other input, turn end, no engine).
 REQ-856, REQ-857 by N179c: a daemon of its own stopped with an engine that has an `ask` (the fake engine records whether its stdin was closed or its group killed) and with one that has none; an engine that exits with an `ask`.
+REQ-862 by N179c2: `crates/jw/tests/claude.rs` (`jw_stop_asks_the_daemon_to_stop…`: a real `jw stop` against a daemon whose fake engine asks leaves no `eof` in the engine's log and against one whose engine is idle leaves it), the bridge test of the refused commands, contract conformance (`cmd-stop.json`), and a run against the real engine in a private daemon (the question comes back after `jw stop`, 2026-10-25).
 REQ-858, REQ-859 by N179d: `crates/daemon/src/transcript.rs` tests over the captures (`lost`, the `<synthetic>` line and the interrupted result not drawn).
 REQ-855, REQ-860 by N179e and N179f: `crates/jw/src/tui/conversation.rs` tests (the line above a restored `ask`; `⏸` for `lost`), `just ci` for the phone's Compose screens and `android/client-core` tests of the model; the screen seen by the user on a device has not been done.
 
@@ -1961,6 +1967,7 @@ REQ-855, REQ-860 by N179e and N179f: `crates/jw/src/tui/conversation.rs` tests (
 | N179a ✓ | `Ask.restored`, tool `lost`, `Saved.pending`, the restore at open of a question, a plan and a permission, the marks | 846-849, 861 | `contract/`, `crates/contract`, `android/contract`, `crates/daemon/src/{conversation,engine,transcript}.rs` |
 | N179b ✓ | the answers of a restored `ask` as a message, the mode, the allowance | 850-854 | `crates/daemon/src/{conversation,engine}.rs` |
 | N179c ✓ | `jw stop` ends the group of an engine with something pending; an engine that ends by itself keeps its `ask` | 856, 857 | `crates/daemon/src/{engine,core,conversation}.rs` |
+| N179c2 ✓ | `jw stop` asks the daemon to stop over the socket (`stop`), because the signal it sent never ran the daemon's stop; a conversation stopped in its first turn finds its ask in the transcript | 862, 846 | `crates/contract`, `contract/`, `android/contract`, `crates/jw/src/main.rs`, `crates/daemon/src/{commands,core,server,engine}.rs`, `crates/web/src/bridge.rs`, `crates/jw/tests/claude.rs` |
 | N179d ✓ | a tool without result is `lost`; the lines that settle an orphan are not drawn | 858, 859 | `crates/daemon/src/transcript.rs` |
 | N179e | the terminal client: the note above a restored `ask` and `⏸` | 855, 860 | `crates/jw/src/tui/conversation.rs` |
 | N179f | the phone: the row of the card and `⏸` | 855, 860 | `android/{client-core,app}/` |

@@ -736,6 +736,7 @@ pub fn open_conversation(
     let mut source = resume
         .as_deref()
         .and_then(|id| crate::transcript::Source::open(&cwd, env.as_ref(), id));
+    let mut ask_source = None;
     let (mut st, lazy) = match &resume {
         Some(id) => {
             let saved = dir
@@ -748,9 +749,10 @@ pub fn open_conversation(
                     model_arg = model_arg.or_else(|| s.model_arg.clone());
                     effort_arg = effort_arg.or_else(|| s.effort_arg.clone());
                     let mut st = State::restored(s, &clock());
-                    // A file of before the transcript was read keeps its own items.
+                    // A file of before the transcript was read keeps its own items; the transcript is still
+                    // looked at for what waited (a conversation stopped in its first turn is saved this way).
                     if st.legacy() {
-                        source = None;
+                        ask_source = source.take();
                     } else {
                         // Without a transcript what jwn kept is still shown.
                         let parser = source.as_ref().map(|s| &s.parser);
@@ -807,7 +809,7 @@ pub fn open_conversation(
     if lazy {
         st.set_held(crate::sessions::holder(env.as_ref(), &st.session, None));
         // What it was waiting for when the daemon stopped is asked again, once we know no other `claude` has it (REQ-846).
-        asked = st.restore_ask(source.as_ref().map(|s| &s.parser));
+        asked = st.restore_ask(source.as_ref().or(ask_source.as_ref()).map(|s| &s.parser));
     }
     let mut extra: Vec<String> = Vec::new();
     for d in &parsed.add_dirs {

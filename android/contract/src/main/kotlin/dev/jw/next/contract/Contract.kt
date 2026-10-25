@@ -405,6 +405,10 @@ sealed interface Cmd {
     @Serializable @SerialName("mobile_stop")
     data object MobileStop : Cmd
 
+    /** Stop the daemon the way it stops by itself; the PC's own `jw stop` sends it. */
+    @Serializable @SerialName("stop")
+    data object Stop : Cmd
+
     /**
      * Open the conversation of [pane] (it runs `claude`): a new one, or the one of [resume]; [args] are
      * the flags `claude` was typed with that the engine serves and [env] the environment it was typed in.

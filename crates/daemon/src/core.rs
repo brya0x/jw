@@ -149,6 +149,8 @@ pub struct Core {
     /// The daemon is being stopped: the shells that end then are not programs that ended, and
     /// what a restart brings back stays as it was.
     pub stopping: bool,
+    /// `jw stop` asked the daemon to stop: the process that runs it does (REQ-862).
+    pub stop_requested: bool,
     /// The operation that runs for each workspace and can be stopped: a push, a review being made
     /// (REQ-604).
     ops: HashMap<Id, crate::cancel::Cancel>,
@@ -203,6 +205,7 @@ impl Core {
             gh: None,
             state_dir: None,
             stopping: false,
+            stop_requested: false,
             ops: HashMap::new(),
             jobs: Vec::new(),
             job_clock: HashMap::new(),

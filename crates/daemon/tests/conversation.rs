@@ -3032,3 +3032,43 @@ fn an_engine_that_dies_with_an_ask_waiting_leaves_it_asked_and_its_answer_starts
     assert!(v.get("ask").is_none());
     r.stop();
 }
+
+/// A conversation stopped in its first turn is saved with its own items and no transcript: what it asked is
+/// still found in the transcript the engine had written, and its answer resumes the session (REQ-846, REQ-754).
+#[test]
+fn a_conversation_stopped_in_its_first_turn_brings_its_question_back() {
+    let mut r = rig();
+    let call = tool_call("AskUserQuestion", "toolu_open", QUESTION);
+    let (_file, env) = old_session(&r, &[FIRST, &call]);
+    let dir = r.sb.dir.join("state/conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = serde_json::json!({
+        "v": 1, "saved_at": 1, "name": "x", "named": true, "accent": "blue", "model": "claude",
+        "effort": "high", "mode": "manual", "session": "old-session", "has_transcript": false,
+        "first": 0, "cost": 0,
+        "items": [
+            {"t": "user", "text": "hola"},
+            {"t": "tool", "id": "toolu_open", "name": "AskUserQuestion", "arg": "¿Letra?", "state": "run"},
+        ],
+    });
+    std::fs::write(dir.join(format!("{}.json", r.pane)), saved.to_string()).unwrap();
+    let (node, _) = r.open_with(Some("old-session"), Vec::new(), Some(env));
+    let v = r.conv(&node);
+    assert_eq!(v["ask"]["restored"], true, "{v:#}");
+    assert_eq!(v["ask"]["kind"], "question");
+    assert_eq!(items(&v, "tool").last().unwrap()["state"], "ask");
+    r.cmd(Cmd::ConversationAnswer {
+        node: node.clone(),
+        ask: "toolu_open:0".into(),
+        key: "1".into(),
+        text: None,
+        by: None,
+    })
+    .unwrap();
+    wait_for("the engine to resume the session", || {
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l.starts_with("start ") && l.contains("\"--resume\", \"old-session\""))
+    });
+    r.stop();
+}
