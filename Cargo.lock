@@ -219,7 +219,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "contract"
-version = "0.0.48"
+version = "0.0.50"
 dependencies = [
  "jsonschema",
  "serde",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.0.48"
+version = "0.0.50"
 dependencies = [
  "contract",
  "identity",
@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "identity"
-version = "0.0.48"
+version = "0.0.50"
 dependencies = [
  "serde",
  "toml",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "jw"
-version = "0.0.48"
+version = "0.0.50"
 dependencies = [
  "contract",
  "crossterm",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.0.48"
+version = "0.0.50"
 dependencies = [
  "contract",
  "identity",
@@ -2044,7 +2044,7 @@ dependencies = [
 
 [[package]]
 name = "wire"
-version = "0.0.48"
+version = "0.0.50"
 dependencies = [
  "contract",
  "serde",
