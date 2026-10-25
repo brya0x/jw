@@ -862,6 +862,9 @@ pub struct View {
     check_node: Option<String>,
     /// What the last command did, in the status bar until the next key.
     flash: String,
+    /// What a task loop did that the person should know (REQ-929): the text, whether it is good news, and until
+    /// when it is shown, in `now_ms`.
+    notice: Option<(String, bool, u64)>,
     /// The look the person chose, and whether the machine is dark (what `system` follows).
     settings: Settings,
     os_dark: bool,
@@ -975,6 +978,7 @@ impl View {
             chat_wait: None,
             check_node: None,
             flash: String::new(),
+            notice: None,
             settings: Settings::default(),
             os_dark: true,
             save: false,
@@ -1065,6 +1069,35 @@ impl View {
 
     pub fn set_now(&mut self, ms: u64) {
         self.now_ms = ms;
+    }
+
+    /// A task loop that stopped or ended since the session the person was last shown (REQ-929): what it
+    /// says is in the footer for 6 seconds. The first session of a connection says nothing, since what
+    /// stopped before the client came is not news.
+    fn tasks_stopped(&mut self, new: &Session) {
+        let Some(old) = self.session.as_ref() else {
+            return;
+        };
+        for w in &new.workspaces {
+            let Some(stop) = w.tasks.as_ref().and_then(|t| t.stop.as_ref()) else {
+                continue;
+            };
+            let before = old
+                .workspaces
+                .iter()
+                .find(|o| o.id == w.id)
+                .and_then(|o| o.tasks.as_ref())
+                .and_then(|t| t.stop.as_ref());
+            if before != Some(stop) {
+                let done = stop.kind == contract::tasks::StopKind::Done;
+                let name = shown_name(&w.name, w.kind, w.branch.as_deref());
+                self.notice = Some((
+                    format!("{} {name}: {}", if done { "✓" } else { "?" }, stop.text),
+                    done,
+                    self.now_ms + NOTICE_MS,
+                ));
+            }
+        }
     }
 
     pub fn set_size(&mut self, cols: usize, rows: usize) {
@@ -1343,6 +1376,7 @@ impl View {
                     // The list can change order under the highlight (a group moved, a workspace
                     // made or closed elsewhere): it stays on the workspace it was on (REQ-693).
                     let was = self.selected_id();
+                    self.tasks_stopped(&s);
                     self.session = Some(s);
                     let at = was.and_then(|id| {
                         self.session
@@ -6254,21 +6288,34 @@ impl View {
             // A review says which pull request it is, beside the marks (REQ-588).
             let tag = w.review.as_ref().map(|r| format!("⎇#{}", r.pr));
             let tag_w = tag.as_ref().map_or(0, |t| t.chars().count() + 1);
+            // A task list says how far it is, beside the marks (REQ-925).
+            let progress = w.tasks.as_ref().map(|t| format!("{}/{}", t.done, t.total));
+            let progress_w = progress.as_ref().map_or(0, |p| p.chars().count() + 1);
             g.put_over(
                 text,
                 y,
-                &clip(&name, (SIDEBAR - text - 6).saturating_sub(tag_w)),
+                &clip(
+                    &name,
+                    (SIDEBAR - text - 6).saturating_sub(tag_w + progress_w),
+                ),
                 name_style,
             );
+            if let Some(p) = &progress {
+                g.put_over(SIDEBAR - 5 - tag_w - progress_w, y, p, dim);
+            }
             if let Some(t) = &tag {
                 g.put_over(SIDEBAR - 6 - tag_w + 1, y, t, Style::fg(look::cyan()));
             }
+            let loop_on = w.tasks.as_ref().is_some_and(|t| t.on);
             if let Some(a) = un.first() {
                 let (glyph, colour) = mark(a);
                 g.put_over(SIDEBAR - 5, y, glyph, Style::fg(colour).bold());
                 if un.len() > 1 {
                     g.put_over(SIDEBAR - 4, y, &un.len().to_string(), dim);
                 }
+            } else if w.tasks.is_some() && !loop_on {
+                // a list with its loop off and nothing to say
+                g.put_over(SIDEBAR - 5, y, "○", dim);
             }
             // Its worktree is being removed: a blue spinner and a dim name; when that failed, a red
             // cross until the job is dismissed (REQ-657).
@@ -6282,8 +6329,8 @@ impl View {
             } else if self.removal_failed(&w.id) {
                 g.put_over(SIDEBAR - 2, y, "✗", Style::fg(look::red()).bold());
             }
-            // Claude works in it: a spinner beside the marks (REQ-579).
-            if w.working {
+            // Claude works in it, or its task loop does: a spinner beside the marks (REQ-579, REQ-925).
+            if w.working || loop_on {
                 g.put_over(
                     SIDEBAR - 3,
                     y,
@@ -6517,8 +6564,18 @@ impl View {
         );
         let marks = self.bar_marks(cols);
         // What failed starts with `✗` and is red; what was done is green.
+        let notice = self
+            .notice
+            .as_ref()
+            .filter(|(_, _, until)| self.now_ms < *until);
         let (hint, hint_style) = match self.flash.as_str() {
-            "" => (hint, dim.on(look::panel())),
+            "" => match notice {
+                Some((text, good, _)) => (
+                    text.as_str(),
+                    Style::fg(if *good { look::green() } else { look::yellow() }).on(look::panel()),
+                ),
+                None => (hint, dim.on(look::panel())),
+            },
             flash if flash.starts_with('✗') => (flash, Style::fg(look::red()).on(look::panel())),
             flash => (flash, Style::fg(look::green()).on(look::panel())),
         };
@@ -7150,6 +7207,9 @@ impl View {
 }
 
 type Rect = (usize, usize, usize, usize);
+
+/// How long what a task loop did stays in the footer (REQ-929).
+const NOTICE_MS: u64 = 6000;
 
 /// The stop chip of a running command, at the right of the editor's chips row.
 const STOP: &str = "■ ^C";
@@ -9595,6 +9655,114 @@ mod tests {
         assert!(!notes.contains('⠋'), "the other one does not work: {notes}");
         v.set_now(110);
         assert!(spin(&v).0.contains('⠙'), "it turns");
+    }
+
+    fn with_tasks(v: &mut View, at: usize, done: u32, total: u32, on: bool) {
+        v.session.as_mut().unwrap().workspaces[at].tasks = Some(contract::tasks::TasksSummary {
+            done,
+            total,
+            on,
+            stop: None,
+        });
+    }
+
+    /// REQ-925: a workspace that has a list says how far it is, beside its marks; the loop's spinner
+    /// turns while it is on, the attention's mark is the attention's, and `○` is what is left.
+    #[test]
+    fn a_workspace_with_a_task_list_says_its_progress_and_its_loop() {
+        let mut v = fixture_view();
+        let plain = |v: &View, row: usize| sidebar_rows(v, 30)[row].clone();
+        let bare = plain(&v, 4);
+        assert!(
+            !bare.contains('/') && !bare.contains('○'),
+            "no list, no change: {bare}"
+        );
+        // with its attention (a CI that failed) the row says that, and the progress beside it
+        with_tasks(&mut v, 1, 3, 8, false);
+        let with_ci = plain(&v, 4);
+        assert!(
+            with_ci.contains("3/8") && with_ci.contains('✗') && !with_ci.contains('○'),
+            "{with_ci}"
+        );
+        // loop off, nothing to say: the progress and `○`
+        v.session.as_mut().unwrap().workspaces[1].attention.clear();
+        let row = plain(&v, 4);
+        assert!(row.contains("3/8") && row.contains('○'), "{row}");
+        // loop on: the spinner, and it turns
+        with_tasks(&mut v, 1, 3, 8, true);
+        v.set_now(0);
+        assert!(plain(&v, 4).contains('⠋'), "{}", plain(&v, 4));
+        v.set_now(110);
+        assert!(plain(&v, 4).contains('⠙'));
+        assert!(plain(&v, 4).contains("3/8") && !plain(&v, 4).contains('○'));
+        // an attention is shown as it is: the list's `○` gives way to it
+        with_tasks(&mut v, 0, 8, 8, false);
+        let first = plain(&v, 2);
+        assert!(first.contains("8/8") && first.contains('!'), "{first}");
+        assert!(!first.contains('○'), "{first}");
+        // a long name leaves the progress whole
+        v.session.as_mut().unwrap().workspaces[1].name =
+            "a-name-that-is-far-too-long-for-the-bar".into();
+        with_tasks(&mut v, 1, 12, 12, false);
+        let long = plain(&v, 4);
+        assert!(long.contains("12/12") && long.contains('…'), "{long}");
+    }
+
+    /// REQ-929: a loop that stops says so in the footer for 6 seconds, once; the first session of a
+    /// connection says nothing.
+    #[test]
+    fn a_loop_that_stops_is_said_in_the_footer_for_six_seconds_and_what_was_there_is_not_news() {
+        let stop = |kind, text: &str| contract::tasks::LoopStop {
+            kind,
+            text: text.into(),
+        };
+        let mut v = fixture_view();
+        let mut s = v.session.clone().unwrap();
+        s.workspaces[1].tasks = Some(contract::tasks::TasksSummary {
+            done: 2,
+            total: 6,
+            on: false,
+            stop: Some(stop(
+                contract::tasks::StopKind::Blocked,
+                "t3 blocked: needs the key",
+            )),
+        });
+        // the client has no session yet: what had stopped is not news
+        let mut fresh = fixture_view();
+        fresh.session = None;
+        fresh.tasks_stopped(&s);
+        assert!(fresh.notice.is_none());
+        // a stop that arrives is said, with the workspace's name, for 6 seconds
+        v.set_now(1000);
+        v.tasks_stopped(&s);
+        v.session = Some(s.clone());
+        let last = |v: &View| v.plain(120, 30).lines().last().unwrap().to_owned();
+        assert!(
+            last(&v).contains("t3 blocked: needs the key") && last(&v).contains('?'),
+            "{}",
+            last(&v)
+        );
+        v.set_now(6999);
+        assert!(last(&v).contains("t3 blocked"));
+        v.set_now(7001);
+        assert!(!last(&v).contains("t3 blocked"), "{}", last(&v));
+        // the same stop in the next session is not said again, a new one is, and an end is good news
+        v.notice = None;
+        v.set_now(8000);
+        v.tasks_stopped(&s);
+        assert!(v.notice.is_none());
+        let mut e = s.clone();
+        e.workspaces[1].tasks.as_mut().unwrap().stop = Some(stop(
+            contract::tasks::StopKind::Done,
+            "all 6 tasks done in 7 laps",
+        ));
+        v.tasks_stopped(&e);
+        let (text, good, until) = v.notice.clone().unwrap();
+        assert!(
+            good && text.starts_with('✓') && text.contains("all 6 tasks done"),
+            "{text}"
+        );
+        assert_eq!(until, 8000 + NOTICE_MS);
     }
 
     fn prs_list() -> serde_json::Value {
