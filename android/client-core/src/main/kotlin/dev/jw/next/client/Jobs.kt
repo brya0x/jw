@@ -13,12 +13,14 @@ enum class AvisosTab { Alertas, Trabajos }
 fun Job.title(): String = when (kind) {
     JobKind.RemoveWorkspace -> "quitar worktree $name"
     JobKind.SyncWorkspace -> "subir $name"
+    JobKind.UpdateClaude -> "actualizar $name"
 }
 
 /** What a job is, under its title. */
 fun Job.kindLabel(): String = when (kind) {
     JobKind.RemoveWorkspace -> "quitar worktree"
     JobKind.SyncWorkspace -> "subir rama"
+    JobKind.UpdateClaude -> "actualizar claude"
 }
 
 /** How long something took, as the terminal client says it: `4,2 s`, `38 s`, `3 min`. */
@@ -44,6 +46,7 @@ fun Job.said(): String = when (state) {
     JobState.Done -> when (kind) {
         JobKind.RemoveWorkspace -> "quitado · la rama se queda"
         JobKind.SyncWorkspace -> "subido $name"
+        JobKind.UpdateClaude -> "$name · las conversaciones abiertas siguen en la anterior"
     }
     JobState.Failed -> detail ?: "falló sin decir por qué"
 }

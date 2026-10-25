@@ -7,6 +7,7 @@ pub mod browse;
 mod cancel;
 mod changes;
 mod chats;
+pub mod claude_update;
 mod commands;
 mod conversation;
 mod core;

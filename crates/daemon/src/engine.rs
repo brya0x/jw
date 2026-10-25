@@ -208,7 +208,7 @@ fn find_in_path(name: &str, path: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-fn resolve_claude(
+pub(crate) fn resolve_claude(
     env: Option<&BTreeMap<String, String>>,
     cfg_env: &[(String, String)],
 ) -> Option<PathBuf> {
@@ -489,7 +489,7 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
         drop(core);
         // A turn that ended is on disk at once: a daemon stopped by a signal has no last save.
         // So is the answer to a reload's `initialize`, which comes after its `result` (REQ-758).
-        // A permission that waits is on disk as well: a restart finds it there (REQ-848).
+        // A permission that waits is on disk as well: a restart finds it there (REQ-877).
         if msg["type"] == "result"
             || msg["type"] == "control_response"
             || (msg["type"] == "control_request" && msg["request"]["subtype"] == "can_use_tool")
@@ -808,7 +808,7 @@ pub fn open_conversation(
     let mut asked = Vec::new();
     if lazy {
         st.set_held(crate::sessions::holder(env.as_ref(), &st.session, None));
-        // What it was waiting for when the daemon stopped is asked again, once we know no other `claude` has it (REQ-846).
+        // What it was waiting for when the daemon stopped is asked again, once we know no other `claude` has it (REQ-875).
         asked = st.restore_ask(source.as_ref().or(ask_source.as_ref()).map(|s| &s.parser));
     }
     let mut extra: Vec<String> = Vec::new();
@@ -1039,14 +1039,14 @@ pub fn answer(
             .ok_or_else(|| no_conversation(node))?;
         c.dirty = true;
         let recorded = c.st.records_permission();
-        // An answer that cannot start its engine leaves everything as it was (REQ-854).
+        // An answer that cannot start its engine leaves everything as it was (REQ-883).
         let before = c.st.is_restored_ask(ask).then(|| c.st.clone());
         let fx =
             c.st.answer(ask, key, text, by)
                 .map_err(|m| err(ErrorCode::Conflict, m))?;
         (fx, recorded, before)
     };
-    // The ask was waiting before a restart: its engine is gone, so one starts and the answer is its first message (REQ-850).
+    // The ask was waiting before a restart: its engine is gone, so one starts and the answer is its first message (REQ-879).
     let resume = fx
         .iter()
         .position(|e| matches!(e, Effect::Resume(_)))
@@ -1066,7 +1066,7 @@ pub fn answer(
             core.refresh();
             return Err(e);
         }
-        // The file stops saying the permission waits before the engine is told anything (REQ-848).
+        // The file stops saying the permission waits before the engine is told anything (REQ-877).
         if recorded {
             save_due(shared, true);
         }
@@ -1088,7 +1088,7 @@ pub fn answer(
         save_due(shared, true);
         return Ok(None);
     }
-    // The file stops saying the permission waits before the engine is told it was answered (REQ-848).
+    // The file stops saying the permission waits before the engine is told it was answered (REQ-877).
     if recorded {
         drop(core);
         save_due(shared, true);
@@ -1519,7 +1519,7 @@ type Due = (PathBuf, Saved, Option<Probe>);
 /// The conversations that changed and are due are written without the lock: only what is
 /// to be written is copied under it.
 pub fn save_due(shared: &Shared, force: bool) {
-    // One save at a time, from the copy to the rename: a copy made earlier must not land over a later one (REQ-848).
+    // One save at a time, from the copy to the rename: a copy made earlier must not land over a later one (REQ-877).
     static SAVING: Mutex<()> = Mutex::new(());
     let _one = SAVING.lock().unwrap_or_else(|p| p.into_inner());
     type Cached = Option<(PathBuf, Vec<ConvCommand>)>;
@@ -1634,7 +1634,7 @@ pub fn stop_all(convs: &mut std::collections::HashMap<Id, Conv>) -> Vec<Leaving>
             // Its threads ignore what follows: a daemon that stops is not an engine that died.
             c.generation += 1;
             if c.st.has_ask() {
-                // Closing its input makes Claude answer the ask itself and retry it until the grace ends: its group ends now, and the transcript is left as after a crash (REQ-856).
+                // Closing its input makes Claude answer the ask itself and retry it until the grace ends: its group ends now, and the transcript is left as after a crash (REQ-885).
                 kill_group(en.pid);
             } else {
                 let _ = en.tx.send(Out::Close);

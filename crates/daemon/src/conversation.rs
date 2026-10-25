@@ -440,7 +440,7 @@ pub enum Effect {
     /// The conversation can be resumed from now on: the pane brings it back after a restart.
     Resumable(String),
     /// The answer to an ask that was waiting before a restart: no engine has the question any more, so
-    /// the daemon starts one and this is the first message it is sent (REQ-850 to REQ-852).
+    /// the daemon starts one and this is the first message it is sent (REQ-879 to REQ-881).
     Resume(String),
 }
 
@@ -527,7 +527,7 @@ struct Pending {
     input: Value,
     tool_use_id: Option<String>,
     session_rule: Option<String>,
-    /// The request came from a subagent (`agent_id`): not kept for a restart (REQ-848).
+    /// The request came from a subagent (`agent_id`): not kept for a restart (REQ-877).
     nested: bool,
 }
 
@@ -567,9 +567,9 @@ pub struct State {
     pub status: ConvStatus,
     pub since: Option<u64>,
     pending: Option<Pending>,
-    /// The permission the saved file kept, until the transcript says whether it still waits (REQ-847).
+    /// The permission the saved file kept, until the transcript says whether it still waits (REQ-876).
     saved_pending: Option<SavedPending>,
-    /// What a restored permission was answered yes to: the call Claude makes again for it is allowed once (REQ-852).
+    /// What a restored permission was answered yes to: the call Claude makes again for it is allowed once (REQ-881).
     allow_once: Option<(String, Value)>,
     queue: VecDeque<Queued>,
     pub tasks: Vec<Task>,
@@ -614,6 +614,9 @@ pub struct State {
     advisor: Option<String>,
     /// Another `claude` that has this session open, while the conversation has no engine (REQ-575).
     held: Option<Held>,
+    /// What the engine that runs says its version is (`claude_code_version` of `system/init`),
+    /// not saved (REQ-852).
+    engine_version: Option<String>,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -661,12 +664,12 @@ pub struct Saved {
     /// The `/` list the engine gave, so a conversation that comes back has it before its engine does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<ConvCommand>,
-    /// The permission that waited when it was saved: the transcript cannot tell it from a tool that runs (REQ-847).
+    /// The permission that waited when it was saved: the transcript cannot tell it from a tool that runs (REQ-876).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<SavedPending>,
 }
 
-/// A permission that waits, as the saved file keeps it (REQ-847, REQ-848).
+/// A permission that waits, as the saved file keeps it (REQ-876, REQ-877).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedPending {
     pub tool_use_id: String,
@@ -830,6 +833,7 @@ impl State {
             cwd: None,
             advisor: None,
             held: None,
+            engine_version: None,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -1169,21 +1173,21 @@ impl State {
         self.restore_ask(Some(&parser));
     }
 
-    /// Whether the ask `ask` waits from before a restart: no engine has it, so its answer starts one (REQ-850).
+    /// Whether the ask `ask` waits from before a restart: no engine has it, so its answer starts one (REQ-879).
     pub fn is_restored_ask(&self, ask: &str) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|p| p.ask.id == ask && p.ask.restored)
     }
 
-    /// Whether a permission waits that the saved file keeps: answering it takes it out of the file (REQ-848).
+    /// Whether a permission waits that the saved file keeps: answering it takes it out of the file (REQ-877).
     pub fn records_permission(&self) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|p| matches!(p.kind, Kind::Permission) && !p.nested)
     }
 
-    /// Ask again what the conversation was waiting for when the daemon stopped (REQ-846, REQ-847): a
+    /// Ask again what the conversation was waiting for when the daemon stopped (REQ-875, REQ-876): a
     /// question or a plan the transcript ends with, or the permission the saved file kept if the
     /// transcript still has its call and no result. A session another `claude` holds is not asked in.
     pub fn restore_ask(&mut self, parser: Option<&crate::transcript::Parser>) -> Vec<Effect> {
@@ -1277,6 +1281,8 @@ impl State {
             following: self.followed.map(|f| f.since),
             held: self.held.clone(),
             cwd: self.cwd.clone(),
+            engine_version: self.engine_version.clone(),
+            engine_newer: None,
             suggestion: self.shown_suggestion(),
             older: self.older_cursor(),
         }
@@ -1464,7 +1470,7 @@ impl State {
         Ok(out)
     }
 
-    /// The answer to a permission that waited before a restart: what Claude is told, as a message (REQ-852).
+    /// The answer to a permission that waited before a restart: what Claude is told, as a message (REQ-881).
     fn answer_restored_permission(
         &mut self,
         p: Pending,
@@ -1950,6 +1956,12 @@ impl State {
                 }
                 if msg["skills"].is_array() {
                     self.learn_skills(&msg["skills"]);
+                }
+                if let Some(v) = msg["claude_code_version"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                {
+                    self.engine_version = Some(v.to_owned());
                 }
                 self.begin_auto(now);
             }
@@ -2595,7 +2607,7 @@ impl State {
                 AttentionKind::Plan,
             );
         }
-        // The person said yes to this before a restart: Claude proposes the same call again (REQ-853).
+        // The person said yes to this before a restart: Claude proposes the same call again (REQ-882).
         if self
             .allow_once
             .as_ref()
@@ -2801,7 +2813,8 @@ impl State {
 
     /// The engine's process ended while the conversation was open.
     pub fn engine_gone(&mut self, reason: &str) -> Vec<Effect> {
-        // What it asked is not lost with it: it waits again as after a restart, and its answer starts another engine (REQ-857).
+        self.engine_version = None;
+        // What it asked is not lost with it: it waits again as after a restart, and its answer starts another engine (REQ-886).
         let had_ask = self.pending.as_mut().is_some_and(|p| {
             p.ask.restored = true;
             true
@@ -2834,7 +2847,7 @@ impl State {
         Vec::new()
     }
 
-    /// Whether an ask waits for the person: the engine that has it is ended at once when the daemon stops (REQ-856).
+    /// Whether an ask waits for the person: the engine that has it is ended at once when the daemon stops (REQ-885).
     pub fn has_ask(&self) -> bool {
         self.pending.is_some()
     }
@@ -2930,7 +2943,7 @@ impl State {
     }
 
     /// The tool item with this id: its state, summary, who answered, its output and its name.
-    /// A tool with no result that may have finished unseen: `failed` and `lost`, with what is known of it (REQ-858).
+    /// A tool with no result that may have finished unseen: `failed` and `lost`, with what is known of it (REQ-887).
     fn mark_lost(&mut self, id: &str, summary: &str) {
         for item in self.items.iter_mut().rev() {
             if let Item::Tool {
@@ -3950,7 +3963,7 @@ mod tests {
             "permission_suggestions": if suggested { json!([{"type": "addRules"}]) } else { json!([]) }}})
     }
 
-    /// REQ-848: a permission is kept for a restart unless a subagent asked it; a question or a plan is not kept (the transcript has them).
+    /// REQ-877: a permission is kept for a restart unless a subagent asked it; a question or a plan is not kept (the transcript has them).
     #[test]
     fn only_a_permission_that_the_main_agent_asked_is_kept_for_a_restart() {
         let mut s = st();
@@ -3980,7 +3993,7 @@ mod tests {
         assert!(s.pending.is_some() && s.saved(0).pending.is_none());
     }
 
-    /// REQ-846: the items are made again when the transcript grows, and the tool of a restored ask is still the one that asks.
+    /// REQ-875: the items are made again when the transcript grows, and the tool of a restored ask is still the one that asks.
     #[test]
     fn making_the_items_again_leaves_the_tool_of_a_restored_ask_asking() {
         let call = json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"}]}]}}]}});
@@ -4024,7 +4037,7 @@ mod tests {
         s
     }
 
-    /// REQ-850 to REQ-852: what a restored ask says when it is answered, and what it leaves for the next call.
+    /// REQ-879 to REQ-881: what a restored ask says when it is answered, and what it leaves for the next call.
     #[test]
     fn a_restored_ask_answers_with_a_message_and_the_mode_that_the_answer_means() {
         let line = |fx: Vec<Effect>| {
@@ -4105,7 +4118,7 @@ mod tests {
         assert!(s.allow_once.is_none());
     }
 
-    /// REQ-852: the tool of an ask of before a restart gets no result on the stream, so it ends when it is answered; `^C` on it drops it.
+    /// REQ-881: the tool of an ask of before a restart gets no result on the stream, so it ends when it is answered; `^C` on it drops it.
     #[test]
     fn the_tool_of_a_restored_ask_ends_when_it_is_answered_and_is_not_left_running() {
         let state = |s: &State| match s.items.last() {
@@ -4608,6 +4621,35 @@ mod tests {
         assert_eq!(short_model("claude-sonnet-5-5"), "sonnet-5.5");
         assert_eq!(short_model("claude-opus-4-1-20250805"), "opus-4.1");
         assert_eq!(short_model("fable"), "fable");
+    }
+
+    #[test]
+    fn the_engines_version_is_what_init_says_and_goes_with_the_engine() {
+        let mut s = st();
+        let head = || Head {
+            id: "c".into(),
+            v: 1,
+            epoch: "e".into(),
+            rev: 1,
+            attention: Vec::new(),
+        };
+        assert_eq!(s.node(head(), &"p".into()).engine_version, None);
+        s.apply(&json!({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "claude_code_version": "2.1.309"}), 0);
+        assert_eq!(
+            s.node(head(), &"p".into()).engine_version.as_deref(),
+            Some("2.1.309")
+        );
+        // An init that does not say it keeps what the engine said before.
+        s.apply(
+            &json!({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5"}),
+            1,
+        );
+        assert_eq!(
+            s.node(head(), &"p".into()).engine_version.as_deref(),
+            Some("2.1.309")
+        );
+        s.engine_gone("el motor terminó");
+        assert_eq!(s.node(head(), &"p".into()).engine_version, None);
     }
 
     #[test]

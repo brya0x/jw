@@ -24,7 +24,7 @@ class FoldTest {
         )
     }
 
-    /** REQ-860: a tool with no result may still run as far as anyone saw: it is not folded with the commands that ended. */
+    /** REQ-889: a tool with no result may still run as far as anyone saw: it is not folded with the commands that ended. */
     @Test
     fun aToolWithNoResultIsNotFoldedIntoARun() {
         val items = listOf(tool("Bash"), tool("Bash", ToolState.Failed, lost = true), tool("Bash"))

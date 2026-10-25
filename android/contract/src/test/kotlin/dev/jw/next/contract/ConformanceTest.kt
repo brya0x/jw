@@ -245,7 +245,7 @@ class ConformanceTest {
         assertEquals(1250L, node.tokens)
     }
 
-    /** A question that was waiting when the daemon stopped says so, and a tool that has no result says that it may have finished (REQ-846, REQ-858). */
+    /** A question that was waiting when the daemon stopped says so, and a tool that has no result says that it may have finished (REQ-875, REQ-887). */
     @Test
     fun aRestoredAskAndALostToolAreRead() {
         val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-restored.json" }.second

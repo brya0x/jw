@@ -41,11 +41,11 @@ pub struct Stamped {
 }
 
 /// What the lines read so far say of a conversation.
-/// What a tool with no result says: it may have finished unseen (REQ-858).
+/// What a tool with no result says: it may have finished unseen (REQ-887).
 pub const LOST: &str = "sin resultado · pudo terminar";
 
 /// The last question or plan Claude asked that nothing has answered, nor anything been written
-/// after: what a conversation that comes back asks again (REQ-846).
+/// after: what a conversation that comes back asks again (REQ-875).
 #[derive(Debug, Clone)]
 pub struct OpenAsk {
     pub tool: String,
@@ -565,7 +565,7 @@ impl Parser {
             ..
         }) = self.items.get_mut(at)
         {
-            // Claude settles a call that was left without a result with an error of its own: that is not what the tool said (REQ-858).
+            // Claude settles a call that was left without a result with an error of its own: that is not what the tool said (REQ-887).
             if interrupted {
                 *state = ToolState::Failed;
                 *summary = Some(LOST.into());
@@ -1247,7 +1247,7 @@ mod tests {
         )
     }
 
-    /// REQ-846: a question or a plan that nothing answered, with nothing written after it, is what waits.
+    /// REQ-875: a question or a plan that nothing answered, with nothing written after it, is what waits.
     #[test]
     fn a_question_or_a_plan_with_no_result_and_nothing_after_it_is_open() {
         let q = serde_json::json!({"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"}]}]});
@@ -1271,7 +1271,7 @@ mod tests {
         );
     }
 
-    /// REQ-846: what Claude writes after the call (a result, the interruption, a message of its own or of the person's) closes it.
+    /// REQ-875: what Claude writes after the call (a result, the interruption, a message of its own or of the person's) closes it.
     #[test]
     fn anything_written_after_the_call_closes_the_open_question() {
         let call = calls("AskUserQuestion", "q1", serde_json::json!({"questions":[]}));
@@ -1295,7 +1295,7 @@ mod tests {
         assert!(parse(&call).open_ask.is_some());
     }
 
-    /// REQ-847: a call with no result is told from one that has it, and from one the lines do not have.
+    /// REQ-876: a call with no result is told from one that has it, and from one the lines do not have.
     #[test]
     fn a_tool_without_a_result_is_told_from_one_that_has_it() {
         let call = calls("Bash", "b1", serde_json::json!({"command":"ls"}));
@@ -1304,7 +1304,7 @@ mod tests {
         assert!(!parse(&call).has_no_result("other"));
     }
 
-    /// REQ-858, REQ-859: what Claude writes to settle a call that has no result is not what the tool said and not a line of
+    /// REQ-887, REQ-888: what Claude writes to settle a call that has no result is not what the tool said and not a line of
     /// Claude's: the tool is `lost`, the synthetic message is not drawn and does not name the model.
     #[test]
     fn what_claude_writes_to_settle_an_orphan_call_is_a_lost_tool_and_no_line() {

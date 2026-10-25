@@ -1418,7 +1418,7 @@ impl Ui {
                 lost,
                 ..
             } => {
-                // A tool with no result may have finished unseen: not a failure, so not red (REQ-860).
+                // A tool with no result may have finished unseen: not a failure, so not red (REQ-889).
                 let dot = if *lost {
                     ("⏸ ".to_owned(), dim)
                 } else {
@@ -1835,6 +1835,13 @@ impl Ui {
             if let Some(at) = self.recalling {
                 chips.push((format!("↑ {}/{}", at + 1, self.sent.len()), look::yellow()));
             }
+            // The engine runs another claude than the one installed (REQ-855).
+            if let (Some(running), Some(newer)) = (&conv.engine_version, &conv.engine_newer) {
+                chips.push((
+                    format!("motor {running} ↑ {newer} · ciérrala y ábrela"),
+                    look::yellow(),
+                ));
+            }
             let proposed = match &conv.held {
                 Some(h) => Some(Ui::held_why(h).0),
                 None => self.ghost(conv).map(|s| format!("{s}  tab")),
@@ -1929,7 +1936,7 @@ impl Ui {
             g.put(tx, row, &clip(text, tw), style);
             row += 1;
         };
-        // What was waiting before a restart says so, and that the answer goes as a message (REQ-855).
+        // What was waiting before a restart says so, and that the answer goes as a message (REQ-884).
         if ask.restored {
             text_row(g, RESTORED_NOTE, Style::fg(look::yellow()).on(ground));
         }
@@ -3954,7 +3961,7 @@ fn permission_hint(ask: &Ask) -> &'static str {
     }
 }
 
-/// The line over an ask that was waiting when the daemon stopped (REQ-855).
+/// The line over an ask that was waiting when the daemon stopped (REQ-884).
 const RESTORED_NOTE: &str = "↻ se retomó tras reiniciar · tu respuesta irá como un mensaje";
 
 /// Rows the box that asks takes: its borders, its title, what it is about, the options and the hint.
@@ -4372,6 +4379,44 @@ mod tests {
         ui.draw(&mut g, conv, INNER, &chips, true, 1_792_110_012_000);
         let rows = g.rows_plain();
         (g, rows)
+    }
+
+    #[test]
+    fn an_engine_that_is_not_the_installed_claude_has_a_chip_in_the_row_of_the_field() {
+        let mut conv = idle();
+        let chip = |conv: &Conversation, width: usize| {
+            frame_in(&Ui::default(), conv, (2, 1, width, 24))
+                .into_iter()
+                .find(|r| r.contains("motor"))
+        };
+        assert_eq!(
+            chip(&conv, 96),
+            None,
+            "an engine that has not said its version has no chip"
+        );
+        conv.engine_version = Some("2.1.309".into());
+        assert_eq!(
+            chip(&conv, 96),
+            None,
+            "nor does one that runs the installed claude"
+        );
+        conv.engine_newer = Some("2.1.312".into());
+        let wide = chip(&conv, 96).expect("the chip is drawn");
+        assert!(
+            wide.contains("motor 2.1.309 ↑ 2.1.312 · ciérrala y ábrela"),
+            "{wide}"
+        );
+        // In a narrow pane the chip is cut with `…`, as every chip is, and what matters comes first.
+        let narrow = chip(&conv, 50).expect("it is drawn, cut");
+        assert!(
+            narrow.contains("motor 2.1.309 ↑ 2.1.312") && narrow.ends_with('…'),
+            "{narrow}"
+        );
+        assert!(
+            chip(&conv, 30)
+                .expect("and cut again")
+                .contains("motor 2.1.309")
+        );
     }
 
     /// A `Ui` with every run of tools open, to see the tools one by one.
@@ -5004,7 +5049,7 @@ mod tests {
         assert_eq!(ui.editor.text(), "a?", "a question mark in a line is text");
     }
 
-    /// REQ-860: a tool with no result is drawn with `⏸`, dim, and its summary; a failed one keeps its red dot.
+    /// REQ-889: a tool with no result is drawn with `⏸`, dim, and its summary; a failed one keeps its red dot.
     #[test]
     fn a_tool_that_may_have_finished_unseen_is_drawn_paused_and_not_as_a_failure() {
         let tool = |name: &str, lost: bool| Item::Tool {
@@ -7465,7 +7510,7 @@ mod tests {
         c
     }
 
-    /// REQ-855: an ask that was waiting before a restart has the line that says so above its title, and its
+    /// REQ-884: an ask that was waiting before a restart has the line that says so above its title, and its
     /// options and keys are where they were.
     #[test]
     fn an_ask_from_before_a_restart_says_so_above_its_title_and_keeps_its_options() {

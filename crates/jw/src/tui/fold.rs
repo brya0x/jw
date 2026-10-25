@@ -45,7 +45,7 @@ pub fn class_of(name: &str) -> Option<Class> {
 /// an answer, is drawn by itself).
 fn class_of_item(item: &Item) -> Option<Class> {
     match item {
-        // One with no result (`lost`) may still be running, as far as anyone saw: it is drawn by itself (REQ-860).
+        // One with no result (`lost`) may still be running, as far as anyone saw: it is drawn by itself (REQ-889).
         Item::Tool {
             name, state, lost, ..
         } if !*lost && !matches!(state, ToolState::Run | ToolState::Ask) => class_of(name),
@@ -136,7 +136,7 @@ mod tests {
         }
     }
 
-    /// REQ-860: a tool with no result is not folded into the commands that ran: its row stays, and it breaks the run.
+    /// REQ-889: a tool with no result is not folded into the commands that ran: its row stays, and it breaks the run.
     #[test]
     fn a_tool_with_no_result_is_not_folded_into_a_run() {
         let mut lost = tool("Bash", ToolState::Failed);

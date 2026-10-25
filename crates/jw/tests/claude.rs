@@ -466,7 +466,7 @@ fn worktree_task_goes_to_the_new_agents_conversation_as_a_message() {
     w.stop();
 }
 
-/// REQ-862, REQ-856: `jw stop` asks the daemon to stop (it does not signal it), so an engine with an ask waiting
+/// REQ-891, REQ-885: `jw stop` asks the daemon to stop (it does not signal it), so an engine with an ask waiting
 /// is ended at once with its input open (Claude would reject the ask itself) and an engine with none has its
 /// input closed and ends by itself. Through the real binary: the daemon's own tests call `Daemon::stop` and
 /// never saw that a signal does not run it.

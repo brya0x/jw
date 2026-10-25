@@ -26,7 +26,7 @@ fun toolClass(name: String): ToolClass? = when (name) {
     else -> null
 }
 
-/** The class of an item that folds: a tool of a class that has ended (one that runs, waits for an answer or has no result, REQ-860, is drawn by itself). */
+/** The class of an item that folds: a tool of a class that has ended (one that runs, waits for an answer or has no result, REQ-889, is drawn by itself). */
 private fun ConvItem.foldClass(): ToolClass? =
     if (this is ConvItem.Tool && !lost && state != ToolState.Run && state != ToolState.Ask) toolClass(name) else null
 

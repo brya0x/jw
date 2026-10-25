@@ -712,6 +712,7 @@ data class Group(val id: Id, val name: String)
 enum class JobKind {
     @SerialName("remove_workspace") RemoveWorkspace,
     @SerialName("sync_workspace") SyncWorkspace,
+    @SerialName("update_claude") UpdateClaude,
 }
 
 @Serializable
@@ -726,9 +727,9 @@ enum class JobState {
 data class Job(
     val id: Id,
     val kind: JobKind,
-    /** The workspace it is about; it is gone from the session when a removal ended well. */
-    val workspace: Id,
-    /** The workspace's name for a removal, the branch for a push. */
+    /** The workspace it is about; it is gone from the session when a removal ended well. Null for a job that is about none (`update_claude`). */
+    val workspace: Id? = null,
+    /** The workspace's name for a removal, the branch for a push, `claude <before> → <after>` for an update. */
     val name: String,
     val state: JobState,
     /** Milliseconds since the epoch of the daemon's machine. */
@@ -928,6 +929,10 @@ sealed interface Node {
         val held: Held? = null,
         /** The folder the engine runs in, the one its `@` references are written from (REQ-630, REQ-631). */
         val cwd: String? = null,
+        /** The version of `claude` its engine says it is (REQ-852). */
+        @SerialName("engine_version") val engineVersion: String? = null,
+        /** The version of `claude` that is installed, while it is not the engine's (REQ-852). */
+        @SerialName("engine_newer") val engineNewer: String? = null,
         /** What Claude proposes the person writes next, while the engine is stopped and nothing waits (REQ-572). */
         val suggestion: String? = null,
         /** When the turn began that another `claude` runs in the transcript this conversation follows (REQ-565). */

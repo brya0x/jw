@@ -96,15 +96,19 @@ pub fn run_child(
         .spawn()
         .map_err(|e| format!("cannot run {name}: {e}"))?;
     let mut out = child.stdout.take().expect("stdout is piped");
-    let err = child.stderr.take().expect("stderr is piped");
+    let mut err = child.stderr.take().expect("stderr is piped");
+    // What is past the cap is read and dropped: a pipe nobody reads would kill the command with
+    // SIGPIPE, and a command that talks a lot (an update's progress) is not one that failed.
     let reader = std::thread::spawn(move || {
         let mut text = String::new();
         let _ = out.by_ref().take(cap).read_to_string(&mut text);
+        let _ = std::io::copy(&mut out, &mut std::io::sink());
         text
     });
     let message = std::thread::spawn(move || {
         let mut text = String::new();
-        let _ = err.take(4096).read_to_string(&mut text);
+        let _ = err.by_ref().take(4096).read_to_string(&mut text);
+        let _ = std::io::copy(&mut err, &mut std::io::sink());
         text.trim().to_owned()
     });
     let end = within.map(|w| Instant::now() + w);
@@ -141,6 +145,15 @@ mod tests {
         let mut c = Command::new("/bin/sh");
         c.args(["-c", script]);
         c
+    }
+
+    #[test]
+    fn a_command_that_prints_past_the_cap_still_ends_well() {
+        let c = Cancel::default();
+        let talk = "i=0; while [ $i -lt 400 ]; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy >&2; i=$((i+1)); done";
+        let kept =
+            run_child(sh(talk), "sh", None, &c, 100).expect("not killed by a pipe nobody reads");
+        assert_eq!(kept.len(), 100, "what is past the cap is dropped");
     }
 
     #[test]

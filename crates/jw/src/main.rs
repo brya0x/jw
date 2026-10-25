@@ -140,7 +140,7 @@ fn run_daemon() -> Res {
         Daemon::start(Config::from_identity()).map_err(|e| format!("cannot start: {e}"))?;
     daemon::warm_highlighting();
     // `jw stop` asks over the socket: the daemon stops as it stops by itself, ending its engines and
-    // saving what waits, which a signal would not let it do (REQ-862).
+    // saving what waits, which a signal would not let it do (REQ-891).
     while daemon.accepting() && !daemon.stop_requested() {
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -167,7 +167,7 @@ fn stop() -> Res {
     if let Ok(mut client) = wire::Client::connect(&config.socket, &identity::peer("stop")) {
         let _ = client.cmd(contract::Cmd::MobileStop {});
     }
-    // The daemon is asked to stop itself, so its engines end as they should (REQ-862); a daemon
+    // The daemon is asked to stop itself, so its engines end as they should (REQ-891); a daemon
     // that does not know the command, or does not go, is signalled as before.
     if let Ok(mut client) = wire::Client::connect(&config.socket, &identity::peer("stop"))
         && matches!(client.cmd(contract::Cmd::Stop {}), Ok(Ok(_)))

@@ -34,6 +34,15 @@ fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
 }
 
 fn rig_with_chrome(sb: Sandbox, extra_env: Vec<(String, String)>, chrome: bool) -> Rig {
+    rig_with_watch(sb, extra_env, chrome, None)
+}
+
+fn rig_with_watch(
+    sb: Sandbox,
+    extra_env: Vec<(String, String)>,
+    chrome: bool,
+    watch: Option<daemon::claude_update::Watch>,
+) -> Rig {
     let bin = sb.dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let engine = bin.join("claude");
@@ -42,6 +51,7 @@ fn rig_with_chrome(sb: Sandbox, extra_env: Vec<(String, String)>, chrome: bool) 
     let log = sb.dir.join("engine.log");
     let mut config: Config = sb.config();
     config.chrome = chrome;
+    config.claude_update = watch;
     config.env = vec![
         (
             "PATH".into(),
@@ -2219,7 +2229,8 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
     });
     let starts: Vec<String> = log_lines(&log)
         .into_iter()
-        .filter(|l| l.starts_with("start"))
+        // the pane that comes back runs `claude --resume` too: only the engine says `stream-json`
+        .filter(|l| l.starts_with("start") && l.contains("stream-json"))
         .collect();
     assert!(
         starts.last().unwrap().contains("--resume") && starts.last().unwrap().contains(&session)
@@ -2689,7 +2700,7 @@ fn tool_call(tool: &str, id: &str, input: &str) -> String {
 
 const QUESTION: &str = r#"{"questions":[{"question":"¿Letra?","header":"L","options":[{"label":"A","description":"a"},{"label":"B","description":"b"}],"multiSelect":false}]}"#;
 
-/// REQ-848: a permission that waits is in the saved file at once, and the file stops saying so before
+/// REQ-877: a permission that waits is in the saved file at once, and the file stops saying so before
 /// the engine is told it was answered.
 #[test]
 fn a_permission_that_waits_is_in_the_saved_file_until_it_is_answered() {
@@ -2723,8 +2734,8 @@ fn a_permission_that_waits_is_in_the_saved_file_until_it_is_answered() {
     r.stop();
 }
 
-/// REQ-846, REQ-849: the question or the plan that a transcript ends with is asked again, marked and
-/// with its tool asking, and no engine starts to show it; REQ-859's lines of a settled one are not asked.
+/// REQ-875, REQ-878: the question or the plan that a transcript ends with is asked again, marked and
+/// with its tool asking, and no engine starts to show it; REQ-888's lines of a settled one are not asked.
 #[test]
 fn a_question_or_a_plan_that_the_transcript_ends_with_comes_back_asked_with_no_engine() {
     for (tool, input, kind) in [
@@ -2752,7 +2763,7 @@ fn a_question_or_a_plan_that_the_transcript_ends_with_comes_back_asked_with_no_e
             kinds(&r.client, &r.pane) == [kind]
         });
         assert!(log_lines(&r.log).is_empty(), "no engine starts to show it");
-        // Its answer starts an engine that resumes the session, in the mode the answer means, and is its first message (REQ-850, REQ-851).
+        // Its answer starts an engine that resumes the session, in the mode the answer means, and is its first message (REQ-879, REQ-880).
         let (key, mode, said) = if kind == "plan" {
             (
                 "accept",
@@ -2801,7 +2812,7 @@ fn a_question_or_a_plan_that_the_transcript_ends_with_comes_back_asked_with_no_e
     r.stop();
 }
 
-/// REQ-847: a permission comes back only when the saved file kept it and the transcript still has its
+/// REQ-876: a permission comes back only when the saved file kept it and the transcript still has its
 /// call with no result; a tool that has no result and no record may be running, so nothing is asked.
 #[test]
 fn a_permission_comes_back_only_with_its_record_and_a_call_with_no_result() {
@@ -2845,7 +2856,7 @@ fn a_permission_comes_back_only_with_its_record_and_a_call_with_no_result() {
     );
 }
 
-/// REQ-852, REQ-853: a permission that waited before a restart, answered yes, starts the engine with the
+/// REQ-881, REQ-882: a permission that waited before a restart, answered yes, starts the engine with the
 /// message, and the call Claude makes again for it is allowed once, not asked a second time.
 #[test]
 fn a_restored_permission_answered_yes_is_allowed_when_claude_proposes_it_again() {
@@ -2891,7 +2902,7 @@ fn a_restored_permission_answered_yes_is_allowed_when_claude_proposes_it_again()
     r.stop();
 }
 
-/// REQ-854: an answer whose engine cannot start is refused and the ask stays as it was.
+/// REQ-883: an answer whose engine cannot start is refused and the ask stays as it was.
 #[test]
 fn an_answer_whose_engine_cannot_start_is_refused_and_the_ask_stays() {
     let mut r = rig();
@@ -2948,7 +2959,7 @@ fn answering_a_restored_ask_after_a_message_started_the_engine_starts_no_second_
     r.stop();
 }
 
-/// REQ-856: a daemon that stops ends the group of an engine that has an ask waiting at once, with its input
+/// REQ-885: a daemon that stops ends the group of an engine that has an ask waiting at once, with its input
 /// still open (Claude would answer the ask itself and retry it), and keeps the ask in the saved file; an engine
 /// that has none has its input closed and ends by itself.
 #[test]
@@ -2981,8 +2992,8 @@ fn a_daemon_that_stops_ends_an_engine_with_an_ask_waiting_at_once_and_closes_the
     r.stop();
 }
 
-/// REQ-857: an engine that ends by itself with an ask waiting does not take it away: it waits as after a restart,
-/// and its answer starts another engine whose first message says it (the call is allowed once, REQ-853).
+/// REQ-886: an engine that ends by itself with an ask waiting does not take it away: it waits as after a restart,
+/// and its answer starts another engine whose first message says it (the call is allowed once, REQ-882).
 #[test]
 fn an_engine_that_dies_with_an_ask_waiting_leaves_it_asked_and_its_answer_starts_another() {
     let sb = Sandbox::new();
@@ -3034,7 +3045,7 @@ fn an_engine_that_dies_with_an_ask_waiting_leaves_it_asked_and_its_answer_starts
 }
 
 /// A conversation stopped in its first turn is saved with its own items and no transcript: what it asked is
-/// still found in the transcript the engine had written, and its answer resumes the session (REQ-846, REQ-754).
+/// still found in the transcript the engine had written, and its answer resumes the session (REQ-875, REQ-754).
 #[test]
 fn a_conversation_stopped_in_its_first_turn_brings_its_question_back() {
     let mut r = rig();
@@ -3070,5 +3081,48 @@ fn a_conversation_stopped_in_its_first_turn_brings_its_question_back() {
             .iter()
             .any(|l| l.starts_with("start ") && l.contains("\"--resume\", \"old-session\""))
     });
+    r.stop();
+}
+
+/// A rig whose installed `claude` (the stand-in, which says `installed` when asked its version)
+/// is only read, never updated (`notify`), and whose engine says 2.1.309 in its `init`.
+fn rig_installed(installed: &str) -> Rig {
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.dir.join("bin")).unwrap();
+    std::fs::write(sb.dir.join("bin/installed"), installed).unwrap();
+    std::fs::write(sb.dir.join("config.toml"), "claude_update = \"notify\"\n").unwrap();
+    let watch = daemon::claude_update::Watch {
+        file: sb.dir.join("config.toml"),
+        wake: Duration::from_millis(50),
+        within: Duration::from_secs(5),
+    };
+    rig_with_watch(sb, Vec::new(), false, Some(watch))
+}
+
+#[test]
+fn a_conversation_whose_engine_is_not_the_installed_claude_says_which_it_runs_and_which_is_installed()
+ {
+    let mut r = rig_installed("2.1.312");
+    let (node, _) = r.open();
+    r.send(&node, "hola");
+    let v = r.until(&node, "the engine's version and the installed one", |v| {
+        v["engine_version"] == "2.1.309" && v["engine_newer"] == "2.1.312"
+    });
+    assert_eq!(v["engine_version"], "2.1.309");
+    r.stop();
+}
+
+#[test]
+fn a_conversation_whose_engine_is_the_installed_claude_has_no_newer() {
+    let mut r = rig_installed("2.1.309");
+    let (node, _) = r.open();
+    r.send(&node, "hola");
+    r.until(&node, "the engine's version", |v| {
+        v["engine_version"] == "2.1.309"
+    });
+    // The check ran at the daemon's start; give it a moment, then it must still say nothing.
+    std::thread::sleep(Duration::from_millis(300));
+    let v = r.conv(&node);
+    assert!(v.get("engine_newer").is_none(), "{v:#}");
     r.stop();
 }
