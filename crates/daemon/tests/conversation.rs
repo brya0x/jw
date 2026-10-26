@@ -204,6 +204,14 @@ impl Rig {
         })
     }
 
+    /// What the engine received from the person, in order.
+    fn user_lines(&self) -> Vec<String> {
+        log_lines(&self.log)
+            .into_iter()
+            .filter(|l| l.starts_with("user"))
+            .collect()
+    }
+
     fn stop(mut self) {
         if let Some(d) = self.daemon.take() {
             d.stop();
@@ -1357,10 +1365,7 @@ fn what_is_sent_while_a_turn_runs_waits_in_the_queue_and_goes_when_it_ends() {
         .unwrap();
     let v = r.idle_after(&node, 2);
     assert_eq!(v["queue"], serde_json::json!([]));
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert_eq!(sent.len(), 2, "{sent:?}");
     assert!(sent[1].contains("second"));
     r.stop();
@@ -1379,10 +1384,7 @@ fn send_now_in_the_middle_of_a_turn_interrupts_it_and_goes_first() {
     assert_eq!(v["queue"], serde_json::json!(["urgent", "second"]));
     let v = r.idle_after(&node, 3);
     assert_eq!(v["queue"], serde_json::json!([]));
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert_eq!(sent.len(), 3, "{sent:?}");
     assert!(sent[0].contains("slow first"), "{sent:?}");
     assert!(sent[1].contains("urgent"), "{sent:?}");
@@ -1415,10 +1417,7 @@ fn unqueue_takes_the_last_message_that_waits_and_the_rest_goes_on() {
         .unwrap();
     let v = r.idle_after(&node, 2);
     assert_eq!(v["queue"], serde_json::json!([]));
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert_eq!(sent.len(), 2, "{sent:?}");
     assert!(sent[1].contains("second") && !sent.iter().any(|l| l.contains("third")));
     r.stop();
@@ -1432,10 +1431,7 @@ fn send_now_with_nothing_running_is_a_plain_send() {
     r.send_with(&node, "plain", true);
     let v = r.idle_after(&node, 1);
     assert_eq!(v["queue"], serde_json::json!([]));
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert!(sent[0].contains("plain"));
     r.stop();
@@ -1474,10 +1470,7 @@ fn the_model_the_effort_and_the_name_are_set_as_the_engine_says_so() {
     });
     assert_eq!(v["name"], "login");
     assert_eq!(v["accent"], "magenta");
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert_eq!(
         sent,
         [
@@ -1615,10 +1608,7 @@ fn shell_lines_run_in_the_folder_and_go_to_the_engine_with_the_next_message() {
     );
     r.send(&node, "qué ves");
     r.idle_after(&node, 1);
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert!(
         sent[0].contains("! echo hola; pwd")
             && sent[0].contains("hola")
@@ -1648,10 +1638,7 @@ fn what_the_daemon_answers_itself_never_reaches_the_engine() {
         v["accent"] == "red" && v["mode"] == "acceptEdits"
     });
     assert_eq!(v["status"], "idle");
-    let sent: Vec<String> = log_lines(&r.log)
-        .into_iter()
-        .filter(|l| l.starts_with("user"))
-        .collect();
+    let sent = r.user_lines();
     assert_eq!(sent.len(), 1, "only the message went: {sent:?}");
     r.stop();
 }
