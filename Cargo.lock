@@ -758,6 +758,8 @@ dependencies = [
  "qrcode",
  "serde",
  "serde_json",
+ "signal-hook",
+ "tempfile",
  "toml",
  "web",
  "wire",

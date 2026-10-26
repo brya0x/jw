@@ -6,6 +6,8 @@ mod claude;
 mod hook;
 mod pair;
 mod tui;
+mod update;
+mod version;
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -26,6 +28,12 @@ const USAGE: &str = "usage:
   {n} devices             list the paired phones
   {n} revoke <id|name>    unpair a phone and drop its connection
   {n} bench               measure sizes and latency on a private daemon
+  {n} update [--ref R] [--cache] [--keep] [--restart]
+                          install the latest version: fetch the repository into a temporary
+                          directory, build it there, install it, delete it
+  {n} android install --debug [--serial ID] [--ref R] [--keep]
+                          the same for the phone's debug build, with adb
+  {n} --version | version the binary's version and the daemon's
   {n} hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does
   {n} claude [args]       what `claude` typed in a pane runs (the shell integration's function): a conversation
   {n} ls | read | prompt | worktree | artifact | pane | group | chat | tasks | skill
@@ -41,6 +49,9 @@ fn main() -> ExitCode {
     {
         ["daemon"] => run_daemon(),
         ["stop"] => stop(),
+        ["--version" | "version"] => Ok(version::show()),
+        ["update", rest @ ..] => update::update(rest),
+        ["android", rest @ ..] => update::android(rest),
         ["watch"] => watch(None),
         ["watch", node] => watch(Some(node)),
         ["cmd", json] => cmd(json),
@@ -217,7 +228,10 @@ fn connect() -> Result<(Conn, String), String> {
         .map_err(|e| e.to_string())?
         .ok_or("the daemon closed the connection")?;
     match serde_json::from_str(&line).map_err(|e| e.to_string())? {
-        DaemonMsg::Hello { root, .. } => Ok((conn, root)),
+        DaemonMsg::Hello { root, daemon, .. } => {
+            version::warn(&daemon);
+            Ok((conn, root))
+        }
         other => Err(format!("expected hello, got {other:?}")),
     }
 }

@@ -22,6 +22,7 @@ fn connect() -> Result<Client, String> {
             identity::get().name
         )
     })?;
+    crate::version::warn(&client.daemon);
     let root = client.root.clone();
     client.open(&root).map_err(|e| e.to_string())?;
     Ok(client)

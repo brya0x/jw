@@ -37,6 +37,8 @@ impl From<io::Error> for ClientError {
 /// arrive, whichever call happens to be reading.
 pub struct Client {
     conn: Conn,
+    /// The daemon's name and version, as it said them in its `hello` (REQ-988).
+    pub daemon: Peer,
     pub epoch: String,
     pub root: Id,
     pub accepted: BTreeMap<String, u32>,
@@ -64,12 +66,14 @@ impl Client {
         let bytes_in = line.len() as u64 + 1;
         match serde_json::from_str(&line).map_err(|e| ClientError::Protocol(e.to_string()))? {
             DaemonMsg::Hello {
+                daemon,
                 epoch,
                 root,
                 accepted,
                 ..
             } => Ok(Client {
                 conn,
+                daemon,
                 epoch,
                 root,
                 accepted,
@@ -283,6 +287,11 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let daemon = chatty_daemon(&path);
         let mut c = Client::connect(&path, "test").unwrap();
+        // REQ-988: the client keeps who said hello
+        assert_eq!(
+            (c.daemon.name.as_str(), c.daemon.version.as_str()),
+            ("test", "0")
+        );
         let started = Instant::now();
         let err = c
             .cmd_within(
