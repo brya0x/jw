@@ -11,3 +11,4 @@ android_application_id = "dev.jw.next"  # unchanged by the swap: a new id is a d
 tunnel_program = "cloudflared"
 pairing_store = "mobile.json"           # file in the state dir
 repo = "https://github.com/brya0x/jw"  # what `update` and `android install` fetch (https only)
+agent_skill = "agent"                  # the skill of the roles: /agent (claude has a /agents of its own)

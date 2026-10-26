@@ -32,10 +32,14 @@ const TURN_WAIT: Duration = Duration::from_secs(600);
 const CONVERSATION_WAIT: Duration = Duration::from_secs(10);
 
 mod artifact;
+mod plugins;
+mod roles;
+mod skillfile;
 mod tasks;
 
 const SKILL: &str = include_str!("../skill/SKILL.md");
 const TASKS_SKILL: &str = include_str!("../skill/TASKS.md");
+const ROLES_SKILL: &str = include_str!("../skill/ROLES.md");
 
 /// Why a command ended.
 #[derive(Debug, PartialEq, Eq)]
@@ -94,7 +98,8 @@ fn usage_of(cmd: &str) -> String {
             "usage: {b} pane ls <workspace> [--json]\n       {b} pane open <workspace> [--split right|down] [--of <pane>] [--] [<program words>...]\n       {b} pane close <workspace> <pane> [--force]"
         ),
         "tasks" => tasks::usage(),
-        _ => format!("usage: {b} skill [install]"),
+        "role" => format!("usage: {b} role ls [--json]\n       {b} role show <name>"),
+        _ => format!("usage: {b} skill [install [--plugins [--yes]]]"),
     }
 }
 
@@ -109,6 +114,7 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("worktree", rest) => worktree(rest),
         ("artifact", rest) => artifact::run(rest),
         ("tasks", rest) => tasks::run(rest),
+        ("role", rest) => roles::run(rest),
         ("group", ["ls", rest @ ..]) => group_ls(rest),
         ("group", ["new", rest @ ..]) => group_new(rest),
         ("group", ["rename", rest @ ..]) => group_rename(rest),
@@ -126,7 +132,7 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
             print!("{}", skill_text());
             Ok(())
         }
-        ("skill", ["install"]) => skill_install(),
+        ("skill", ["install", rest @ ..]) => skill_install(rest),
         _ => Err(Fail::Usage(String::new())),
     };
     match done {
@@ -1294,6 +1300,13 @@ fn tasks_skill_text() -> String {
         )
 }
 
+/// The skill of the roles (N184, REQ-997): the binary's name and the skill's own, from the identity.
+fn roles_skill_text() -> String {
+    ROLES_SKILL
+        .replace("{bin}", bin())
+        .replace("{agent_skill}", &identity::get().agent_skill)
+}
+
 /// The Claude configuration the skills go under: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 fn claude_base(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
     match config_dir.filter(|d| !d.is_empty()) {
@@ -1323,6 +1336,25 @@ fn tasks_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<
     )
 }
 
+/// Where the skill of the roles goes: `skills/<agent_skill>/SKILL.md` (REQ-997).
+fn roles_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
+    Some(
+        claude_base(config_dir, home)?
+            .join("skills")
+            .join(&identity::get().agent_skill)
+            .join("SKILL.md"),
+    )
+}
+
+/// Whether the first skill is installed, which is what lets `update` refresh them (REQ-1002).
+pub(crate) fn skill_installed() -> bool {
+    skill_path(
+        std::env::var("CLAUDE_CONFIG_DIR").ok(),
+        std::env::var("HOME").ok(),
+    )
+    .is_some_and(|p| p.is_file())
+}
+
 /// Whether the skill of the task lists is installed, which is what lets a hook name it (REQ-934).
 pub(crate) fn tasks_skill_installed() -> bool {
     tasks_skill_path(
@@ -1340,34 +1372,32 @@ pub(crate) fn tasks_nudge() -> String {
     )
 }
 
-/// Write a skill whole, through a rename, and say where.
-fn write_skill(path: &Path, text: &str) -> Out {
-    let dir = path
-        .parent()
-        .ok_or_else(|| Fail::Error("no folder".into()))?;
-    std::fs::create_dir_all(dir).map_err(|e| Fail::Error(format!("{}: {e}", dir.display())))?;
-    let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, text)
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| Fail::Error(format!("{}: {e}", path.display())))?;
-    println!("installed {}", path.display());
-    Ok(())
-}
-
-/// `skill install` writes the skill of the session and the one of the task lists (REQ-932).
-fn skill_install() -> Out {
+/// `skill install` writes the skill of the session, the one of the task lists (REQ-932) and the one
+/// of the roles (REQ-997), each by the mark's table (REQ-1000); `--plugins` then offers the plugins
+/// (REQ-1004), and `--yes` is its answer.
+fn skill_install(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &["plugins", "yes"])?;
+    if !a.pos.is_empty() || (a.has("yes") && !a.has("plugins")) {
+        return Err(Fail::Usage(String::new()));
+    }
     let (config, home) = (
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
         std::env::var("HOME").ok(),
     );
-    let (Some(skill), Some(tasks)) = (
+    let (Some(skill), Some(tasks), Some(roles)) = (
         skill_path(config.clone(), home.clone()),
-        tasks_skill_path(config, home),
+        tasks_skill_path(config.clone(), home.clone()),
+        roles_skill_path(config, home),
     ) else {
         return fail("no HOME and no CLAUDE_CONFIG_DIR to install into");
     };
-    write_skill(&skill, &skill_text())?;
-    write_skill(&tasks, &tasks_skill_text())
+    skillfile::install(&skill, &skill_text())?;
+    skillfile::install(&tasks, &tasks_skill_text())?;
+    skillfile::install(&roles, &roles_skill_text())?;
+    if a.has("plugins") {
+        plugins::offer(a.has("yes"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

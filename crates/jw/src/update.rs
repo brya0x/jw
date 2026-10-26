@@ -339,6 +339,43 @@ fn build(job: &Job, o: &Opts, url: &str, from_env: bool) -> Out<String> {
     Ok(new)
 }
 
+/// The binary `cargo install` just wrote: `$CARGO_INSTALL_ROOT/bin`, else `$CARGO_HOME/bin`, else
+/// `~/.cargo/bin` (REQ-1002).
+fn installed_binary() -> Option<PathBuf> {
+    let var = |v: &str| {
+        std::env::var_os(v)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    };
+    let root = var("CARGO_INSTALL_ROOT")
+        .or_else(|| var("CARGO_HOME"))
+        .or_else(|| var("HOME").map(|h| h.join(".cargo")))?;
+    Some(root.join("bin").join(&identity::get().name))
+}
+
+/// A person who has the first skill gets the three refreshed by the binary just installed, whose texts
+/// are the new ones; with none installed nothing is (REQ-1002). It never fails the update.
+fn refresh_skills() {
+    if !crate::agent::skill_installed() {
+        return;
+    }
+    let name = &identity::get().name;
+    let Some(new) = installed_binary().filter(|b| b.is_file()) else {
+        println!(
+            "skills not refreshed: the installed {name} is not where cargo puts it: run {name} skill install"
+        );
+        return;
+    };
+    match Command::new(&new).args(["skill", "install"]).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => println!(
+            "skills not refreshed: {} skill install failed ({status})",
+            new.display()
+        ),
+        Err(e) => println!("skills not refreshed: {}: {e}", new.display()),
+    }
+}
+
 pub fn update(args: &[&str]) -> Res {
     let o = parse(args, &["--ref", "--cache", "--keep", "--restart"])?;
     let (url, from_env) = repo();
@@ -352,6 +389,7 @@ pub fn update(args: &[&str]) -> Res {
     };
     let name = &identity::get().name;
     println!("{name} {} → {new}", crate::version::VERSION);
+    refresh_skills();
     let Some(daemon) = crate::version::daemon() else {
         return Ok(ExitCode::SUCCESS);
     };

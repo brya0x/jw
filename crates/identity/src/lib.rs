@@ -15,6 +15,7 @@ pub struct Identity {
     pub tunnel_program: String,
     pub pairing_store: String,
     pub repo: String,
+    pub agent_skill: String,
 }
 
 const SOURCE: &str = include_str!("../../../identity.toml");
@@ -71,6 +72,16 @@ pub fn tasks_path(folder: &Path) -> PathBuf {
     folder.join(format!(".{}", get().name)).join("tasks.md")
 }
 
+/// A repository's own roles: `<folder>/.<name>/roles` (N184, REQ-992).
+pub fn roles_dir(folder: &Path) -> PathBuf {
+    folder.join(format!(".{}", get().name)).join("roles")
+}
+
+/// The person's own roles: `<config dir>/roles` (N184, REQ-992).
+pub fn user_roles_dir() -> PathBuf {
+    config_dir().join("roles")
+}
+
 /// The daemon's socket: `$<PREFIX>_SOCKET`, else `<state_dir>/<name>.sock`.
 pub fn socket_path() -> PathBuf {
     match std::env::var_os(env_var("SOCKET")) {
@@ -111,6 +122,23 @@ mod tests {
     fn the_task_list_is_in_the_products_dot_directory() {
         let path = tasks_path(Path::new("/w"));
         assert_eq!(path, PathBuf::from(format!("/w/.{}/tasks.md", get().name)));
+    }
+
+    #[test]
+    fn the_roles_are_in_the_products_directories_and_the_skill_has_a_name() {
+        let name = &get().name;
+        assert_eq!(
+            roles_dir(Path::new("/w")),
+            PathBuf::from(format!("/w/.{name}/roles"))
+        );
+        assert_eq!(user_roles_dir(), config_dir().join("roles"));
+        let skill = &get().agent_skill;
+        assert!(
+            !skill.is_empty()
+                && skill.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                && skill != "agents",
+            "{skill}"
+        );
     }
 
     /// REQ-892: no source spells the directory or the file; they come from `tasks_path`.
