@@ -1,0 +1,316 @@
+<meta charset="utf-8">
+<title>jw Los reinicios del daemon, en una línea</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid and colours as restore-pending-asks.html. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px}
+.wrap{max-width:1300px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:84ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp>span{font:12px var(--mono);color:var(--mut)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+button.go{border-color:var(--green);color:var(--green)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.hint{font:12px var(--mono);color:var(--mut)}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;height:440px;font:13px/1.35 var(--mono);color:var(--fg)}
+.term .list{flex:1;min-height:0;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:2px;white-space:pre-wrap;word-break:break-word}
+.term .list::before,.ph .list::before{content:"";margin-top:auto}
+.term .foot{border-top:1px solid var(--line);padding:3px 10px;font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.yellow{color:var(--yellow)}.red{color:var(--red)}.green{color:var(--green)}.cyan{color:var(--cyan)}
+.u{background:var(--sel);padding:0 4px}
+.phone{width:100%;height:600px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.ph .hd b{font-size:14px}.ph .hd span{font-size:11px;color:var(--dim)}
+.ph .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:8px 12px;word-break:break-word}
+/* The divider as the clients draw it: the terminal with ─ characters, the phone with two thin lines (ConversationItems.kt). */
+.dv{display:flex;align-items:center;gap:8px;color:var(--dim);white-space:nowrap}
+.dv::before,.dv::after{flex:1;min-width:0;overflow:hidden;color:var(--dim)}
+.term .dv::before,.term .dv::after{content:"────────────────────────────────────────────────────────────────"}
+.ph .dv{font-size:11px;white-space:normal}
+.ph .dv::before,.ph .dv::after{content:"";border-top:1px solid var(--line);min-width:12px}
+.dv.flash span{animation:fl 1.1s ease-out}
+@keyframes fl{from{background:var(--yellow);color:var(--panel)}to{background:transparent}}
+.cut{color:var(--fg)}
+.cut i{color:var(--red);font-style:normal}
+.warn{font:12px var(--mono);color:var(--yellow);min-height:18px}
+.wire{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:12px/1.5 var(--mono);color:var(--fg);white-space:pre-wrap;word-break:break-all;min-height:96px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes>div,.notes>fieldset{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.rec{color:var(--green)}
+kbd{font:inherit;color:var(--cyan)}
+fieldset{margin:0;display:flex;flex-direction:column;gap:6px}
+legend{padding:0 4px;font-weight:700;color:var(--yellow)}
+label{display:flex;gap:8px;align-items:baseline;cursor:pointer}
+input[type=radio]{accent-color:var(--blue);margin:0;flex:none}
+.tr{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--dim);white-space:pre-wrap;word-break:break-word}
+#tests{font:12px var(--mono);color:var(--mut)}
+</style>
+
+<div class="wrap">
+  <h1>jw · Los reinicios del daemon, en una línea</h1>
+  <p>Cada vez que el daemon arranca y se abre una conversación guardada, se le añade una línea «el daemon se reinició · HH:MM», sin mirar si la última ya lo era. Una conversación que se abre en cada arranque acumula decenas, una tras otra. Aquí se ve <b>hoy</b> y <b>con el cambio</b>: el daemon funde los separadores que quedan juntos en uno solo con un contador, y la terminal y el teléfono dibujan el texto que les llega, como ya hacen. Pulsa <kbd>reiniciar daemon</kbd> para ver subir el contador; <kbd>escribir un mensaje</kbd> corta la tanda y el siguiente reinicio es una línea propia. Los datos del primer caso son los de la captura (37 seguidos) y de un archivo guardado real (6 + una respuesta + tanda larga).</p>
+
+  <div class="bar" role="group" aria-label="Opciones del prototipo">
+    <div class="grp"><span>caso</span>
+      <button id="sc-cap" aria-pressed="true">la captura (6 + 37)</button>
+      <button id="sc-1" aria-pressed="false">1 reinicio</button>
+      <button id="sc-2" aria-pressed="false">2</button>
+      <button id="sc-20" aria-pressed="false">20</button></div>
+    <div class="grp"><span>se ve</span>
+      <button id="v-now" aria-pressed="false">hoy</button>
+      <button id="v-new" aria-pressed="true">con el cambio</button></div>
+    <div class="grp">
+      <button id="restart" class="go">reiniciar daemon</button>
+      <button id="msg">escribir un mensaje</button>
+      <button id="tomorrow">pasar a mañana</button></div>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · <span id="t-count"></span></h2>
+      <div class="term" aria-label="Conversación con sus reinicios"><div class="list" id="t-list"></div>
+        <div class="foot"><span id="t-clock"></span><span>sonnet-5.5 · manual</span></div></div>
+      <div class="warn" id="warn" role="status"></div>
+    </div>
+    <div class="side">
+      <h2>TELÉFONO · el mismo texto</h2>
+      <div class="phone"><div class="ph"><div class="hd"><b>arregla el test que falla</b><span id="p-sub"></span></div><div class="list" id="p-list"></div></div></div>
+    </div>
+  </div>
+
+  <h2>LO QUE LLEGA POR EL CABLE · el último separador</h2>
+  <div class="wire" id="wire" role="status"></div>
+  <div id="tests"></div>
+
+  <h2>LO QUE ENCONTRÉ</h2>
+  <div class="notes">
+    <div><b>Dónde nace.</b> <kbd>State::restored</kbd> (<kbd>crates/daemon/src/conversation.rs</kbd>) añade <kbd>Item::Divider { text, kind: restart }</kbd> con <kbd>text</kbd> = «el daemon se reinició · {HH:MM}» (24 h, <kbd>date +%H:%M</kbd> en <kbd>engine.rs</kbd>). No lleva campo de hora: la hora va dentro del texto. Lo dibujan solos la terminal (<kbd>── texto ──</kbd>) y el teléfono (dos líneas finas y el texto): los dos pintan <kbd>text</kbd> y no leen nada más. REQ-393 y REQ-413. Es otra cosa que la marca <kbd>restart</kbd> de los bloques de shell (REQ-301).</div>
+    <div><b>Por qué se acumulan.</b> <kbd>open_conversation</kbd> llama a <kbd>restored</kbd> cada vez que un cliente abre un panel con una conversación guardada, que es en cada arranque del daemon, haya pasado algo o no, y <kbd>restored</kbd> no mira el último ítem. Un archivo guardado real (copiado, sin tocar el original) tiene 42 separadores de reinicio en 52 ítems propios: 6, una respuesta, y 36 seguidos entre el 20 y el 26 de octubre.</div>
+    <div><b>Dónde se guarda.</b> Con transcripción de claude, los separadores no están en <kbd>items</kbd> sino en <kbd>kept</kbd> (lo propio de jw, con su hora en ms) y se mezclan con las líneas de la transcripción por hora (<kbd>merge</kbd>, <kbd>follow_at</kbd>). Por eso «el último ítem ya es un separador» no se puede mirar en <kbd>restored</kbd>: ahí <kbd>items</kbd> aún está vacío. Hay que fundir <b>después de mezclar</b>, y en una conversación antigua sin transcripción (<kbd>legacy</kbd>) tras añadir el separador. El archivo no se acerca al tope de 2 MiB (lo recorta por el principio).</div>
+    <div><b>Qué cambia en el contrato.</b> <kbd>Divider</kbd> gana <kbd>count</kbd>, opcional (ausente = 1); <kbd>v</kbd> no cambia, esquema, fixture y tipo Kotlin lo recogen. Los clientes no cambian: reciben el <kbd>text</kbd> ya hecho. Un teléfono viejo ignora <kbd>count</kbd> (<kbd>ignoreUnknownKeys</kbd>) y dibuja el texto igual. Los separadores ya guardados se funden al cargar y la hora del último es la de su <kbd>at</kbd> en <kbd>kept</kbd>. Funden solo los de <kbd>kind</kbd> <kbd>restart</kbd>: <kbd>resume</kbd>, <kbd>clear</kbd> y <kbd>compact</kbd> no se tocan. El fundido es idempotente: 36 + 1 = 37.</div>
+  </div>
+
+  <h2>PARA DECIDIR</h2>
+  <div class="notes">
+    <fieldset id="d1"><legend>1 · qué se funde</legend>
+      <label><input type="radio" name="d1" value="a" checked><span><b class="rec">a · recomiendo:</b> solo los <b>consecutivos</b>, en su sitio. Los reinicios con mensajes entre medias siguen siendo líneas propias y marcan dónde se cortó la historia (una respuesta a medias, un permiso que esperaba).</span></label>
+      <label><input type="radio" name="d1" value="b"><span><b>b ·</b> todos en una línea <b>al final</b> de la conversación, como lo pidió el usuario literalmente. Una sola línea siempre, pero un reinicio que cortó una respuesta a mitad se pierde de vista: la respuesta parece acabar sin más. Mira el caso de la captura con esta opción.</span></label>
+      <div class="tr" id="d1-tr"></div>
+    </fieldset>
+    <fieldset id="d2"><legend>2 · formato de la hora</legend>
+      <label><input type="radio" name="d2" value="a" checked><span><b class="rec">a · recomiendo: 24 h</b> (11:41, 15:37), como el resto de jw: el separador de hoy, los bloques de shell y la barra de estado.</span></label>
+      <label><input type="radio" name="d2" value="b"><span><b>b ·</b> AM/PM (11:41 AM, 3:37 PM), como lo escribió el usuario. Es el único sitio de jw con AM/PM.</span></label>
+      <div class="tr" id="d2-tr"></div>
+    </fieldset>
+    <fieldset id="d3"><legend>3 · el texto, en español</legend>
+      <label><input type="radio" name="d3" value="a" checked><span><b class="rec">a · recomiendo:</b> el de hoy cuando es 1, «el daemon se reinició 20 veces · la última a las 11:41» cuando son más. Mismo comienzo, minúscula y «·» que el resto de la línea.</span></label>
+      <label><input type="radio" name="d3" value="b"><span><b>b ·</b> «el daemon se reinició 20 veces · última: 11:41». Más corto, para un teléfono estrecho.</span></label>
+      <label><input type="radio" name="d3" value="c"><span><b>c ·</b> las palabras del usuario: «Daemon se reinició 20 veces, última vez a las 11:41». Cambia también el texto de 1 reinicio y la capitalización.</span></label>
+      <div class="tr" id="d3-tr"></div>
+    </fieldset>
+    <fieldset id="d4"><legend>4 · la fecha, cuando el último no fue hoy</legend>
+      <label><input type="radio" name="d4" value="a" checked><span><b class="rec">a · recomiendo: sí si no es de hoy</b> («la última el 20 oct a las 11:41»). Hoy, solo la hora. Vale también para 1 reinicio. Prueba <kbd>pasar a mañana</kbd>.</span></label>
+      <label><input type="radio" name="d4" value="b"><span><b>b ·</b> nunca: solo la hora. Un «11:41» de hace seis días parece de hoy.</span></label>
+      <label><input type="radio" name="d4" value="c"><span><b>c ·</b> siempre, también de hoy. Más largo todas las veces.</span></label>
+      <div class="tr" id="d4-tr"></div>
+    </fieldset>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const val = n => document.querySelector('input[name=' + n + ']:checked').value;
+const MON = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+const p2 = n => String(n).padStart(2, '0');
+const D = (m, d, h, mi) => new Date(2026, m - 1, d, h, mi);
+const MIN = 60000;
+
+let S;     // {items, now, view}
+
+/* ---------- the daemon's part: fuse, then say ---------- */
+
+// Turn the restart items into what is shown: 'now' leaves each one, 'a' fuses the consecutive ones, 'b' moves them all to one line at the end.
+function fuse(items, mode) {
+  if (mode === 'now') return items.map(i => i.k === 'restart' ? { k: 'restart', n: 1, at: i.at } : i);
+  const out = [];
+  let tail = null;   // the line that takes the restarts that come next
+  for (const i of items) {
+    if (i.k !== 'restart') { out.push(i); if (mode === 'a') tail = null; continue; }
+    if (!tail) { tail = { k: 'restart', n: 0, at: i.at }; if (mode === 'a') out.push(tail); }
+    tail.n += i.n || 1;
+    tail.at = i.at;
+  }
+  if (mode === 'b' && tail) out.push(tail);
+  return out;
+}
+
+function clock(at) {
+  if (val('d2') === 'a') return p2(at.getHours()) + ':' + p2(at.getMinutes());
+  const h = at.getHours() % 12 || 12;
+  return h + ':' + p2(at.getMinutes()) + ' ' + (at.getHours() < 12 ? 'AM' : 'PM');
+}
+function sameDay(a, b) { return a.toDateString() === b.toDateString(); }
+// The day goes before the time when the last restart was not today (d4 a), never (b) or always (c).
+function day(at) {
+  const d4 = val('d4');
+  return d4 === 'c' || (d4 === 'a' && !sameDay(at, S.now)) ? at.getDate() + ' ' + MON[at.getMonth()] : '';
+}
+function say(n, at) {
+  const d = day(at), t = clock(at), v = val('d3');
+  if (v === 'a') {
+    if (n === 1) return 'el daemon se reinició · ' + (d ? d + ' ' : '') + t;
+    return 'el daemon se reinició ' + n + ' veces · la última ' + (d ? 'el ' + d + ' ' : '') + 'a las ' + t;
+  }
+  if (v === 'b') {
+    if (n === 1) return 'el daemon se reinició · ' + (d ? d + ' ' : '') + t;
+    return 'el daemon se reinició ' + n + ' veces · última: ' + (d ? d + ' ' : '') + t;
+  }
+  if (n === 1) return 'Daemon se reinició ' + (d ? 'el ' + d + ' ' : '') + 'a las ' + t;
+  return 'Daemon se reinició ' + n + ' veces, última vez ' + (d ? 'el ' + d + ' ' : '') + 'a las ' + t;
+}
+
+/* ---------- the data ---------- */
+
+function run(from, to, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ k: 'restart', at: new Date(from.getTime() + Math.round((to - from) * (n === 1 ? 0 : i / (n - 1)) / MIN) * MIN) });
+  return out;
+}
+const BASE = [
+  { k: 'user', t: 'arregla el test que falla' },
+  { k: 'claude', t: 'Era un orden de las claves en el JSON; ya pasa.' },
+  { k: 'result', t: '12 s · 3 herramientas · $0.04' },
+];
+function scenario(id) {
+  const now = D(10, 26, 11, 41);
+  if (id === 'cap') return { now, items: [
+    ...BASE,
+    { k: 'user', t: 'ahora aplica el mismo cambio a los otros tres archivos' },
+    { k: 'cut', t: 'Voy a tocar engine.rs, conversation.rs y' },
+    ...run(D(10, 19, 21, 14), D(10, 20, 9, 56), 6),
+    { k: 'result', t: '31 s · 5 herramientas · $0.11' },
+    ...run(D(10, 20, 11, 8), D(10, 26, 11, 41), 37),
+  ] };
+  const n = { 1: 1, 2: 2, 20: 20 }[id];
+  return { now, items: [...BASE, ...run(D(10, 26, 9, 5), now, n)] };
+}
+
+/* ---------- drawing ---------- */
+
+function row(i) {
+  switch (i.k) {
+    case 'user': return '<div><span class="u">› ' + esc(i.t) + '</span></div>';
+    case 'claude': return '<div>' + esc(i.t) + '</div>';
+    case 'cut': return '<div class="cut">' + esc(i.t) + ' <i>▍ (la respuesta se cortó aquí)</i></div>';
+    case 'result': return '<div class="dim">✻ ' + esc(i.t) + '</div>';
+    case 'restart': return '<div class="dv"><span>' + esc(say(i.n, i.at)) + '</span></div>';
+  }
+  return '';
+}
+function draw() {
+  const shown = fuse(S.items, S.view === 'now' ? 'now' : val('d1'));
+  const total = S.items.filter(i => i.k === 'restart').length;
+  const lines = shown.filter(i => i.k === 'restart').length;
+  for (const id of ['t-list', 'p-list']) {
+    const el = $(id);
+    el.innerHTML = shown.map(row).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+  $('t-count').textContent = (S.view === 'now' ? 'hoy' : 'con el cambio') + ' · ' + total + ' reinicios, ' + lines + (lines === 1 ? ' línea' : ' líneas');
+  $('t-clock').textContent = 'ahora: ' + S.now.getDate() + ' ' + MON[S.now.getMonth()] + ' ' + p2(S.now.getHours()) + ':' + p2(S.now.getMinutes());
+  $('p-sub').textContent = total + ' reinicios · ' + lines + (lines === 1 ? ' línea' : ' líneas');
+  // With "all at the end" a restart that cut a reply is no longer next to it.
+  const cutAt = shown.findIndex(i => i.k === 'cut');
+  $('warn').textContent = S.view !== 'now' && val('d1') === 'b' && cutAt >= 0 && shown[cutAt + 1] && shown[cutAt + 1].k !== 'restart'
+    ? '⚠ la respuesta cortada («…y») ya no tiene su reinicio a continuación: parece que acabó así.' : '';
+  const last = [...shown].reverse().find(i => i.k === 'restart');
+  const item = { t: 'divider', kind: 'restart', text: last ? say(last.n, last.at) : '' };
+  if (S.view !== 'now' && last && last.n > 1) item.count = last.n;
+  $('wire').textContent = !last ? 'sin reinicios'
+    : JSON.stringify(item) + '\n\ncount es opcional: ausente es 1 (un archivo guardado de antes se carga igual), y solo lo escribe el daemon cuando es mayor que 1.';
+  for (const n of ['d1', 'd2', 'd3', 'd4']) $(n + '-tr').textContent = '';
+  $('d1-tr').textContent = val('d1') === 'a' ? '· ' + lines + ' líneas con los mensajes de por medio' : '· una sola línea al final, sea lo que sea lo que cortaron';
+  if (last) {
+    $('d2-tr').textContent = '· ' + clock(last.at);
+    $('d3-tr').textContent = '· ' + say(Math.max(last.n, 20), last.at) + '   ·   ' + say(1, last.at);
+    $('d4-tr').textContent = '· ' + (day(last.at) || '(sin fecha)') + ' · ' + say(last.n, last.at);
+  }
+}
+
+/* ---------- actions ---------- */
+
+function pick(id) {
+  S = Object.assign(scenario(id), { view: S ? S.view : 'new' });
+  for (const k of ['cap', '1', '2', '20']) $('sc-' + k).setAttribute('aria-pressed', String(k === id));
+  draw();
+}
+$('sc-cap').onclick = () => pick('cap');
+$('sc-1').onclick = () => pick('1');
+$('sc-2').onclick = () => pick('2');
+$('sc-20').onclick = () => pick('20');
+for (const v of ['now', 'new']) $('v-' + v).onclick = () => {
+  S.view = v;
+  $('v-now').setAttribute('aria-pressed', String(v === 'now'));
+  $('v-new').setAttribute('aria-pressed', String(v === 'new'));
+  draw();
+};
+$('restart').onclick = () => {
+  S.now = new Date(S.now.getTime() + 97 * MIN);
+  S.items.push({ k: 'restart', at: S.now });
+  draw();
+  // The line that changed: the last restart line drawn.
+  const ls = document.querySelectorAll('#t-list .dv, #p-list .dv');
+  ls.forEach(l => l.classList.remove('flash'));
+  for (const el of [$('t-list'), $('p-list')]) { const d = el.querySelectorAll('.dv'); if (d.length) { d[d.length - 1].classList.add('flash'); } }
+};
+$('msg').onclick = () => {
+  S.items.push({ k: 'user', t: 'sigue por donde ibas' }, { k: 'claude', t: 'Hecho.' }, { k: 'result', t: '8 s · 1 herramienta · $0.02' });
+  draw();
+};
+$('tomorrow').onclick = () => {
+  S.now = new Date(S.now.getFullYear(), S.now.getMonth(), S.now.getDate() + 1, 9, 0);
+  draw();
+};
+document.addEventListener('change', e => { if (e.target.name) { draw(); } });
+
+/* ---------- self-check: the same cases the daemon's tests will have ---------- */
+
+function tests() {
+  const out = [];
+  const t = (name, ok) => out.push((ok ? '✓ ' : '✗ ') + name);
+  const r = n => run(D(10, 26, 9, 0), D(10, 26, 11, 41), n);
+  const m = { k: 'user', t: 'x' };
+  const cnt = (l, k) => l.filter(i => i.k === k).length;
+  t('37 seguidos son 1 línea con n = 37', (l => l.length === 1 && l[0].n === 37)(fuse(r(37), 'a')));
+  t('un mensaje en medio parte la tanda en dos', (l => cnt(l, 'restart') === 2 && l[0].n === 2 && l[2].n === 3)(fuse([...r(2), m, ...r(3)], 'a')));
+  t('"al final" deja una sola línea con el total, detrás del mensaje', (l => cnt(l, 'restart') === 1 && l[l.length - 1].k === 'restart' && l[l.length - 1].n === 5)(fuse([...r(2), m, ...r(3)], 'b')));
+  t('la hora de la línea fundida es la del último', (l => l[0].at.getTime() === D(10, 26, 11, 41).getTime())(fuse(r(20), 'a')));
+  t('fundir otra vez no cambia nada (36 + 1 = 37 y de nuevo igual)', (l => l.length === 1 && l[0].n === 37)(fuse([{ k: 'restart', at: D(10, 26, 9, 0), n: 1 }, ...r(36)], 'a')));
+  $('tests').textContent = 'pruebas del fundido: ' + out.join('   ');
+}
+
+S = null;
+pick('cap');
+tests();
+</script>
