@@ -1,0 +1,12 @@
+{
+  "t": "patch",
+  "node": "00000000-0000-4000-8000-0000000000d8",
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "from": 1,
+  "to": 2,
+  "ops": [
+    { "op": "replace", "path": "/tasks/2/status", "value": "done" },
+    { "op": "replace", "path": "/tasks/2/state", "value": "done" },
+    { "op": "replace", "path": "/tasks/3/state", "value": "waiting" }
+  ]
+}

@@ -64,6 +64,12 @@ pub fn chats_dir(state: &Path) -> PathBuf {
     state.join("chats")
 }
 
+/// A workspace's task list: `<folder>/.<name>/tasks.md` (N180, REQ-892). The directory is the product's
+/// name with a dot, so nothing else spells it.
+pub fn tasks_path(folder: &Path) -> PathBuf {
+    folder.join(format!(".{}", get().name)).join("tasks.md")
+}
+
 /// The daemon's socket: `$<PREFIX>_SOCKET`, else `<state_dir>/<name>.sock`.
 pub fn socket_path() -> PathBuf {
     match std::env::var_os(env_var("SOCKET")) {
@@ -86,5 +92,52 @@ mod tests {
         }
         assert!(config_dir().ends_with(&get().name));
         assert_eq!(chats_dir(Path::new("/s")), PathBuf::from("/s/chats"));
+    }
+
+    #[test]
+    fn the_task_list_is_in_the_products_dot_directory() {
+        let path = tasks_path(Path::new("/w"));
+        assert_eq!(path, PathBuf::from(format!("/w/.{}/tasks.md", get().name)));
+    }
+
+    /// REQ-892: no source spells the directory or the file; they come from `tasks_path`.
+    #[test]
+    fn no_source_spells_the_task_list_directory_or_file() {
+        fn walk(dir: &Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && !path.ends_with("identity/src/lib.rs")
+                {
+                    for (n, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
+                        let code = line.trim_start();
+                        let spelled = format!(".{}/", get().name);
+                        if !code.starts_with("//")
+                            && (code.contains(&spelled) || code.contains("tasks.md"))
+                        {
+                            found.push(format!("{}:{}", path.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let mut found = Vec::new();
+        for krate in std::fs::read_dir(&crates).unwrap().flatten() {
+            for sub in ["src", "tests"] {
+                if krate.path().join(sub).is_dir() {
+                    walk(&krate.path().join(sub), &mut found);
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "spelled by hand, use identity::tasks_path: {found:?}"
+        );
     }
 }

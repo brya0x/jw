@@ -8,6 +8,7 @@ import dev.jw.next.contract.ConfigFrom
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConversationList
 import dev.jw.next.contract.Image
+import dev.jw.next.contract.TaskOp
 import dev.jw.next.contract.DiffScope
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
@@ -53,6 +54,25 @@ interface NodeSource {
 
     /** Ask the daemon for the `commits` node of [workspace]. */
     fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Ask the daemon for the `tasks` node of [workspace]; a workspace with no list is refused (N180g). */
+    fun openTasks(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Change one task of the list: [text] is the reason of `Block` and the note of `Note`; [reply] gets the PC's message when it refuses. */
+    fun editTask(workspace: Id, op: TaskOp, id: String, text: String?, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Turn the task loop of [workspace] on for [max] laps, from the phone: the PC tells its agent the first task. */
+    fun loopOn(workspace: Id, max: Int, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    fun loopOff(workspace: Id, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
@@ -369,7 +389,7 @@ class Navigator(private val source: NodeSource) {
         val ws = source.node(id) as? Node.Workspace
         val target = pane ?: ws?.panes?.firstOrNull()?.id
         var seen = markNode(s.seen, id)
-        if (target != null) seen = markNode(seen, target)
+        if (target != null && target != TASKS_TAB) seen = markNode(seen, target)
         // The workspace's group opens, so that the list shows where it is on the way back (REQ-697).
         val group = source.session().workspaces.firstOrNull { it.id == id }?.group
         return ClientState(
@@ -401,7 +421,8 @@ class Navigator(private val source: NodeSource) {
 
     fun selectPane(s: ClientState, pane: Id): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s
-        return s.copy(screen = at.copy(pane = pane), seen = markNode(s.seen, pane))
+        // The tasks tab is no node: it has nothing to mark seen.
+        return s.copy(screen = at.copy(pane = pane), seen = if (pane == TASKS_TAB) s.seen else markNode(s.seen, pane))
     }
 
     /** A tap on the line of an attention in a Home row, or on an Avisos item: open the pane it names (REQ-34). */
@@ -422,6 +443,8 @@ class Navigator(private val source: NodeSource) {
         val at = s.screen as? Screen.Workspace ?: return s
         val ws = source.node(at.id) as? Node.Workspace ?: return s
         if (at.pane != null && (ws.panes.any { it.id == at.pane } || ws.views.any { it.id == at.pane })) return s
+        // The tab of the tasks stays while the row says there is a list; it gives way when the list is gone (REQ-949).
+        if (at.pane == TASKS_TAB && source.session().workspaces.firstOrNull { it.id == at.id }?.tasks != null) return s
         val first = ws.panes.firstOrNull()?.id
         val seen = if (first != null) markNode(s.seen, first) else s.seen
         return s.copy(screen = at.copy(pane = first), seen = seen)

@@ -29,6 +29,8 @@ impl Env {
             // The daemon of a test never runs the person's `claude update` (REQ-847).
             .env(identity::env_var("CLAUDE_UPDATE"), "0")
             .env("SHELL", "/bin/sh")
+            // never the person's own `~/.claude`: a skill is looked for and written here (N180e)
+            .env("CLAUDE_CONFIG_DIR", self.dir.join("claude-config"))
             .stdin(Stdio::null());
         c
     }

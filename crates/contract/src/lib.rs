@@ -12,6 +12,7 @@ pub mod link;
 pub mod markdown;
 pub use link::{BridgeMsg, Denied, PhoneMsg};
 pub mod patch;
+pub mod tasks;
 pub mod text;
 pub mod themes;
 
@@ -413,6 +414,35 @@ pub enum Cmd {
     OpenCommits {
         workspace: Id,
     },
+    /// Make (or find) the `tasks` node of `workspace` (N180, REQ-907). The result is `{node}`;
+    /// a workspace with no list is `not_found`.
+    OpenTasks {
+        workspace: Id,
+    },
+    /// Change one task of the workspace's list (REQ-912): mark it done, blocked (with `text`, the
+    /// reason), or reopened, or add `text` as a note under it. The result is nothing.
+    TasksEdit {
+        workspace: Id,
+        op: tasks::TaskOp,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    /// Turn on the loop of the workspace's agent over its task list (N180, REQ-916 to REQ-918):
+    /// up to `max` laps (1 to 99, 20 when absent). `pane` is the agent's own pane when the agent
+    /// asks (nothing is sent to it); without it the daemon tells the workspace's agent the first
+    /// task. The result is `{laps, max, task: {id, title, text}}`.
+    TasksLoopOn {
+        workspace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane: Option<Id>,
+    },
+    /// Turn the loop off (REQ-928).
+    TasksLoopOff {
+        workspace: Id,
+    },
     /// Publish an artifact (N171): the next version of the one named `name` in `workspace`. The
     /// result is `{id, n, hash, new}`; `new` is false when the bytes equal the latest version.
     /// Only the CLI sends it: the bridge refuses it from a phone.
@@ -660,6 +690,7 @@ pub enum Node {
     Diff(Diff),
     Commits(Commits),
     Artifacts(artifacts::Artifacts),
+    Tasks(tasks::Tasks),
     /// Boxed: it is by far the largest document and the others are not made larger by it.
     Conversation(Box<conversation::Conversation>),
 }
@@ -1264,6 +1295,9 @@ pub struct WorkspaceSummary {
     /// The workspace is a conversation of its own (REQ-805).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatInfo>,
+    /// The workspace has a task list (REQ-908).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<tasks::TasksSummary>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1374,6 +1408,7 @@ pub fn node_id(node: &Node) -> &Id {
         Node::Diff(n) => &n.head.id,
         Node::Commits(n) => &n.head.id,
         Node::Artifacts(n) => &n.head.id,
+        Node::Tasks(n) => &n.head.id,
         Node::Conversation(n) => &n.head.id,
     }
 }

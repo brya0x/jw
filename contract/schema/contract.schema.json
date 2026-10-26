@@ -15,7 +15,7 @@
     "AttentionKind": {
       "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed", "artifact"]
     },
-    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits", "artifacts", "conversation"] },
+    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits", "artifacts", "tasks", "conversation"] },
     "BlocksMode": { "enum": ["blocks", "full"] },
     "Accent": { "enum": ["blue", "green", "yellow", "red", "magenta", "cyan"] },
     "ConvMode": { "enum": ["manual", "acceptEdits", "plan", "auto"] },
@@ -365,7 +365,8 @@
         "working": { "type": "boolean" },
         "removing": { "type": "boolean" },
         "group": { "$ref": "#/$defs/Id" },
-        "chat": { "$ref": "#/$defs/ChatInfo" }
+        "chat": { "$ref": "#/$defs/ChatInfo" },
+        "tasks": { "$ref": "#/$defs/TasksSummary" }
       }
     },
     "Group": {
@@ -402,6 +403,59 @@
       "type": "object",
       "required": ["active"],
       "properties": { "archived": { "type": "boolean" }, "active": { "type": "integer", "minimum": 0 }, "last": { "type": "string", "maxLength": 80 } }
+    },
+    "TaskStatus": { "enum": ["todo", "done", "blocked"] },
+    "TaskPhase": { "enum": ["waiting", "ready", "running", "done", "blocked"] },
+    "StopKind": { "enum": ["done", "blocked", "idle", "max", "stuck", "person", "pane"] },
+    "TaskOp": { "enum": ["done", "block", "reopen", "note"] },
+    "TaskItem": {
+      "type": "object",
+      "required": ["id", "title", "after", "status", "state", "level"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "after": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "status": { "$ref": "#/$defs/TaskStatus" },
+        "state": { "$ref": "#/$defs/TaskPhase" },
+        "level": { "type": "integer", "minimum": 1 },
+        "why": { "type": "string" },
+        "notes": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "final": { "const": true },
+        "auto": { "const": true }
+      }
+    },
+    "TaskProblem": {
+      "type": "object",
+      "required": ["text"],
+      "properties": { "line": { "type": "integer", "minimum": 1 }, "text": { "type": "string" } }
+    },
+    "LoopStop": {
+      "type": "object",
+      "required": ["kind", "text"],
+      "properties": { "kind": { "$ref": "#/$defs/StopKind" }, "text": { "type": "string" } }
+    },
+    "LoopInfo": {
+      "type": "object",
+      "required": ["on", "laps", "max"],
+      "properties": {
+        "on": { "type": "boolean" },
+        "laps": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "task": { "type": "string" },
+        "pane": { "$ref": "#/$defs/Id" },
+        "waiting": { "const": true },
+        "stop": { "$ref": "#/$defs/LoopStop" }
+      }
+    },
+    "TasksSummary": {
+      "type": "object",
+      "required": ["done", "total"],
+      "properties": {
+        "done": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 1 },
+        "on": { "const": true },
+        "stop": { "$ref": "#/$defs/LoopStop" }
+      }
     },
     "SplitDir": { "enum": ["row", "col"] },
     "Layout": {
@@ -571,6 +625,18 @@
         },
         {
           "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "path", "tasks", "loop"],
+          "properties": {
+            "type": { "const": "tasks" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "path": { "type": "string" },
+            "tasks": { "type": "array", "items": { "$ref": "#/$defs/TaskItem" }, "minItems": 1 },
+            "problems": { "type": "array", "items": { "$ref": "#/$defs/TaskProblem" }, "minItems": 1 },
+            "loop": { "$ref": "#/$defs/LoopInfo" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
           "required": ["pane", "name", "accent", "model", "effort", "mode", "status", "first", "items", "queue", "tasks", "todos", "artifacts", "commands", "cost"],
           "properties": {
             "type": { "const": "conversation" },
@@ -702,6 +768,10 @@
           "then": { "required": ["commit"] }
         },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_commits" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_tasks" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace", "op", "id"], "properties": { "cmd": { "const": "tasks_edit" }, "workspace": { "$ref": "#/$defs/Id" }, "op": { "$ref": "#/$defs/TaskOp" }, "id": { "type": "string", "minLength": 1 }, "text": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "tasks_loop_on" }, "workspace": { "$ref": "#/$defs/Id" }, "max": { "type": "integer", "minimum": 1, "maximum": 99 }, "pane": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "tasks_loop_off" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace", "name", "format", "text"], "properties": { "cmd": { "const": "artifact_publish" }, "workspace": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^/]+$" }, "title": { "type": "string" }, "kind": { "$ref": "#/$defs/ArtifactKind" }, "format": { "$ref": "#/$defs/ArtifactFormat" }, "text": { "type": "string" }, "pane": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_artifacts" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "id"], "properties": { "cmd": { "const": "artifact_read" }, "id": { "$ref": "#/$defs/Id" }, "n": { "type": "integer", "minimum": 1 } } },
