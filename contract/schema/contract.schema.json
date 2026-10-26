@@ -124,7 +124,7 @@
             "cost": { "type": "integer", "minimum": 0, "description": "Millionths of a dollar." }
           }
         },
-        { "type": "object", "required": ["t", "text", "kind"], "properties": { "t": { "const": "divider" }, "text": { "type": "string" }, "kind": { "$ref": "#/$defs/DividerKind" } } }
+        { "type": "object", "required": ["t", "text", "kind"], "properties": { "t": { "const": "divider" }, "text": { "type": "string" }, "kind": { "$ref": "#/$defs/DividerKind" }, "count": { "type": "integer", "minimum": 1, "description": "How many restarts the line stands for; absent is 1 (N183)." } } }
       ]
     },
     "AskKind": { "enum": ["permission", "question", "plan"] },

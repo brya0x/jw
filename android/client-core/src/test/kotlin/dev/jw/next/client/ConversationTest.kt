@@ -10,6 +10,7 @@ import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConvStatus
 import dev.jw.next.contract.DaemonMsg
+import dev.jw.next.contract.DividerKind
 import dev.jw.next.contract.Held
 import dev.jw.next.contract.Image
 import dev.jw.next.contract.Node
@@ -134,6 +135,8 @@ class ConversationTest {
         assertEquals("Listo en 9 s · 1 herramienta", convDone(ConvItem.Result(9_000, 1, 0)))
         assertEquals("Listo en 11 s · 3 herramientas · \$0,06", convDone(ConvItem.Result(11_000, 3, 60_000)))
         assertEquals("Listo en 9 s · 1 herramienta", itemText(ConvItem.Result(9_000, 1, 0)))
+        // REQ-997: the line of many restarts is its text, and nothing is read from `count`.
+        assertEquals("el daemon se reinició 20 veces · la última a las 11:41", itemText(ConvItem.Divider("el daemon se reinició 20 veces · la última a las 11:41", DividerKind.Restart, 20)))
     }
 
     @Test

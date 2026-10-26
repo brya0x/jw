@@ -4815,6 +4815,24 @@ mod tests {
         );
     }
 
+    /// REQ-997: the line of many restarts is drawn as any divider, from its text.
+    #[test]
+    fn a_line_that_stands_for_many_restarts_is_drawn_from_its_text() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("snapshot-conversation-restarts.json")).unwrap(),
+        )
+        .unwrap();
+        let mut conv: Conversation = serde_json::from_value(doc["node"].clone()).unwrap();
+        conv.ask = None;
+        let (_, rows) = frame(&Ui::default(), &conv);
+        row_of(
+            &rows,
+            "el daemon se reinició 20 veces · la última a las 11:41",
+        );
+        row_of(&rows, "el daemon se reinició · 11:08");
+    }
+
     #[test]
     fn a_message_has_its_band_and_the_accent_marks_it() {
         let conv = idle();

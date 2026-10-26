@@ -723,6 +723,136 @@ pub(crate) fn stamp() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// A local date and time as `date` says it (REQ-995).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Local {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+}
+
+impl Local {
+    /// `2026-10-26 11:41`, which is `date "+%Y-%m-%d %H:%M"`.
+    fn parse(text: &str) -> Option<Local> {
+        let (date, time) = text.trim().split_once(' ')?;
+        let mut d = date.splitn(3, '-');
+        let mut t = time.splitn(2, ':');
+        Some(Local {
+            year: d.next()?.parse().ok()?,
+            month: d.next()?.parse().ok()?,
+            day: d.next()?.parse().ok()?,
+            hour: t.next()?.parse().ok()?,
+            minute: t.next()?.parse().ok()?,
+        })
+    }
+}
+
+/// The local time of a moment in milliseconds: `date -r <seconds>` (BSD), else `date -d @<seconds>` (GNU).
+pub(crate) fn local_time(ms: u64) -> Option<Local> {
+    let secs = (ms / 1000).to_string();
+    [["-r", secs.as_str()], ["-d", &format!("@{secs}")]]
+        .iter()
+        .find_map(|args| {
+            let out = std::process::Command::new("date")
+                .args(args)
+                .arg("+%Y-%m-%d %H:%M")
+                .output()
+                .ok()?;
+            Local::parse(std::str::from_utf8(&out.stdout).ok()?).filter(|_| out.status.success())
+        })
+}
+
+const MONTHS: [&str; 12] = [
+    "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
+];
+
+/// The text of a line that stands for `count` restarts (2 or more), the last at `last`, written
+/// on the day `today`: the day goes in only when it is not today's (REQ-994).
+fn restarts_text(count: u32, last: Option<Local>, today: Option<Local>) -> String {
+    let Some(l) = last else {
+        return format!("el daemon se reinició {count} veces");
+    };
+    let other_day = today.is_some_and(|t| (t.year, t.month, t.day) != (l.year, l.month, l.day));
+    let day = match MONTHS.get((l.month as usize).wrapping_sub(1)) {
+        Some(month) if other_day => format!("el {} {month} ", l.day),
+        _ => String::new(),
+    };
+    format!(
+        "el daemon se reinició {count} veces · la última {day}a las {:02}:{:02}",
+        l.hour, l.minute
+    )
+}
+
+/// The text of a fused line, made with `date`, which is run for the day of writing only once and
+/// only when a line is fused.
+pub(crate) fn restarts_text_now() -> impl Fn(u32, u64) -> String {
+    let today = std::cell::OnceCell::new();
+    move |count, at| {
+        restarts_text(
+            count,
+            local_time(at),
+            *today.get_or_init(|| local_time(stamp())),
+        )
+    }
+}
+
+/// The `restart` dividers that have nothing between them are one, with the sum of their counts,
+/// the time of the last and the text `say` makes of both; `end_only` fuses only the run that ends
+/// the list. A run of one, and any other item, is left as it is (REQ-992, REQ-993, REQ-998).
+pub(crate) fn fuse_restarts(
+    items: Vec<Item>,
+    stamps: Vec<(u64, bool)>,
+    end_only: bool,
+    say: impl Fn(u32, u64) -> String,
+) -> (Vec<Item>, Vec<(u64, bool)>) {
+    let restart = |i: &Item| {
+        matches!(
+            i,
+            Item::Divider {
+                kind: DividerKind::Restart,
+                ..
+            }
+        )
+    };
+    if !items.windows(2).any(|w| restart(&w[0]) && restart(&w[1])) {
+        return (items, stamps);
+    }
+    let n = items.len();
+    let (mut out, mut out_stamps) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j < n && restart(&items[j]) {
+            j += 1;
+        }
+        if j - i >= 2 && (!end_only || j == n) {
+            let count = items[i..j]
+                .iter()
+                .map(|it| match it {
+                    Item::Divider { count, .. } => count.unwrap_or(1),
+                    _ => 1,
+                })
+                .sum();
+            let at = stamps[j - 1].0;
+            out.push(Item::Divider {
+                text: say(count, at),
+                kind: DividerKind::Restart,
+                count: Some(count),
+            });
+            out_stamps.push((at, true));
+            i = j;
+        } else {
+            let end = j.max(i + 1);
+            out.extend_from_slice(&items[i..end]);
+            out_stamps.extend_from_slice(&stamps[i..end]);
+            i = end;
+        }
+    }
+    (out, out_stamps)
+}
+
 /// The lines of a transcript with the items that are jwn's own among them, each after the last
 /// line that was made no later than it. A card of a subagent takes the place of the tool that
 /// started it, which is also a line of the transcript.
@@ -883,7 +1013,17 @@ impl State {
         st.push(Item::Divider {
             text: format!("el daemon se reinició · {at}"),
             kind: DividerKind::Restart,
+            count: None,
         });
+        // The items of a file of before the transcript have no times of their own: only the run
+        // that ends them, whose last restart is this one, has one to say (REQ-996).
+        if st.legacy {
+            let (items, stamps) = (
+                std::mem::take(&mut st.items),
+                std::mem::take(&mut st.stamps),
+            );
+            (st.items, st.stamps) = fuse_restarts(items, stamps, true, restarts_text_now());
+        }
         st
     }
 
@@ -913,7 +1053,8 @@ impl State {
         kept.extend(self.kept());
         // Only the end of the lines can be among the items a node keeps; the rest is counted.
         let skip = t.items.len().saturating_sub(KEEP + kept.len());
-        let (mut items, mut stamps) = merge(&t.items[skip..], &kept);
+        let (items, stamps) = merge(&t.items[skip..], &kept);
+        let (mut items, mut stamps) = fuse_restarts(items, stamps, false, restarts_text_now());
         let from = items.len().saturating_sub(KEEP);
         items.drain(..from);
         stamps.drain(..from);
@@ -1395,6 +1536,7 @@ impl State {
             self.push(Item::Divider {
                 text: "conversación retomada".into(),
                 kind: DividerKind::Resume,
+                count: None,
             });
         }
         self.push(Item::User {
@@ -2016,6 +2158,7 @@ impl State {
                 self.push(Item::Divider {
                     text,
                     kind: DividerKind::Compact,
+                    count: None,
                 });
             }
             "status" => {
@@ -2820,6 +2963,7 @@ impl State {
         self.push(Item::Divider {
             text: "conversación vacía".into(),
             kind: DividerKind::Clear,
+            count: None,
         });
         Vec::new()
     }
@@ -4655,7 +4799,7 @@ mod tests {
         assert_eq!(back.name, "hola");
         assert_eq!(back.cost, 50_000);
         assert!(
-            matches!(back.items.last(), Some(Item::Divider { text, kind: DividerKind::Restart }) if text == "el daemon se reinició · 20:10")
+            matches!(back.items.last(), Some(Item::Divider { text, kind: DividerKind::Restart, .. }) if text == "el daemon se reinició · 20:10")
         );
     }
 
@@ -5665,5 +5809,273 @@ mod tests {
         assert_eq!(s.followed_queue, ["y esto"]);
         let _ = s.engine_started(None);
         assert!(s.followed_queue.is_empty());
+    }
+
+    fn restart_at(at: u64, count: Option<u32>) -> (Item, (u64, bool)) {
+        (
+            Item::Divider {
+                text: "el daemon se reinició · 11:08".into(),
+                kind: DividerKind::Restart,
+                count,
+            },
+            (at, true),
+        )
+    }
+
+    fn say(count: u32, at: u64) -> String {
+        format!("{count}@{at}")
+    }
+
+    fn fused(list: Vec<(Item, (u64, bool))>, end_only: bool) -> (Vec<Item>, Vec<(u64, bool)>) {
+        let (items, stamps) = list.into_iter().unzip();
+        fuse_restarts(items, stamps, end_only, say)
+    }
+
+    fn counts(items: &[Item]) -> Vec<Option<u32>> {
+        items
+            .iter()
+            .map(|i| match i {
+                Item::Divider { count, .. } => *count,
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn note_at(at: u64) -> (Item, (u64, bool)) {
+        (
+            Item::Note {
+                text: "x".into(),
+                tone: None,
+            },
+            (at, true),
+        )
+    }
+
+    #[test]
+    fn restarts_in_a_row_are_one_with_the_time_of_the_last() {
+        let list = (1..=37).map(|n| restart_at(n * 1000, None)).collect();
+        let (items, stamps) = fused(list, false);
+        assert_eq!(items.len(), 1);
+        assert_eq!(counts(&items), [Some(37)]);
+        assert_eq!(stamps, [(37_000, true)]);
+        assert!(matches!(&items[0], Item::Divider { text, .. } if text == "37@37000"));
+    }
+
+    #[test]
+    fn another_item_splits_a_run_and_nothing_moves() {
+        let list = vec![
+            restart_at(1, None),
+            restart_at(2, None),
+            note_at(3),
+            restart_at(4, None),
+            restart_at(5, None),
+            restart_at(6, None),
+        ];
+        let (items, stamps) = fused(list, false);
+        assert_eq!(counts(&items), [Some(2), None, Some(3)]);
+        assert_eq!(stamps, [(2, true), (3, true), (6, true)]);
+        // A divider of another kind ends a run too.
+        let mut list = vec![restart_at(1, None), restart_at(2, None)];
+        list.push((
+            Item::Divider {
+                text: "r".into(),
+                kind: DividerKind::Resume,
+                count: None,
+            },
+            (3, true),
+        ));
+        list.push(restart_at(4, None));
+        let (items, _) = fused(list, false);
+        assert_eq!(items.len(), 3);
+        assert_eq!(counts(&items), [Some(2), None, None]);
+    }
+
+    #[test]
+    fn counts_add_and_fusing_again_changes_nothing() {
+        let list = vec![restart_at(1, Some(36)), restart_at(2, None)];
+        let (items, stamps) = fused(list, false);
+        assert_eq!(counts(&items), [Some(37)]);
+        let again = fuse_restarts(items.clone(), stamps.clone(), false, |_, _| unreachable!());
+        assert_eq!((items, stamps), again);
+        // A run of one keeps its text and its count.
+        let (items, _) = fused(vec![restart_at(1, Some(5))], false);
+        assert_eq!(counts(&items), [Some(5)]);
+    }
+
+    #[test]
+    fn only_the_end_is_fused_in_a_file_with_no_times() {
+        let list = vec![
+            restart_at(1, None),
+            restart_at(1, None),
+            note_at(1),
+            restart_at(1, None),
+            restart_at(9, None),
+        ];
+        let (items, _) = fused(list.clone(), true);
+        assert_eq!(counts(&items), [None, None, None, Some(2)]);
+        let (items, _) = fused(list, false);
+        assert_eq!(counts(&items), [Some(2), None, Some(2)]);
+    }
+
+    #[test]
+    fn the_text_of_a_run() {
+        let at = |day, hour, minute| Local {
+            year: 2026,
+            month: 10,
+            day,
+            hour,
+            minute,
+        };
+        let (today, last) = (Some(at(26, 12, 0)), Some(at(26, 11, 41)));
+        assert_eq!(
+            restarts_text(2, last, today),
+            "el daemon se reinició 2 veces · la última a las 11:41"
+        );
+        assert_eq!(
+            restarts_text(20, last, today),
+            "el daemon se reinició 20 veces · la última a las 11:41"
+        );
+        assert_eq!(
+            restarts_text(6, Some(at(20, 9, 5)), today),
+            "el daemon se reinició 6 veces · la última el 20 oct a las 09:05"
+        );
+        // Not knowing today, or the zone, says less and never lies.
+        assert_eq!(
+            restarts_text(6, Some(at(20, 9, 5)), None),
+            "el daemon se reinició 6 veces · la última a las 09:05"
+        );
+        assert_eq!(
+            restarts_text(6, None, today),
+            "el daemon se reinició 6 veces"
+        );
+        let bad = Local {
+            month: 13,
+            ..at(1, 1, 1)
+        };
+        assert_eq!(
+            restarts_text(2, Some(bad), today),
+            "el daemon se reinició 2 veces · la última a las 01:01"
+        );
+    }
+
+    #[test]
+    fn the_local_time_is_read_from_what_date_prints() {
+        let l = Local::parse("2026-10-26 11:41\n").unwrap();
+        assert_eq!(
+            (l.year, l.month, l.day, l.hour, l.minute),
+            (2026, 10, 26, 11, 41)
+        );
+        assert_eq!(Local::parse(""), None);
+        assert_eq!(Local::parse("date: illegal option -- d"), None);
+        // The real command, on any zone: a moment of today is today's.
+        let now = local_time(stamp()).expect("date answers here");
+        assert!((1..=12).contains(&now.month) && now.hour < 24);
+    }
+
+    fn restart_line(s: &mut State) {
+        s.push(Item::Divider {
+            text: "el daemon se reinició · 11:08".into(),
+            kind: DividerKind::Restart,
+            count: None,
+        });
+    }
+
+    fn dividers(s: &State) -> Vec<(String, Option<u32>)> {
+        s.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Divider { text, count, .. } => Some((text.clone(), *count)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What `save_due` writes when the engine's transcript is there to read the chat from.
+    fn saved_with_transcript(s: &State) -> Saved {
+        let mut saved = s.saved(10);
+        saved.items.clear();
+        saved.first = 0;
+        serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn restoring_a_file_of_before_the_transcript_again_and_again_counts_the_restarts() {
+        let mut s = st();
+        s.send("hola", vec![], 0);
+        let mut back = State::restored(s.saved(5), "20:10");
+        assert_eq!(
+            dividers(&back),
+            [("el daemon se reinició · 20:10".into(), None)]
+        );
+        for _ in 0..2 {
+            back = State::restored(back.saved(6), "20:11");
+        }
+        let items = back.items.len();
+        let [(text, count)] = &dividers(&back)[..] else {
+            panic!("one divider, not {:?}", dividers(&back));
+        };
+        assert_eq!(*count, Some(3));
+        assert!(
+            text.starts_with("el daemon se reinició 3 veces · la última "),
+            "{text}"
+        );
+        assert_eq!(items, s.items.len() + 1, "the message and one line");
+    }
+
+    #[test]
+    fn a_restart_that_has_a_message_before_it_is_a_line_of_its_own_in_a_legacy_file() {
+        let mut s = st();
+        restart_line(&mut s);
+        restart_line(&mut s);
+        s.send("sigue", vec![], 0);
+        let back = State::restored(s.saved(5), "20:10");
+        // Only the end is fused: the earlier ones have no time of their own, only the file's.
+        assert_eq!(
+            dividers(&back).iter().map(|d| d.1).collect::<Vec<_>>(),
+            [None, None, None]
+        );
+    }
+
+    #[test]
+    fn the_restarts_of_a_conversation_with_a_transcript_are_one_line_for_each_run() {
+        let mut s = st();
+        s.has_transcript = true;
+        for _ in 0..6 {
+            restart_line(&mut s);
+        }
+        s.push(Item::Result {
+            ms: 31_000,
+            tools: 5,
+            cost: 110_000,
+        });
+        for _ in 0..36 {
+            restart_line(&mut s);
+        }
+        let mut back = State::restored(saved_with_transcript(&s), "11:41");
+        assert!(!back.legacy());
+        back.follow(&crate::transcript::Parser::default());
+        let counts: Vec<_> = dividers(&back).iter().map(|d| d.1).collect();
+        assert_eq!(counts, [Some(6), Some(37)], "36 and the one of this start");
+        assert!(matches!(back.items[1], Item::Result { .. }), "in its place");
+        // What is saved of it comes back the same, and the next start is one more.
+        let again = State::restored(saved_with_transcript(&back), "11:42");
+        let mut again = again;
+        again.follow(&crate::transcript::Parser::default());
+        let counts: Vec<_> = dividers(&again).iter().map(|d| d.1).collect();
+        assert_eq!(counts, [Some(6), Some(38)]);
+        assert_eq!(again.items.len(), 3);
+    }
+
+    #[test]
+    fn a_followed_conversation_that_has_nothing_to_fuse_is_not_touched() {
+        let mut s = st();
+        s.has_transcript = true;
+        restart_line(&mut s);
+        // A message of the person is the transcript's, not kept; a note is jwn's own.
+        s.note("hola", None);
+        restart_line(&mut s);
+        let before = dividers(&s);
+        s.follow(&crate::transcript::Parser::default());
+        assert_eq!(dividers(&s), before, "no text is written again");
     }
 }
