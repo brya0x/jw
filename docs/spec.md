@@ -2127,7 +2127,8 @@ REQ-991 to REQ-1007 by N184: `crates/identity/src/lib.rs` tests (`agent_skill`, 
 ## Parts
 | Part | What | REQs | Main files |
 |---|---|---|---|
-| N184 | roles inside jw (`brain`, `researcher`; project, user and built-in layers), `jw role ls/show`, the `/agent` skill, the mark that keeps an edited skill, `jw update` refreshing the skills, and `jw skill install --plugins` with a question: spec only, no prototype (commands and text, no new drawing); version 0.0.52 | 991–1007 | `docs/spec.md` |
+| N184 ✓ `7c64e624` | roles inside jw (`brain`, `researcher`; project, user and built-in layers), `jw role ls/show`, the `/agent` skill, the mark that keeps an edited skill, `jw update` refreshing the skills, and `jw skill install --plugins` with a question: spec only, no prototype (commands and text, no new drawing); version 0.0.52 | 991–1007 | `docs/spec.md` |
+| N184a ✓ `a0304dda` | the identity's `agent_skill`, `roles_dir` and `user_roles_dir`; `agent/roles.rs` (layers, frontmatter, `role ls/show`), `agent/skillfile.rs` (the mark and the decision), `agent/plugins.rs` (the fixed list, the question, `claude plugin`), the built-in roles and the skill of the roles, `update` refreshing the skills, the tests (`tests/roles.rs`, `tests/update.rs`, `tests/agent.rs`) | 991–1007 | `identity.toml`, `crates/{identity,jw}`, `AGENTS.md`, `Cargo.{toml,lock}` |
 | N0 ✓ `5b73558` | skeleton, freeze rule, identity, `just ci` | 13 | `identity.toml`, `crates/identity` |
 | N1 ✓ `9b1e7bd` | node and message spec, JSON Schema, fixtures, Rust conformance | 1–7, 12 | `contract/`, `crates/contract` |
 | N2 ✓ `759e5d2` | daemon core: socket, hello/epoch, tree, persistence, patches | 8–11, 15–18 | `crates/{wire,daemon,jwn}` |
