@@ -209,14 +209,11 @@ fn stop() -> Res {
     })
 }
 
-/// Connect and say hello, returning the connection and the session node id.
-fn connect() -> Result<(Conn, String), String> {
-    let socket = identity::socket_path();
-    let mut conn =
-        Conn::connect(&socket).map_err(|e| format!("cannot reach {}: {e}", socket.display()))?;
+/// Say hello as `name`: the daemon that answered and the session node id.
+fn hello(conn: &mut Conn, name: String) -> Result<(Peer, String), String> {
     let client = Peer {
-        name: identity::peer("cli"),
-        version: env!("CARGO_PKG_VERSION").into(),
+        name,
+        version: version::VERSION.into(),
     };
     conn.send(&ClientMsg::Hello {
         client,
@@ -228,12 +225,19 @@ fn connect() -> Result<(Conn, String), String> {
         .map_err(|e| e.to_string())?
         .ok_or("the daemon closed the connection")?;
     match serde_json::from_str(&line).map_err(|e| e.to_string())? {
-        DaemonMsg::Hello { root, daemon, .. } => {
-            version::warn(&daemon);
-            Ok((conn, root))
-        }
+        DaemonMsg::Hello { root, daemon, .. } => Ok((daemon, root)),
         other => Err(format!("expected hello, got {other:?}")),
     }
+}
+
+/// Connect and say hello, returning the connection and the session node id.
+fn connect() -> Result<(Conn, String), String> {
+    let socket = identity::socket_path();
+    let mut conn =
+        Conn::connect(&socket).map_err(|e| format!("cannot reach {}: {e}", socket.display()))?;
+    let (daemon, root) = hello(&mut conn, identity::peer("cli"))?;
+    version::warn(&daemon);
+    Ok((conn, root))
 }
 
 fn watch(node: Option<&str>) -> Res {

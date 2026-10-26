@@ -64,14 +64,18 @@ impl Rig {
             "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n\n[workspace.package]\nversion = \"9.9.9\"\nedition = \"2024\"\n",
             0o644,
         );
+        // the crate and the binary have the identity's name, as in the repository itself
+        let name = &identity::get().name;
         write(
             &repo.join("Cargo.lock"),
-            "version = 4\n\n[[package]]\nname = \"jw\"\nversion = \"9.9.9\"\n",
+            &format!("version = 4\n\n[[package]]\nname = \"{name}\"\nversion = \"9.9.9\"\n"),
             0o644,
         );
         write(
-            &repo.join("crates/jw/Cargo.toml"),
-            "[package]\nname = \"jw\"\nversion.workspace = true\nedition.workspace = true\n\n[[bin]]\nname = \"jw\"\npath = \"src/main.rs\"\n",
+            &repo.join(format!("crates/{name}/Cargo.toml")),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion.workspace = true\nedition.workspace = true\n\n[[bin]]\nname = \"{name}\"\npath = \"src/main.rs\"\n"
+            ),
             0o644,
         );
         let main = if broken {
@@ -79,7 +83,11 @@ impl Rig {
         } else {
             "fn main() { println!(\"installed\"); }"
         };
-        write(&repo.join("crates/jw/src/main.rs"), main, 0o644);
+        write(
+            &repo.join(format!("crates/{name}/src/main.rs")),
+            main,
+            0o644,
+        );
         write(&repo.join("android/gradlew"), GRADLEW, 0o755);
         git(&repo, &["init", "-q", "-b", "main"]);
         git(&repo, &["add", "-A"]);
@@ -126,6 +134,10 @@ impl Rig {
 
     fn run(&self, args: &[&str], devices: &str) -> Output {
         self.jw(args, devices).output().unwrap()
+    }
+
+    fn run_env(&self, args: &[&str], devices: &str, var: (&str, &str)) -> Output {
+        self.jw(args, devices).env(var.0, var.1).output().unwrap()
     }
 
     /// The directories of a command that are still in the private `TMPDIR`.
@@ -297,12 +309,6 @@ fn a_failed_gradle_is_an_error_that_says_the_app_is_not_uninstalled() {
         text(&out.stderr)
     );
     assert_eq!(rig.left(), Vec::<String>::new());
-}
-
-impl Rig {
-    fn run_env(&self, args: &[&str], devices: &str, var: (&str, &str)) -> Output {
-        self.jw(args, devices).env(var.0, var.1).output().unwrap()
-    }
 }
 
 fn alive(pid: &str) -> bool {

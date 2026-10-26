@@ -313,8 +313,11 @@ fn build(job: &Job, o: &Opts, url: &str, from_env: bool) -> Out<String> {
     let new = clone_version(job.dir())?;
     eprintln!("building with cargo: it runs the code of that repository");
     let mut cargo = Command::new("cargo");
+    // The crate of the binary has the binary's name (a test below checks it).
     cargo
-        .args(["install", "--path", "crates/jw", "--locked", "--force"])
+        .args(["install", "--path"])
+        .arg(format!("crates/{}", identity::get().name))
+        .args(["--locked", "--force"])
         .current_dir(job.dir());
     // Without `--cache` the target directory is inside the one that is deleted (REQ-982).
     let target = match std::env::var_os("CARGO_TARGET_DIR") {
@@ -348,7 +351,7 @@ pub fn update(args: &[&str]) -> Res {
         Err(f) => return failed(f),
     };
     let name = &identity::get().name;
-    println!("{name} {} → {new}", env!("CARGO_PKG_VERSION"));
+    println!("{name} {} → {new}", crate::version::VERSION);
     let Some(daemon) = crate::version::daemon() else {
         return Ok(ExitCode::SUCCESS);
     };
@@ -485,6 +488,11 @@ pub fn android(args: &[&str]) -> Res {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_crate_of_the_binary_is_in_the_directory_the_identity_names() {
+        assert!(Path::new(env!("CARGO_MANIFEST_DIR")).ends_with(&identity::get().name));
+    }
 
     #[test]
     fn a_ref_is_a_name_or_a_hash_and_never_an_option() {

@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::Once;
 use std::time::Duration;
 
-use contract::{ClientMsg, DaemonMsg, Peer};
+use contract::Peer;
 use wire::Conn;
 
 /// How long a daemon has to answer a `hello` to be said to run.
@@ -16,18 +16,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn daemon() -> Option<Peer> {
     let mut conn = Conn::connect(&identity::socket_path()).ok()?;
     conn.set_read_timeout(Some(ANSWER)).ok()?;
-    conn.send(&ClientMsg::Hello {
-        client: Peer {
-            name: identity::peer("version"),
-            version: VERSION.into(),
-        },
-        accepts: wire::default_accepts(),
-    })
-    .ok()?;
-    match serde_json::from_str(&conn.recv_line().ok()??).ok()? {
-        DaemonMsg::Hello { daemon, .. } => Some(daemon),
-        _ => None,
-    }
+    crate::hello(&mut conn, identity::peer("version"))
+        .ok()
+        .map(|(daemon, _)| daemon)
 }
 
 pub fn show() -> ExitCode {
