@@ -593,7 +593,7 @@ fn agent_pane(core: &Core, workspace: &Id, pane: Option<&Id>) -> Result<Id, Erro
 fn deliver(shared: &Shared, pane: &Id, text: &str) {
     let conv = shared.lock().convs.get(pane).map(|c| c.id.clone());
     if let Some(node) = conv {
-        let _ = crate::engine::send(shared, &node, text, Vec::new());
+        let _ = crate::engine::send(shared, &node, text, Vec::new(), false);
         return;
     }
     let Some(term) = shared.lock().term(pane) else {

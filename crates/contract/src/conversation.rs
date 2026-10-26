@@ -465,6 +465,12 @@ pub struct SentList {
     pub messages: Vec<SentMessage>,
 }
 
+/// What `conversation_unqueue` answers: the message that left the queue (REQ-974).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unqueued {
+    pub text: String,
+}
+
 /// What `read_older` answers: the items, oldest first, and the `before` that asks for the ones
 /// before them (REQ-567); `older` is left out when there are no more.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

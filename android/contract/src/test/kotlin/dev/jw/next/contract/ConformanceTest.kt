@@ -40,6 +40,12 @@ class ConformanceTest {
         return files.map { it.name to Json.parseToJsonElement(it.readText()) }
     }
 
+    /** The `result` of the reply of the daemon that a fixture holds. */
+    private fun resultOf(fixture: String): JsonElement {
+        val reply = fixtures("daemon").first { it.first == fixture }.second
+        return (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+    }
+
     private val schemaText = File(contractDir, "schema/contract.schema.json").readText()
     private val schemaJson: JsonObject = Json.parseToJsonElement(schemaText).jsonObject
 
@@ -229,8 +235,7 @@ class ConformanceTest {
     /** The result of `open_conversation` in the fixture is what [Opened] reads, and writes back as it was. */
     @Test
     fun theReplyOfOpenConversationIsANodeAndASession() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-open-conversation.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-open-conversation.json")
         val opened = ContractJson.decodeFromJsonElement(Opened.serializer(), result)
         assertEquals(36, opened.session.length)
         assertEquals(result, ContractJson.encodeToJsonElement(Opened.serializer(), opened))
@@ -275,8 +280,7 @@ class ConformanceTest {
     /** The reply of `read_older` is items and where to ask for the ones before them, and the running fixture's node says its `before` (REQ-567). */
     @Test
     fun theReplyOfReadOlderIsItemsAndWhereToAskForTheOnesBefore() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-read-older.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-read-older.json")
         val older = ContractJson.decodeFromJsonElement(OlderItems.serializer(), result)
         assertEquals(3, older.items.size)
         assertEquals(1_792_109_900_000L, older.older)
@@ -295,11 +299,19 @@ class ConformanceTest {
         assertTrue(blocks.any { it is MdBlock.Table })
     }
 
+    /** The result of `conversation_unqueue` in the fixture is what [Unqueued] reads, and writes back as it was. */
+    @Test
+    fun theReplyOfConversationUnqueueIsTheTextThatLeftTheQueue() {
+        val result = resultOf("reply-ok-conversation-unqueue.json")
+        val taken = ContractJson.decodeFromJsonElement(Unqueued.serializer(), result)
+        assertEquals("y luego corre cargo test auth", taken.text)
+        assertEquals(result, ContractJson.encodeToJsonElement(Unqueued.serializer(), taken))
+    }
+
     /** The result of `conversation_history` in the fixture is what [SentList] reads, folds included, and writes back as it was. */
     @Test
     fun theReplyOfConversationHistoryIsTheMessagesSentOldestFirst() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-conversation-history.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-conversation-history.json")
         val list = ContractJson.decodeFromJsonElement(SentList.serializer(), result)
         assertEquals(2, list.messages.size)
         assertEquals(emptyList<List<Int>>(), list.messages[0].folds)
@@ -310,8 +322,7 @@ class ConformanceTest {
     /** The result of `list_conversations` in the fixture is what [ConversationList] reads, and writes back as it was. */
     @Test
     fun theReplyOfListConversationsIsTheSavedConversationsNewestFirst() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-list-conversations.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-list-conversations.json")
         val list = ContractJson.decodeFromJsonElement(ConversationList.serializer(), result)
         assertEquals(2, list.conversations.size)
         assertEquals(true, list.conversations[0].at > list.conversations[1].at)
@@ -321,8 +332,7 @@ class ConformanceTest {
     /** The result of `read_markdown` in the fixture is what [MarkdownDoc] reads, with every kind of block, and writes back as it was. */
     @Test
     fun theReplyOfReadMarkdownIsADocumentOfBlocks() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-read-markdown.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-read-markdown.json")
         val doc = ContractJson.decodeFromJsonElement(MarkdownDoc.serializer(), result)
         assertEquals("Plan: pruebas del módulo auth", doc.title)
         assertEquals(
@@ -335,8 +345,7 @@ class ConformanceTest {
     /** The result of `read_file` in the fixture is what [TextDoc] reads, keeps an unknown class as it came, and writes back as it was (REQ-610 to REQ-614, REQ-622). */
     @Test
     fun theReplyOfReadFileIsADocumentOfLinesOfRuns() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-read-file.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-read-file.json")
         val doc = ContractJson.decodeFromJsonElement(TextDoc.serializer(), result)
         assertEquals("files.rs", doc.title)
         assertEquals(true, doc.truncated)
@@ -348,8 +357,7 @@ class ConformanceTest {
     /** The result of `project_config` in the fixture is what [ProjectInfo] reads, and writes back as it was. */
     @Test
     fun theReplyOfProjectConfigIsAProjectInfo() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-project-config.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-project-config.json")
         val info = ContractJson.decodeFromJsonElement(ProjectInfo.serializer(), result)
         assertEquals(OpenKind.Claude, info.open)
         assertEquals("../app-trees", info.rootText)
@@ -363,8 +371,7 @@ class ConformanceTest {
     /** The result of `list_worktrees` in the fixture is what [WorktreeInfo] reads, and writes back as it was. */
     @Test
     fun theReplyOfListWorktreesIsAListOfWorktreeInfos() {
-        val reply = fixtures("daemon").first { it.first == "reply-ok-worktrees.json" }.second
-        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val result = resultOf("reply-ok-worktrees.json")
         val list = ContractJson.decodeFromJsonElement(ListSerializer(WorktreeInfo.serializer()), result.jsonObject.getValue("worktrees"))
         assertEquals(4, list.size)
         assertEquals(3, list[1].changes)

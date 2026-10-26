@@ -37,6 +37,13 @@ pub enum Act {
         /// what the daemon's history needs (REQ-716).
         folds: Vec<[usize; 2]>,
         private: bool,
+        /// `ctrl` `enter`: a turn that runs is interrupted and this goes first (REQ-963).
+        now: bool,
+    },
+    /// `↑` with something in the queue: ask the daemon for its last message (REQ-972); the answer
+    /// comes back through `unqueued`.
+    Unqueue {
+        node: String,
     },
     Answer {
         node: String,
@@ -452,6 +459,19 @@ impl Composer {
         self.anchor = None;
         self.folds.clear();
         self.made = 0;
+    }
+
+    /// Write `text` before what the line holds, with a line break between if it held something,
+    /// the cursor at the start of it (REQ-972).
+    pub fn prepend(&mut self, text: &str) {
+        let held = !self.chars.is_empty();
+        self.anchor = None;
+        self.cursor = 0;
+        self.insert(text);
+        if held {
+            self.insert("\n");
+        }
+        self.cursor = 0;
     }
 
     pub fn take(&mut self) -> String {
@@ -2654,7 +2674,9 @@ impl Ui {
                 self.editor.insert("\n");
                 None
             }
-            KeyCode::Enter => self.submit(conv),
+            // `ctrl` `enter` (a terminal with the kitty protocol, REQ-963): send now.
+            KeyCode::Enter if ctrl => self.submit(conv, true),
+            KeyCode::Enter => self.submit(conv, false),
             KeyCode::Char('j') if ctrl => {
                 self.editor.insert("\n");
                 None
@@ -2710,9 +2732,13 @@ impl Ui {
             KeyCode::Up | KeyCode::Down => {
                 let down = ev.code == KeyCode::Down;
                 let shift = ev.modifiers.contains(KeyModifiers::SHIFT);
-                if !self.editor.vertical(down, shift, self.row_width())
-                    && (shift || !self.recall(down))
-                {
+                if self.editor.vertical(down, shift, self.row_width()) {
+                    return None;
+                }
+                if !shift && !down && self.recalling.is_none() && !conv.queue.is_empty() {
+                    return Some(Act::Unqueue { node });
+                }
+                if shift || !self.recall(down) {
                     self.scroll_by(!down, 1);
                 }
                 None
@@ -3033,11 +3059,11 @@ impl Ui {
     fn run_command(&mut self, conv: &Conversation, c: &ConvCommand) -> Option<Act> {
         self.menu_at = 0;
         self.editor.set(&c.name);
-        self.submit(conv)
+        self.submit(conv, false)
     }
 
-    /// `↵`: send the line, or open the list a bare command stands for.
-    fn submit(&mut self, conv: &Conversation) -> Option<Act> {
+    /// `↵` (`now`: `^↵`): send the line, or open the list a bare command stands for.
+    fn submit(&mut self, conv: &Conversation, now: bool) -> Option<Act> {
         if let Some(h) = &conv.held {
             self.says = Ui::held_why(h).1;
             return None;
@@ -3109,6 +3135,7 @@ impl Ui {
             images,
             folds: sent.folds.iter().map(|&(from, to)| [from, to]).collect(),
             private,
+            now,
         })
     }
 
@@ -3202,6 +3229,22 @@ impl Ui {
         true
     }
 
+    /// The answer of `conversation_unqueue` (REQ-972): the message goes before what the line holds,
+    /// the cursor at its start; with none, `↑` is what it was.
+    pub fn unqueued(&mut self, text: Option<String>) {
+        match text {
+            Some(text) => {
+                self.editor.prepend(&text);
+                self.put_in_line();
+            }
+            None => {
+                if !self.recall(false) {
+                    self.scroll_by(true, 1);
+                }
+            }
+        }
+    }
+
     /// Put the message `to` of the history in the line, the cursor at its start when it was reached
     /// going back and at its end going forward; past the newest, the draft (REQ-714).
     fn recall_at(&mut self, to: usize, down: bool) {
@@ -3219,7 +3262,11 @@ impl Ui {
             self.recalling = Some(to);
             self.editor.set_folded(&self.sent[to].clone(), !down);
         }
-        // What was put in the line does not open the lists of the `/` or the `@` it may end in.
+        self.put_in_line();
+    }
+
+    /// What was put in the line does not open the lists of the `/` or the `@` it may end in.
+    fn put_in_line(&mut self) {
         self.menu_at = 0;
         self.menu_off = self.editor.raw();
         self.files.clear();
@@ -3723,7 +3770,7 @@ impl Ui {
         }
         let first_text = geo.band.0 + Field::FIRST_TEXT;
         if y == first_text && x == field::send_at(ix, iw) {
-            return self.submit(conv);
+            return self.submit(conv, false);
         }
         if y == first_text
             && self.working(conv)
@@ -4368,6 +4415,14 @@ mod tests {
         c.ask = None;
         c.status = ConvStatus::Idle;
         c.since = None;
+        c
+    }
+
+    /// A conversation with nothing waiting: ↑ asks the daemon for what does (REQ-972), the tests
+    /// of the history are not about that.
+    fn no_queue() -> Conversation {
+        let mut c = idle();
+        c.queue.clear();
         c
     }
 
@@ -5231,6 +5286,36 @@ mod tests {
         row_of(&rows, "escribe un mensaje");
     }
 
+    /// REQ-963: `ctrl` `enter` is the same line with `now`; `shift` `enter` is still a line break and
+    /// an empty field sends nothing. A terminal without the protocol gives `^J` (REQ-577), not this.
+    #[test]
+    fn ctrl_enter_sends_the_line_now_and_only_with_something_to_send() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(ui.key(&conv, &ctrl_enter), None, "an empty field");
+        type_in(&mut ui, &conv, "ya");
+        ui.key(&conv, &KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        type_in(&mut ui, &conv, "mismo");
+        assert_eq!(
+            ui.key(&conv, &ctrl_enter),
+            Some(Act::Send {
+                node: conv.head.id.clone(),
+                text: "ya\nmismo".into(),
+                images: vec![],
+                folds: vec![],
+                private: false,
+                now: true,
+            })
+        );
+        assert_eq!(ui.editor.text(), "");
+        type_in(&mut ui, &conv, "hola");
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { now: false, .. })
+        ));
+    }
+
     #[test]
     fn enter_sends_the_line_and_a_line_of_many_rows_goes_as_one_message() {
         let conv = idle();
@@ -5249,6 +5334,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
         );
         assert_eq!(ui.editor.text(), "");
@@ -5357,6 +5443,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
         );
         type_in(&mut ui, &conv, "/model");
@@ -6256,7 +6343,7 @@ mod tests {
     /// forward and past the newest the draft comes back; a chip says which one it is.
     #[test]
     fn up_recalls_the_messages_sent_and_down_brings_the_draft_back() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         for t in ["uno", "dos", "tres"] {
             send(&mut ui, &conv, t);
@@ -6287,6 +6374,53 @@ mod tests {
         assert!(!frame(&ui, &conv).1.iter().any(|r| r.contains("↑ 3/3")));
     }
 
+    /// REQ-972: with something in the queue ↑ on the first row asks the daemon for it; what comes back
+    /// goes before what the field holds with the cursor at its start, so another ↑ stacks the one
+    /// before; with none the key is the history's, and while that is walked it stays there.
+    #[test]
+    fn up_brings_back_what_waits_in_the_queue_and_then_the_history() {
+        let mut conv = idle();
+        conv.queue = vec!["uno".into(), "dos".into()];
+        let ask = Some(Act::Unqueue {
+            node: conv.head.id.clone(),
+        });
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "enviado");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Up), ask);
+        ui.unqueued(Some("dos".into()));
+        assert_eq!((ui.editor.text(), ui.editor.cursor()), ("dos".into(), 0));
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Up),
+            ask,
+            "at its start: first row"
+        );
+        ui.unqueued(Some("uno".into()));
+        assert_eq!(ui.editor.text(), "uno\ndos");
+        // nothing more to bring back: the history, with what the field holds kept as the draft
+        assert_eq!(press(&mut ui, &conv, KeyCode::Up), ask);
+        ui.unqueued(None);
+        assert_eq!(ui.editor.text(), "enviado");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Up),
+            None,
+            "while the history is walked ↑ stays in it"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.editor.text(), "uno\ndos", "the draft is back");
+        // a field with text keeps it after the message that comes back
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "xyz");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Up), ask);
+        ui.unqueued(Some("q".into()));
+        assert_eq!((ui.editor.text(), ui.editor.cursor()), ("q\nxyz".into(), 0));
+        // an empty queue is the history as it was
+        let conv = no_queue();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "enviado");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "enviado");
+    }
+
     /// REQ-714: with nothing recalled ↓ on the last row scrolls the list one line, as it did.
     #[test]
     fn down_with_nothing_recalled_scrolls_the_list_one_line() {
@@ -6305,7 +6439,7 @@ mod tests {
     /// REQ-714: a message put in the line does not open the `/` list, which would take the next ↓.
     #[test]
     fn a_command_that_is_recalled_does_not_open_the_list_of_commands() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         for t in ["a", "/compact", "b"] {
             send(&mut ui, &conv, t);
@@ -6324,7 +6458,7 @@ mod tests {
     /// REQ-714, REQ-716: the pictures belong to the draft, not to the message that is shown.
     #[test]
     fn the_pictures_of_the_draft_wait_while_a_message_is_recalled() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         send(&mut ui, &conv, "[Imagen#1] viejo");
         ui.attach(Image {
@@ -6346,7 +6480,7 @@ mod tests {
     /// REQ-714: with nothing to recall ↑ scrolls the list one line, as it did (REQ-682).
     #[test]
     fn up_with_no_messages_to_recall_scrolls_the_list() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         let mut g = Grid::new(100, 22);
         ui.draw(&mut g, &conv, (2, 1, 96, 20), &[], true, 0);
@@ -6357,7 +6491,7 @@ mod tests {
     /// REQ-714: a message that had folds comes back folded; and sending ends the recall.
     #[test]
     fn a_message_with_a_fold_comes_back_folded() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "mira ");
         ui.paste(&paste::sample_rows(7));
@@ -6410,7 +6544,7 @@ mod tests {
     /// REQ-712: the trim of the sent text moves the folds with it.
     #[test]
     fn a_fold_at_the_edge_of_the_line_loses_the_blanks_the_trim_takes() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         ui.paste(&format!("\n\n{}\n\n", paste::sample_rows(6)));
         type_in(&mut ui, &conv, " fin");
@@ -6430,7 +6564,7 @@ mod tests {
     /// RISK-86: the chip of the recall is cut before the count of the rows above and below.
     #[test]
     fn the_recall_chip_stops_short_of_the_count_of_rows() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         let long: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
         send(&mut ui, &conv, &long.join("\n"));
@@ -6443,7 +6577,7 @@ mod tests {
         let rows = drawn("rama".into());
         let row = &rows[row_of(&rows, "↑0 ↓6")];
         assert!(row.contains("↑ 1/1"), "{row}");
-        let rows = drawn("rama-larga".repeat(7));
+        let rows = drawn("rama-larga".repeat(9));
         let row = &rows[row_of(&rows, "↑0 ↓6")];
         assert!(
             row.contains("rama-larga") && !row.contains("↑ 1/1"),
@@ -6500,7 +6634,7 @@ mod tests {
     /// REQ-716: an answer that comes while a message is recalled waits for the recall to end.
     #[test]
     fn an_answer_that_comes_while_a_message_is_recalled_waits_for_the_recall_to_end() {
-        let conv = idle();
+        let conv = no_queue();
         let mut ui = Ui::default();
         ui.want_sent();
         send(&mut ui, &conv, "uno");
@@ -7011,6 +7145,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             }),
             "enter runs it"
         );
@@ -7072,6 +7207,7 @@ mod tests {
                 images: vec![],
                 folds: vec![],
                 private: false,
+                now: false,
             })
         );
         conv.commands = (0..20)

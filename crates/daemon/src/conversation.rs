@@ -1351,6 +1351,40 @@ impl State {
         self.start_text(text, images, now)
     }
 
+    /// `send` that goes first (REQ-966): ahead of what waited, a turn that runs is interrupted.
+    pub fn send_first(&mut self, text: &str, images: Vec<Image>, now: u64) -> Vec<Effect> {
+        let restored = self.pending.as_ref().is_some_and(|p| p.ask.restored);
+        if !self.busy() && !restored {
+            return self.send(text, images, now);
+        }
+        self.queue.push_front(Queued::Text {
+            text: text.to_owned(),
+            images,
+        });
+        // A local command is not a turn (REQ-967).
+        let mut out = if matches!(self.inflight, Some(Inflight::Local(_))) {
+            Vec::new()
+        } else {
+            self.interrupt()
+        };
+        // Nothing ends a turn that had no engine (REQ-968); while one runs, this is a no-op.
+        out.extend(self.drain(now));
+        out
+    }
+
+    /// The last message of the person's that waits, out of the queue (REQ-974): not the engine's
+    /// own lines and not one with a picture.
+    pub fn unqueue(&mut self) -> Option<String> {
+        let at = self
+            .queue
+            .iter()
+            .rposition(|q| matches!(q, Queued::Text { images, .. } if images.is_empty()))?;
+        match self.queue.remove(at) {
+            Some(Queued::Text { text, .. }) => Some(text),
+            _ => None,
+        }
+    }
+
     fn start_text(&mut self, text: &str, images: Vec<Image>, now: u64) -> Vec<Effect> {
         if !self.named {
             self.name = clip(&text.split_whitespace().collect::<Vec<_>>().join(" "), 28);
@@ -4375,6 +4409,80 @@ mod tests {
                 .any(|i| matches!(i, Item::Note { text, .. } if text == "Interrumpido por ti"))
         );
         assert_eq!(s.status, ConvStatus::Idle);
+    }
+
+    fn queued(s: &State) -> Vec<String> {
+        s.queue.iter().map(Queued::shown).collect()
+    }
+
+    /// REQ-966, REQ-969: a turn that runs is interrupted, the message goes first, and the last of two goes first.
+    #[test]
+    fn send_first_interrupts_a_turn_and_goes_before_what_waited() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.send("later", vec![], 1);
+        let w = writes(&s.send_first("ahora", vec![], 2));
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0]["request"]["subtype"], "interrupt");
+        assert_eq!(queued(&s), ["ahora", "later"]);
+        assert!(s.send_first("más nuevo", vec![], 3).is_empty());
+        assert_eq!(queued(&s), ["más nuevo", "ahora", "later"]);
+        let e = s.apply(&json!({"type": "result", "subtype": "error_during_execution", "is_error": true, "terminal_reason": "aborted_streaming", "total_cost_usd": 0.01}), 4);
+        let w = writes(&e);
+        assert!(w[0].to_string().contains("más nuevo"), "{w:?}");
+        assert_eq!(queued(&s), ["ahora", "later"]);
+    }
+
+    /// REQ-965: nothing runs, so it is a plain send. REQ-967: a local command is not interrupted.
+    #[test]
+    fn send_first_is_plain_when_nothing_runs_and_waits_for_a_local_command() {
+        let mut s = st();
+        let w = writes(&s.send_first("hola", vec![], 0));
+        assert!(w[0].to_string().contains("hola") && s.queue.is_empty());
+        let mut s = st();
+        s.set(None, None, Some("opus".into()), None, None);
+        assert!(matches!(s.inflight, Some(Inflight::Local(_))));
+        assert!(s.send_first("después", vec![], 1).is_empty());
+        assert_eq!(queued(&s), ["después"]);
+    }
+
+    /// REQ-968: an ask restored has no engine to interrupt: it is dropped and the message goes.
+    #[test]
+    fn send_first_drops_a_restored_ask_and_sends() {
+        let mut s = restored("Bash", json!({"command": "ls"}), "t");
+        assert!(s.pending.is_some());
+        let e = s.send_first("otra cosa", vec![], 5);
+        assert!(s.pending.is_none() && s.queue.is_empty());
+        assert!(e.iter().any(|e| matches!(e, Effect::ClearAsk)), "{e:?}");
+        assert!(writes(&e)[0].to_string().contains("otra cosa"), "{e:?}");
+    }
+
+    /// REQ-974: the last message of the person's comes out of the queue; an engine's line and a message with a picture stay.
+    #[test]
+    fn unqueue_takes_the_last_message_of_the_person_and_leaves_the_rest() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.send("a", vec![], 1);
+        s.send(
+            "con foto",
+            vec![Image {
+                media_type: "image/png".into(),
+                data: "AAAA".into(),
+            }],
+            2,
+        );
+        s.set(None, None, Some("opus".into()), None, None);
+        s.send("b", vec![], 3);
+        s.set(None, None, None, Some("high".into()), None);
+        assert_eq!(
+            queued(&s),
+            ["a", "con foto", "/model opus", "b", "/effort high"]
+        );
+        assert_eq!(s.unqueue().as_deref(), Some("b"));
+        assert_eq!(s.unqueue().as_deref(), Some("a"));
+        assert_eq!(s.unqueue(), None);
+        assert_eq!(queued(&s), ["con foto", "/model opus", "/effort high"]);
+        assert_eq!(st().unqueue(), None, "an empty queue");
     }
 
     #[test]

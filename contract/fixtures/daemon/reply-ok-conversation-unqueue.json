@@ -1,0 +1,8 @@
+{
+  "t": "reply",
+  "id": "c46",
+  "ok": true,
+  "result": {
+    "text": "y luego corre cargo test auth"
+  }
+}

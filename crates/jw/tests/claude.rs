@@ -384,6 +384,37 @@ fn prompt_with_a_conversation_is_a_message_and_wait_returns_the_answer_and_read_
     w.stop();
 }
 
+/// REQ-970: `prompt --now` to a conversation that works interrupts the turn, and `--wait` waits for the new one.
+#[test]
+fn prompt_now_to_a_busy_conversation_interrupts_it_and_wait_waits_for_the_new_turn() {
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    let w = World::new("claude-prompt-now", &shell, true);
+    w.open_conversation();
+    let (code, _, stderr) =
+        out_of(&w.agent_cmd(&["prompt", &w.ws, "--pane", &w.pane, "algo slow"]));
+    assert_eq!(code, Some(0), "{stderr}");
+    wait_for("the engine to get the message", || {
+        w.user_lines().iter().any(|l| l == "user \"algo slow\"")
+    });
+    let (code, stdout, stderr) = out_of(&w.agent_cmd(&[
+        "prompt",
+        &w.ws,
+        "--pane",
+        &w.pane,
+        "--now",
+        "--wait",
+        "mejor esto",
+    ]));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "Voy a mirar.\n");
+    let sent = w.user_lines();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert_eq!(sent[1], "user \"mejor esto\"");
+    w.stop();
+}
+
 #[test]
 fn wait_on_a_turn_that_ends_asking_prints_the_question_and_exits_3_and_a_turn_that_lasts_times_out()
 {

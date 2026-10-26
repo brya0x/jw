@@ -954,7 +954,13 @@ fn turn_end(conv: &Conversation, baseline: u64, sent: &str) -> Option<Out<String
 
 /// Say `text` to `node`'s conversation as the person would; with `wait`, wait for the turn it
 /// starts to end and give back its answer (REQ-453, REQ-454).
-fn converse(s: &mut Link, node: &str, text: &str, wait: Option<Duration>) -> Out<Option<String>> {
+fn converse(
+    s: &mut Link,
+    node: &str,
+    text: &str,
+    wait: Option<Duration>,
+    now: bool,
+) -> Out<Option<String>> {
     let baseline = match wait {
         Some(_) => {
             let conv: Conversation = s.node(node)?;
@@ -969,6 +975,7 @@ fn converse(s: &mut Link, node: &str, text: &str, wait: Option<Duration>) -> Out
         folds: Vec::new(),
         // What an agent sends is not what the person typed: it stays out of their ↑ (REQ-716).
         private: true,
+        now,
     })?;
     let Some(limit) = wait else {
         return Ok(None);
@@ -1044,7 +1051,7 @@ fn prompt(args: &[&str]) -> Out {
     };
     let sent = format!("sent to pane {} of {}", target.id, ws.name);
     match &target.conversation {
-        Some(node) => match converse(&mut s, node, &text, wait)? {
+        Some(node) => match converse(&mut s, node, &text, wait, a.has("now"))? {
             Some(answer) => {
                 eprintln!("{sent}");
                 println!("{answer}");
@@ -1157,7 +1164,7 @@ fn worktree(args: &[&str]) -> Out {
         let pane = with_conversation(&mut s, &id, pane)?;
         match &pane.conversation {
             Some(node) => {
-                converse(&mut s, node, task, None)?;
+                converse(&mut s, node, task, None, false)?;
             }
             None => send_prompt(&mut s, &pane.id, task, false)?,
         }

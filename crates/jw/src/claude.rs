@@ -326,6 +326,7 @@ fn handle_key(
                         images: Vec::new(),
                         folds: Vec::new(),
                         private: false,
+                        now: false,
                     });
                 }
             }

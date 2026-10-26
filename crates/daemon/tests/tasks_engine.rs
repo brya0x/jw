@@ -159,6 +159,7 @@ impl Rig {
             images: Vec::new(),
             folds: Vec::new(),
             private: false,
+            now: false,
         });
     }
 

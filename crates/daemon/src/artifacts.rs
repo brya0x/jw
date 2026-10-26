@@ -444,7 +444,7 @@ fn deliver(shared: &Shared, publisher: Option<&str>, text: &str) -> Delivered {
     else {
         return Delivered::Nobody;
     };
-    match crate::engine::send(shared, &node, text, Vec::new()) {
+    match crate::engine::send(shared, &node, text, Vec::new(), false) {
         Ok(_) => Delivered::Agent,
         Err(_) => Delivered::Nobody,
     }

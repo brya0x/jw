@@ -95,8 +95,9 @@ pub fn is_panel(name: &str) -> bool {
 /// The group of the keys that are the program's own: its tag is the product name.
 const OWN: &str = "\0";
 
-const KEYS: [(&str, &str, &str); 23] = [
+const KEYS: [(&str, &str, &str); 24] = [
     ("↵", "enviar; en cola mientras Claude trabaja", "escribir"),
+    ("^↵", "enviar ahora: interrumpe y va primero", "escribir"),
     ("⇧↵ · ^J", "un salto de línea", "escribir"),
     ("⇥", "completar lo que se propone o la lista", "escribir"),
     (
@@ -132,7 +133,7 @@ const KEYS: [(&str, &str, &str); 23] = [
     ),
     (
         "↑ ↓",
-        "en la primera o la última fila del campo: los mensajes enviados",
+        "en la primera fila del campo: lo que espera en la cola y, si no hay, los enviados",
         "escribir",
     ),
     (
@@ -474,7 +475,7 @@ mod tests {
     fn help_holds_the_keys_and_jwns_commands() {
         let p = help(&fixture());
         let labels: Vec<&str> = p.rows.iter().map(|r| r.label.as_str()).collect();
-        assert!(labels.contains(&"⇧tab") && labels.contains(&"^V"));
+        assert!(labels.contains(&"⇧tab") && labels.contains(&"^V") && labels.contains(&"^↵"));
         assert!(
             labels.contains(&"/exit") && labels.contains(&"/tasks"),
             "{labels:?}"

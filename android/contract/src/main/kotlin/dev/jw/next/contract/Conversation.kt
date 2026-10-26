@@ -246,6 +246,10 @@ data class SentMessage(val text: String, val folds: List<List<Int>> = emptyList(
 @Serializable
 data class SentList(val messages: List<SentMessage>)
 
+/** What `conversation_unqueue` answers: the message that left the queue. */
+@Serializable
+data class Unqueued(val text: String)
+
 /** What `list_conversations` answers, newest first. */
 @Serializable
 data class ConversationList(val conversations: List<SavedConversation>)

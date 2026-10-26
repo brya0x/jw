@@ -556,6 +556,14 @@ pub enum Cmd {
         /// type it, as what `prompt` sends (REQ-716).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         private: bool,
+        /// Send now (REQ-963): a turn that runs is interrupted and this goes first (REQ-966).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        now: bool,
+    },
+    /// Take the last message of the person's that waits out of `queue` and answer it (REQ-974):
+    /// the result is a `conversation::Unqueued`, or none when no message of theirs waits.
+    ConversationUnqueue {
+        node: Id,
     },
     /// The messages sent from the repository of the conversation's folder, oldest first, at most
     /// 100 (REQ-716). The result is a `conversation::SentList`.
