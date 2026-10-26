@@ -420,6 +420,7 @@ impl Link {
         let socket = identity::socket_path();
         let c = Client::connect(&socket, &identity::peer("agent"))
             .map_err(|e| Fail::Error(format!("no daemon answers on {} ({e})", socket.display())))?;
+        crate::version::warn(&c.daemon);
         Ok(Link {
             c,
             opened: HashSet::new(),

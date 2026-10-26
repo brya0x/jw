@@ -10,3 +10,4 @@ label = "jw"            # human-facing name
 android_application_id = "dev.jw.next"  # unchanged by the swap: a new id is a different app on the phone
 tunnel_program = "cloudflared"
 pairing_store = "mobile.json"           # file in the state dir
+repo = "https://github.com/brya0x/jw"  # what `update` and `android install` fetch (https only)

@@ -14,6 +14,7 @@ pub struct Identity {
     pub android_application_id: String,
     pub tunnel_program: String,
     pub pairing_store: String,
+    pub repo: String,
 }
 
 const SOURCE: &str = include_str!("../../../identity.toml");
@@ -92,6 +93,18 @@ mod tests {
         }
         assert!(config_dir().ends_with(&get().name));
         assert_eq!(chats_dir(Path::new("/s")), PathBuf::from("/s/chats"));
+    }
+
+    #[test]
+    fn the_repository_is_an_https_url_with_no_credentials() {
+        let repo = &get().repo;
+        let rest = repo.strip_prefix("https://").expect("https");
+        let host = rest.split('/').next().unwrap();
+        assert!(!host.is_empty() && !host.contains('@'), "{repo}");
+        assert!(
+            !repo.ends_with('/') && !repo.contains(char::is_whitespace),
+            "{repo}"
+        );
     }
 
     #[test]
