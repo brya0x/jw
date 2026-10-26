@@ -191,6 +191,17 @@ fn the_skill_of_the_roles_sends_the_agent_to_the_commands_and_no_file() {
     assert!(skill.contains("disable-model-invocation: true"));
     assert!(skill.contains(&format!("`{} role ls`", name())));
     assert!(skill.contains(&format!("`{} role show <name>`", name())));
+    // A project role is confirmed before its text is printed: the layer is read first (REQ-998).
+    let (ls, show) = (
+        skill.find(&format!("`{} role ls --json`", name())).unwrap(),
+        skill
+            .find(&format!("run `{} role show <name>`", name()))
+            .unwrap(),
+    );
+    assert!(
+        ls < show && skill.contains("before you run `show`"),
+        "{skill}"
+    );
     assert!(!skill.contains("{bin}") && !skill.contains("{agent_skill}"));
     assert!(!skill.contains("~/.claude"), "it reads no file");
 }

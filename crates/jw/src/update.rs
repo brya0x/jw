@@ -341,16 +341,24 @@ fn build(job: &Job, o: &Opts, url: &str, from_env: bool) -> Out<String> {
 
 /// The binary `cargo install` just wrote: `$CARGO_INSTALL_ROOT/bin`, else `$CARGO_HOME/bin`, else
 /// `~/.cargo/bin` (REQ-1002).
-fn installed_binary() -> Option<PathBuf> {
+fn installed_binary(
+    install_root: Option<PathBuf>,
+    cargo_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let root = install_root
+        .or(cargo_home)
+        .or_else(|| Some(home?.join(".cargo")))?;
+    Some(root.join("bin").join(&identity::get().name))
+}
+
+fn installed_binary_here() -> Option<PathBuf> {
     let var = |v: &str| {
         std::env::var_os(v)
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
     };
-    let root = var("CARGO_INSTALL_ROOT")
-        .or_else(|| var("CARGO_HOME"))
-        .or_else(|| var("HOME").map(|h| h.join(".cargo")))?;
-    Some(root.join("bin").join(&identity::get().name))
+    installed_binary(var("CARGO_INSTALL_ROOT"), var("CARGO_HOME"), var("HOME"))
 }
 
 /// A person who has the first skill gets the three refreshed by the binary just installed, whose texts
@@ -360,7 +368,7 @@ fn refresh_skills() {
         return;
     }
     let name = &identity::get().name;
-    let Some(new) = installed_binary().filter(|b| b.is_file()) else {
+    let Some(new) = installed_binary_here().filter(|b| b.is_file()) else {
         println!(
             "skills not refreshed: the installed {name} is not where cargo puts it: run {name} skill install"
         );
@@ -526,6 +534,17 @@ pub fn android(args: &[&str]) -> Res {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_installed_binary_is_where_cargo_puts_it() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        let bin = &identity::get().name;
+        let at = |root: &str| Some(PathBuf::from(format!("{root}/bin/{bin}")));
+        assert_eq!(installed_binary(p("/r"), p("/c"), p("/h")), at("/r"));
+        assert_eq!(installed_binary(None, p("/c"), p("/h")), at("/c"));
+        assert_eq!(installed_binary(None, None, p("/h")), at("/h/.cargo"));
+        assert_eq!(installed_binary(None, None, None), None);
+    }
 
     #[test]
     fn the_crate_of_the_binary_is_in_the_directory_the_identity_names() {

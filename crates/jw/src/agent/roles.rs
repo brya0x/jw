@@ -97,7 +97,15 @@ fn role_of(name: &str, text: &str, layer: Layer) -> Role {
 
 /// The `*.md` files of a folder as roles; a folder that is not there has none and a file that cannot
 /// be read is a warning (REQ-996).
-fn read_dir(dir: &Path, layer: Layer, warnings: &mut Vec<String>) -> Vec<Role> {
+///
+/// `jail` is the canonical folder every file must be inside once its links are followed: a repository's
+/// role that is a link to a file outside it is a warning and not a read (RISK-163).
+fn read_dir(
+    dir: &Path,
+    layer: Layer,
+    jail: Option<&Path>,
+    warnings: &mut Vec<String>,
+) -> Vec<Role> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -115,12 +123,30 @@ fn read_dir(dir: &Path, layer: Layer, warnings: &mut Vec<String>) -> Vec<Role> {
         else {
             continue;
         };
+        if let Some(jail) = jail
+            && !path.canonicalize().is_ok_and(|real| real.starts_with(jail))
+        {
+            warnings.push(format!(
+                "{}: points outside {}",
+                path.display(),
+                jail.display()
+            ));
+            continue;
+        }
         match std::fs::read_to_string(&path) {
             Ok(text) => roles.push(role_of(name, &text, layer)),
             Err(e) => warnings.push(format!("{}: {e}", path.display())),
         }
     }
     roles
+}
+
+/// A repository's roles: its folder is the third ancestor of the roles' (`<folder>/.<name>/roles`).
+fn read_project(dir: &Path, warnings: &mut Vec<String>) -> Vec<Role> {
+    let Some(root) = dir.ancestors().nth(2).and_then(|r| r.canonicalize().ok()) else {
+        return Vec::new();
+    };
+    read_dir(dir, Layer::Project, Some(&root), warnings)
 }
 
 fn built_in() -> Vec<Role> {
@@ -165,8 +191,8 @@ fn project_dir(from: &Path) -> Option<PathBuf> {
 
 fn load(project: Option<&Path>, user: &Path, warnings: &mut Vec<String>) -> Vec<Found> {
     resolve(vec![
-        project.map_or_else(Vec::new, |d| read_dir(d, Layer::Project, warnings)),
-        read_dir(user, Layer::User, warnings),
+        project.map_or_else(Vec::new, |d| read_project(d, warnings)),
+        read_dir(user, Layer::User, None, warnings),
         built_in(),
     ])
 }
@@ -384,6 +410,35 @@ mod tests {
         // No folder at all: only the built-in ones.
         let none = load(None, &dir.path().join("nowhere"), &mut Vec::new());
         assert!(none.iter().all(|f| f.role.layer == Layer::BuiltIn));
+    }
+
+    #[test]
+    fn a_project_role_that_is_a_link_out_of_the_repository_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let roles = identity::roles_dir(&repo);
+        std::fs::create_dir_all(&roles).unwrap();
+        let secret = dir.path().join("secret.md");
+        std::fs::write(&secret, "---\ndescription: not for you\n---\nSECRET\n").unwrap();
+        std::fs::write(roles.join("fine.md"), "fine\n").unwrap();
+        std::os::unix::fs::symlink(&secret, roles.join("leak.md")).unwrap();
+        // A link that stays inside the repository is the repository's own.
+        std::fs::write(repo.join("inside.md"), "inside\n").unwrap();
+        std::os::unix::fs::symlink(repo.join("inside.md"), roles.join("local.md")).unwrap();
+        let mut warnings = Vec::new();
+        let found = load(Some(&roles), &dir.path().join("nowhere"), &mut warnings);
+        let names: Vec<_> = found.iter().map(|f| f.role.name.as_str()).collect();
+        assert_eq!(names, ["brain", "fine", "local", "researcher"]);
+        assert!(found.iter().all(|f| !f.role.body.contains("SECRET")));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("leak.md") && warnings[0].contains("points outside"));
+        // The whole folder a link away: every file is outside.
+        let linked = dir.path().join("linked");
+        std::fs::create_dir_all(identity::roles_dir(&linked).parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(dir.path(), identity::roles_dir(&linked)).unwrap();
+        let mut warnings = Vec::new();
+        let found = read_project(&identity::roles_dir(&linked), &mut warnings);
+        assert!(found.is_empty() && !warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
