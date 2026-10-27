@@ -518,13 +518,22 @@ fn on_github(ctx: &mut Ctx, e: &Entry, yes: bool) -> Out {
             scripts.join(", ")
         );
     }
-    if !confirm(yes)? {
+    // A Ctrl-C is not a yes: the handlers of the fetch keep the process alive, so it is looked at
+    // after the answer is read and again before anything is written (REQ-1014).
+    let said_yes = confirm(yes)?;
+    if fetched.interrupted() {
+        return fail("interrupted: nothing installed");
+    }
+    if !said_yes {
         println!("not installed: you did not say yes");
         return Ok(());
     }
     // The destination is looked at again right before writing: the fetch took a while.
     if let Some(f) = refuse(github_state(ctx, e, None), &e.name) {
         return Err(f);
+    }
+    if fetched.interrupted() {
+        return fail("interrupted: nothing installed");
     }
     github::write_all(&targets, (!role).then_some(dest.dir.as_path())).map_err(Fail::Error)?;
     let old = locked(ctx, e, &dest).cloned();

@@ -31,6 +31,12 @@ pub(super) struct Fetched {
     pub files: Vec<(String, Vec<u8>)>,
 }
 
+impl Fetched {
+    pub(super) fn interrupted(&self) -> bool {
+        self._checkout.interrupted()
+    }
+}
+
 pub(super) fn fetch(
     url: &str,
     allow_file: bool,

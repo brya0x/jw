@@ -245,6 +245,12 @@ impl Checkout {
     pub(crate) fn dir(&self) -> &Path {
         self.job.dir()
     }
+
+    /// A signal came since the fetch began: the handlers of `Job` replace the default action, so the
+    /// process does not die of it and whoever goes on must look (REQ-1014).
+    pub(crate) fn interrupted(&self) -> bool {
+        self.job.interrupted()
+    }
 }
 
 /// Fetch `url` at `git_ref` (its `HEAD` when none) and the commit that came; `allow_file` lets the
