@@ -1,5 +1,5 @@
 //! `skillset`: one catalog of skills, roles and plugins that jw lists (`ls`) and activates (`on`) or
-//! removes (`off`); activating installs for real (N184b, REQ-1008 to REQ-1022). It reads files and
+//! removes (`off`); activating installs for real (N184b, REQ-1016 to REQ-1030). It reads files and
 //! runs `git` and `claude`, so it works with no daemon.
 
 mod catalog;
@@ -55,7 +55,7 @@ struct Ctx {
 
 impl Ctx {
     /// `strict`: a lock that cannot be read is an error (`on`, `off`); else it is a warning and an
-    /// empty lock, which only makes things look as if another tool installed them (RISK-171).
+    /// empty lock, which only makes things look as if another tool installed them (RISK-173).
     fn load(strict: bool, warnings: &mut Vec<String>) -> Out<Ctx> {
         let lock_path = identity::skillset_lock();
         let lock = match lock::read(&lock_path) {
@@ -84,7 +84,7 @@ impl Ctx {
     }
 }
 
-/// The catalog and the person's entries (REQ-1009).
+/// The catalog and the person's entries (REQ-1017).
 fn catalog(warnings: &mut Vec<String>) -> Vec<Entry> {
     let mut all = catalog::builtin();
     let mine = catalog::yours(&identity::skillset_file(), &all, warnings);
@@ -163,7 +163,7 @@ impl Dest {
         is_link(self.role_file.as_ref().unwrap_or(&self.dir)) || is_link(&self.dir)
     }
 
-    /// May jw touch this file of its lock entry? (REQ-1017)
+    /// May jw touch this file of its lock entry? (REQ-1025)
     fn owns(&self, file: &Path) -> bool {
         match &self.role_file {
             Some(f) => file == f,
@@ -379,13 +379,13 @@ fn ls(args: &[&str]) -> Out {
     Ok(())
 }
 
-/// `y` or `yes` (REQ-1005).
+/// `y` or `yes` (REQ-1013).
 fn is_yes(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// The person's yes: `--yes`, or `install? [y/N]` at a terminal; with neither, nothing is installed
-/// (REQ-1005, REQ-1014).
+/// (REQ-1013, REQ-1022).
 pub(super) fn confirm(yes: bool) -> Out<bool> {
     if yes {
         return Ok(true);
@@ -423,7 +423,7 @@ fn other_tool(name: &str) -> Fail {
     Fail::Error(format!("{name}: installed by another tool, left alone"))
 }
 
-/// An embedded skill, written by the mark's table (REQ-1012); one that is a link is another tool's.
+/// An embedded skill, written by the mark's table (REQ-1020); one that is a link is another tool's.
 fn on_embedded_skill(ctx: &Ctx, e: &Entry) -> Out {
     let base = ctx.claude()?;
     let (path, text) =
@@ -435,7 +435,7 @@ fn on_embedded_skill(ctx: &Ctx, e: &Entry) -> Out {
 }
 
 /// `skill install`: the three embedded skills of the built-in catalog and nothing of the person's
-/// file (REQ-1019). One that is another tool's does not stop the others.
+/// file (REQ-1027). One that is another tool's does not stop the others.
 pub(super) fn install_own_skills() -> Out {
     let ctx = Ctx::load(false, &mut Vec::new())?;
     ctx.claude()?;
@@ -451,7 +451,7 @@ pub(super) fn install_own_skills() -> Out {
     first.map_or(Ok(()), Err)
 }
 
-/// `skill install --plugins`: the plugins of the built-in catalog and no other (REQ-1013).
+/// `skill install --plugins`: the plugins of the built-in catalog and no other (REQ-1021).
 pub(super) fn install_own_plugins(yes: bool) -> Out {
     for e in catalog::builtin() {
         if let Source::Plugin { plugin, repo } = &e.source {
@@ -519,7 +519,7 @@ fn on_github(ctx: &mut Ctx, e: &Entry, yes: bool) -> Out {
         );
     }
     // A Ctrl-C is not a yes: the handlers of the fetch keep the process alive, so it is looked at
-    // after the answer is read and again before anything is written (REQ-1014).
+    // after the answer is read and again before anything is written (REQ-1022).
     let said_yes = confirm(yes)?;
     if fetched.interrupted() {
         return fail("interrupted: nothing installed");

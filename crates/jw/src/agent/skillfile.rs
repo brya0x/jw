@@ -1,5 +1,5 @@
 //! The skill files `skill install` writes, with a mark at the end so that a later install refreshes
-//! the file jw wrote and leaves the one the person edited (N184, REQ-999 to REQ-1001).
+//! the file jw wrote and leaves the one the person edited (N184, REQ-1007 to REQ-1009).
 
 use std::ffi::OsString;
 use std::io::ErrorKind;
@@ -16,7 +16,7 @@ pub(super) enum Plan {
     Keep,
 }
 
-/// The first 16 hex digits of the SHA-256: it tells an edit from jw's own text, nothing more (RISK-166).
+/// The first 16 hex digits of the SHA-256: it tells an edit from jw's own text, nothing more (RISK-168).
 fn hash(body: &str) -> String {
     web::auth::sha256_hex(body)[..16].to_owned()
 }

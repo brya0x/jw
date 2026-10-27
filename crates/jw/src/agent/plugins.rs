@@ -1,6 +1,6 @@
 //! A `plugin` entry of the skillset: third-party code with hooks, offered with what it is and where it
-//! comes from and installed only after a yes (N184, REQ-1004 to REQ-1006; N184b, REQ-1013). It runs
-//! `claude plugin` and never edits claude's settings itself (REQ-1007).
+//! comes from and installed only after a yes (N184, REQ-1012 to REQ-1014; N184b, REQ-1021). It runs
+//! `claude plugin` and never edits claude's settings itself (REQ-1015).
 
 use std::process::Command;
 
@@ -63,8 +63,8 @@ pub(super) fn installed_ids() -> Out<Vec<String>> {
     look(&["plugin", "list", "--json"], "id")
 }
 
-/// Say what would be installed and from where, ask, and run `claude plugin` for it (REQ-1004 to
-/// REQ-1006). A plugin that is installed is skipped.
+/// Say what would be installed and from where, ask, and run `claude plugin` for it (REQ-1012 to
+/// REQ-1014). A plugin that is installed is skipped.
 pub(super) fn on(plugin: &str, repo: &str, yes: bool) -> Out {
     let installed = installed_ids()?;
     if installed.iter().any(|i| i == plugin) {

@@ -236,7 +236,7 @@ impl Job {
 }
 
 /// A repository fetched into a temporary directory that is deleted when this drops, a signal
-/// included (N184b, REQ-1014): the means of `update`, for the skillset.
+/// included (N184b, REQ-1022): the means of `update`, for the skillset.
 pub(crate) struct Checkout {
     job: Job,
 }
@@ -247,7 +247,7 @@ impl Checkout {
     }
 
     /// A signal came since the fetch began: the handlers of `Job` replace the default action, so the
-    /// process does not die of it and whoever goes on must look (REQ-1014).
+    /// process does not die of it and whoever goes on must look (REQ-1022).
     pub(crate) fn interrupted(&self) -> bool {
         self.job.interrupted()
     }
@@ -282,7 +282,7 @@ pub(crate) fn checkout(
 }
 
 /// The commit a branch (its `HEAD` when none) of `url` is at now, from `git ls-remote`: it fetches
-/// nothing and never asks for a password (N184b, REQ-1010).
+/// nothing and never asks for a password (N184b, REQ-1018).
 pub(crate) fn ls_remote(
     url: &str,
     branch: Option<&str>,
@@ -416,7 +416,7 @@ fn build(job: &Job, o: &Opts, url: &str, from_env: bool) -> Out<String> {
 }
 
 /// The binary `cargo install` just wrote: `$CARGO_INSTALL_ROOT/bin`, else `$CARGO_HOME/bin`, else
-/// `~/.cargo/bin` (REQ-1002).
+/// `~/.cargo/bin` (REQ-1010).
 fn installed_binary(
     install_root: Option<PathBuf>,
     cargo_home: Option<PathBuf>,
@@ -438,7 +438,7 @@ fn installed_binary_here() -> Option<PathBuf> {
 }
 
 /// A person who has the first skill gets the three refreshed by the binary just installed, whose texts
-/// are the new ones; with none installed nothing is (REQ-1002). It never fails the update.
+/// are the new ones; with none installed nothing is (REQ-1010). It never fails the update.
 fn refresh_skills() {
     if !crate::agent::skill_installed() {
         return;

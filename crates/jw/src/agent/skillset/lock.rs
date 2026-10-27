@@ -1,6 +1,6 @@
 //! What the skillset installed from outside, kept so that `off` removes only what jw wrote and only
 //! when nobody edited it, and so that what another tool installed is never touched (N184b,
-//! REQ-1016, REQ-1017).
+//! REQ-1024, REQ-1025).
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
@@ -62,7 +62,7 @@ pub(super) fn write(path: &Path, lock: &Lock) -> Result<(), String> {
 }
 
 /// Is `file` strictly inside `dir`, with no `..` on the way? The lock is a file of the person's
-/// state directory: whatever it says, a path outside the entry's folder is never touched (REQ-1017).
+/// state directory: whatever it says, a path outside the entry's folder is never touched (REQ-1025).
 pub(super) fn inside(file: &Path, dir: &Path) -> bool {
     file.is_absolute()
         && file != dir

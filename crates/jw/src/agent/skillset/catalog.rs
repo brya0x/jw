@@ -1,5 +1,5 @@
 //! The entries of the skillset: the catalog that is fixed in the code and the ones the person adds
-//! in a file (N184b, REQ-1008, REQ-1009).
+//! in a file (N184b, REQ-1016, REQ-1017).
 
 use std::path::Path;
 
@@ -60,7 +60,7 @@ fn embedded(name: &str, kind: Kind, description: &str) -> Entry {
     }
 }
 
-/// The catalog of the code (REQ-1008): reviewed, so a change to it is a change of the code.
+/// The catalog of the code (REQ-1016): reviewed, so a change to it is a change of the code.
 pub(in crate::agent) fn builtin() -> Vec<Entry> {
     let mut entries = vec![
         embedded(
@@ -152,7 +152,7 @@ struct File {
     entry: Vec<toml::Value>,
 }
 
-/// A raw entry made an entry, or why it is not one (REQ-1009).
+/// A raw entry made an entry, or why it is not one (REQ-1017).
 fn entry_of(raw: Raw, taken: &[Entry]) -> Result<Entry, String> {
     let name = raw.name;
     if !roles::valid_name(&name) {
@@ -225,7 +225,7 @@ fn entry_of(raw: Raw, taken: &[Entry]) -> Result<Entry, String> {
     })
 }
 
-/// The entries of the person's file after the catalog's (REQ-1009); a file that is not there has
+/// The entries of the person's file after the catalog's (REQ-1017); a file that is not there has
 /// none, and what cannot be an entry is a warning.
 pub(in crate::agent) fn yours(
     file: &Path,
