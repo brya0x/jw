@@ -35,7 +35,7 @@ mod artifact;
 mod plugins;
 mod roles;
 mod skillfile;
-mod skillset;
+pub(crate) mod skillset;
 mod tasks;
 
 const SKILL: &str = include_str!("../skill/SKILL.md");

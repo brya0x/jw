@@ -2,8 +2,10 @@
 //! files of the skill's folder read from it and written to their place (N184b, REQ-1022 to REQ-1024).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use crate::update::{Checkout, checkout};
+use crate::update::{Checkout, checkout, checkout_cancellable};
 
 const MAX_FILES: usize = 200;
 const MAX_BYTES: usize = 5_000_000;
@@ -17,9 +19,13 @@ pub(super) fn base() -> (String, bool) {
     }
 }
 
-/// The URL of `<owner>/<repo>` and whether the test variable named its base.
-pub(super) fn url_of(repo: &str) -> (String, bool) {
-    let (base, from_env) = base();
+/// The URL of `<owner>/<repo>` and whether a test's base named it: `place` is the base a `Place`
+/// carries (a test's own), else the one of `base`.
+pub(super) fn url_of(place: Option<&str>, repo: &str) -> (String, bool) {
+    let (base, from_env) = match place {
+        Some(b) => (b.trim_end_matches('/').to_owned(), true),
+        None => base(),
+    };
     (format!("{base}/{repo}"), from_env)
 }
 
@@ -43,8 +49,12 @@ pub(super) fn fetch(
     branch: Option<&str>,
     path: &str,
     role: bool,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Result<Fetched, String> {
-    let (checkout, commit) = checkout(url, branch, allow_file)?;
+    let (checkout, commit) = match cancel {
+        Some(c) => checkout_cancellable(url, branch, allow_file, c)?,
+        None => checkout(url, branch, allow_file)?,
+    };
     let files = collect(checkout.dir(), path, role)?;
     Ok(Fetched {
         _checkout: checkout,

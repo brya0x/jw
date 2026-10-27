@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jw · pantalla del skillset</title>
+<style>
+/* the tokens of task-lists.html, chats-area.html, groups.html and tui.html: One Dark */
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:22px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.note{max-width:920px}
+.row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none;display:inline-block;max-width:100%;overflow-x:auto}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.c-chip{background:var(--green);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}
+.ctl{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0;align-items:flex-start}
+.ctl fieldset{border:1px solid #2f3440;border-radius:8px;padding:6px 10px 8px;margin:0;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.ctl fieldset.dec{flex-direction:column;align-items:flex-start;gap:2px;min-width:230px;max-width:330px}
+.ctl legend{font-size:11px;color:var(--mut);padding:0 4px}
+button,select{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer;max-width:100%}
+button:hover,select:hover{border-color:var(--blue)}
+label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
+.tag-opt{display:inline-block;background:#2f3440;color:var(--ink);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.tag-dec{display:inline-block;background:var(--yellow);color:var(--bg);font:700 11px var(--mono);border-radius:4px;padding:1px 6px;margin-right:6px}
+.rec{color:var(--green)}
+.phone{position:relative;width:390px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:36px;overflow:hidden;font:13.5px/1.4 var(--mono);color:var(--fg);padding:14px 0 16px}
+.phone .hd{padding:6px 16px;color:#e6e9ef;font-weight:700}
+.phone .r1{display:flex;gap:8px;align-items:center;padding:9px 16px;border-left:3px solid transparent}
+.phone .r1 .nm{flex:1;color:#e6e9ef}.phone .r1 .st{font-size:12px}
+.phone .btn{min-height:34px}
+.phone .sec{color:var(--dim);font-size:11px;padding:8px 16px 2px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:7px 13px;border-radius:16px;font:12px var(--mono);opacity:0;transition:opacity .2s;pointer-events:none;max-width:86%;text-align:center}
+#toast.on{opacity:1}
+.imp{border-left:3px solid var(--yellow);padding-left:10px;max-width:920px}
+</style></head><body>
+<h1>jw · la pantalla del skillset (N185, fase 1: prototipo)</h1>
+<p class="note">Aquí la persona ve el catálogo (skills, roles y plugins) y los <b>activa</b>: lo que los instala en su <code>~/.claude</code>. Es la pantalla que N184 dejó fuera (OPEN-91, OPEN-95). Todo lo que ves es lo que hoy hace <code>jw skillset ls|on|off</code> (a la derecha de la terminal va el CLI de verdad, línea por línea, con las palabras en inglés tal cual salen). Los datos son de ejemplo: el commit, los bytes y la red están simulados; <b>nada toca tu <code>~/.claude</code> ni la red</b>. La terminal tiene el foco al abrir la página.</p>
+
+<h2>Decisiones</h2>
+<div class="ctl">
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde vive la pantalla</legend>
+    <label><input type="radio" name="loc" data-o="loc" value="screen" checked> <span><b class="rec">pantalla propia</b>, tecla <kbd>i</kbd> (de «instalar»; libre) como <kbd>a</kbd> abre Avisos; con su cursor y sus teclas por fila, modelada en <code>Mode::Avisos</code> (recomendado)</span></label>
+    <label><input type="radio" name="loc" data-o="loc" value="slash"> <span>entrada de la caja <code>/</code> (la de OPEN-95): la caja es de <i>una conversación</i> y el skillset es de la persona (<code>~/.claude</code>); no abre sin conversación</span></label>
+    <label><input type="radio" name="loc" data-o="loc" value="settings"> <span>pestaña de ajustes <kbd>,</kbd>: es un formulario de preguntas sobre <code>settings.json</code>, no una lista con acciones por fila</span></label>
+    <label><input type="radio" name="loc" data-o="loc" value="avisos"> <span>tercera pestaña de Avisos: Avisos cuenta lo que <i>pasó</i>; esto es donde la persona <i>decide</i></span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>qué tecla activa</legend>
+    <label><input type="radio" name="keys" data-o="keys" value="space" checked> <span><b class="rec"><kbd>espacio</kbd> alterna</b> (activa o quita); en lo de terceros abre la hoja y ahí <kbd>y</kbd> confirma; <kbd>↵</kbd> abre la ficha (solo mira) (recomendado)</span></label>
+    <label><input type="radio" name="keys" data-o="keys" value="enter"> <span><kbd>↵</kbd> alterna; la ficha en <kbd>i</kbd>. Un <kbd>↵</kbd> que instala código ajeno es fácil de dar sin querer</span></label>
+    <label><input type="radio" name="keys" data-o="keys" value="ad"> <span><kbd>a</kbd> activa y <kbd>d</kbd> quita, por separado; <kbd>↵</kbd> la ficha. Sin alternar nunca hay duda de qué hace la tecla</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>la confirmación de lo de terceros</legend>
+    <label><input type="radio" name="conf" data-o="conf" value="always" checked> <span><b class="rec">siempre</b> la hoja, sin «no volver a preguntar»; el defecto es no (<kbd>y</kbd> sí; <kbd>↵</kbd>, <kbd>n</kbd> y <kbd>esc</kbd> no), como el <code>[y/N]</code> del CLI (recomendado)</span></label>
+    <label><input type="radio" name="conf" data-o="conf" value="remember"> <span>no volver a preguntar por fuente (tras el primer sí, el repo ya no pregunta; un commit nuevo es código nuevo)</span></label>
+    <label><input type="radio" name="conf" data-o="conf" value="never"> <span>sin hoja (equivale a <code>--yes</code> siempre)</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el estado: cuándo se mira</legend>
+    <label><input type="radio" name="state" data-o="state" value="key" checked> <span><b class="rec">abrir no toca la red</b>; <kbd>r</kbd> revisa (<code>ls --check</code>, un <code>git ls-remote</code> por skill de GitHub instalado). Abrir sí lanza <code>claude plugin list --json</code>: un proceso local, no la red (recomendado)</span></label>
+    <label><input type="radio" name="state" data-o="state" value="open"> <span>revisar la red al abrir (puede colgar o tardar; RISK-175; abrir deja de ser instantáneo)</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde corre el trabajo</legend>
+    <label><input type="radio" name="run" data-o="run" value="inproc" checked> <span><b class="rec">dentro del cliente</b>: la pantalla llama a la misma biblioteca que el CLI, en un hilo, con el avance dibujado en la pantalla; sin daemon; <kbd>esc</kbd> cancela y no instala nada (recomendado)</span></label>
+    <label><input type="radio" name="run" data-o="run" value="daemon"> <span>trabajo del daemon en la barra de trabajos (Avisos › Trabajos). Cuesta: un <code>JobKind</code> nuevo (contrato, esquema, fixtures, Kotlin), un daemon que llame a código que vive en <code>crates/jw</code>, y un paso de pregunta que un <code>Job</code> no tiene</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el teléfono</legend>
+    <label><input type="radio" name="phone" data-o="phone" value="none" checked> <span><b class="rec">nada</b> en esta parte; a lo sumo, una parte aparte (recomendado)</span></label>
+    <label><input type="radio" name="phone" data-o="phone" value="ro"> <span>lista de solo lectura (sin botones)</span></label>
+    <label><input type="radio" name="phone" data-o="phone" value="full"> <span>también instalar desde el teléfono (no lo recomiendo)</span></label>
+  </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el idioma de los estados</legend>
+    <label><input type="radio" name="words" data-o="words" value="es" checked> <span><b class="rec">español en la pantalla</b> (como el resto de la TUI: «descartar», «cancela»); el CLI sigue en inglés (RAT-174) y se ve tal cual abajo (recomendado)</span></label>
+    <label><input type="radio" name="words" data-o="words" value="en"> <span>las palabras del CLI también en la pantalla (<code>other tool</code>, <code>built-in</code>)</span></label>
+  </fieldset>
+</div>
+<p class="imp" id="imp"></p>
+
+<h2>Para probar</h2>
+<div class="ctl">
+  <fieldset><span class="tag-opt">para probar</span>
+    <label>partida <select id="start">
+      <option value="machine">tu máquina hoy (caveman es de otra herramienta, ponytail instalado)</option>
+      <option value="clean">limpio (caveman y ponytail disponibles; agent desactualizado)</option>
+      <option value="installed">caveman instalado por jw</option>
+      <option value="outdated">caveman instalado y con commit nuevo (revisa con r)</option>
+      <option value="modified">caveman instalado y editado a mano</option>
+      <option value="noclaude">claude no contesta (ponytail desconocido)</option>
+    </select></label>
+    <label>la red <select id="net">
+      <option value="ok">responde</option><option value="offline">sin red</option>
+      <option value="link">el repo trae un enlace</option><option value="big">demasiado grande</option>
+      <option value="nopath">sin SKILL.md</option>
+    </select></label>
+    <label><input type="checkbox" id="script"> el skill trae un script (no Markdown)</label>
+    <label><input type="checkbox" id="remote"> hay un commit nuevo en caveman</label>
+    <label><input type="checkbox" id="nod"> el daemon no corre</label>
+    <button id="cyc">cambia el estado de la fila</button>
+    <button id="rst">reinicia</button>
+  </fieldset>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p class="note" id="legend" style="max-width:860px"></p>
+  </div>
+  <div style="max-width:520px">
+    <div id="jobsbox"><div class="term"><pre id="jobs"></pre></div></div>
+    <p class="note" id="jobsnote"></p>
+    <div id="phonebox"></div>
+  </div>
+</div>
+
+<h2>Lo mismo en el CLI: <code>jw skillset ls</code> (lo que dice hoy; sin <code>--check</code> no toca la red)</h2>
+<div class="term"><pre id="ls"></pre></div>
+<h2>Lo que corre la fila bajo el cursor</h2>
+<div class="term"><pre id="cmds"></pre></div>
+<h2>Lo que ha dicho el CLI en esta sesión de prueba (salida real de cada paso)</h2>
+<div class="term"><pre id="log"></pre></div>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>Una lista, tres tipos.</b> Skills, Roles y Plugins, cada fila con su chip de estado: <span class="c-green">✓ instalado</span> · <span class="c-dim">○ disponible</span> · <span class="c-yellow">↑ desactualizado</span> · <span class="c-mag">✎ modificado</span> · <span class="c-cyan">⇄ otra herramienta</span> · <span class="c-blue">● incluido</span> · <span class="c-red">? desconocido</span>. Las palabras salen de <code>jw skillset ls --json</code>; la pantalla las traduce (decisión de arriba).</li>
+  <li><b>Los skills de jw</b> (<code>jw</code>, <code>jw-tasks</code>, <code>agent</code>) se activan y se quitan al instante, sin hoja: son texto del propio jw. Desactualizado se arregla con <kbd>u</kbd> (escribe el nuevo). Si el archivo es tuyo (modificado), jw deja el tuyo y escribe <code>SKILL.md.new</code> al lado.</li>
+  <li><b>Lo de GitHub</b> (caveman y lo que la persona añada en su <code>skillset.toml</code>, marcado <code>(yours)</code>): <b>primero se baja</b> a un temporal (es lo lento; por eso hay avance y <kbd>esc</kbd> cancela: <code>interrupted: nothing installed</code>), <b>después</b> sale la hoja con lo que de verdad hay (URL, rama, commit completo, archivos con ruta absoluta y bytes, y el aviso si algo no es Markdown), y solo con <kbd>y</kbd> se escribe (rápido) y se anota el lock. Si el commit es el mismo que el instalado, no hay hoja: <code>unchanged</code>.</li>
+  <li><b>Los plugins</b> van al revés: no se baja nada; la hoja dice qué comandos correrá <code>claude plugin …</code>, y lo lento viene <i>después</i> del sí. <b>Quitar un plugin no lo desinstala</b>: jw nunca edita los ajustes de claude y solo corre <code>claude plugin</code> con un sí (REQ-1026, OPEN-99), así que dice el comando (<kbd>c</kbd> lo copia).</li>
+  <li><b>Los roles</b> (<code>brain</code>, <code>researcher</code>) vienen dentro de jw: no hay nada que activar; la fila lleva a <code>jw role show</code>. Un rol de GitHub (si alguien lo añade) sí se instalaría como un archivo <code>.md</code>.</li>
+  <li><b>«Otra herramienta»</b> es lo que hay hoy en tu máquina con caveman: un enlace de la herramienta <code>skills</code> (<code>../../.agents/skills/caveman</code>) o una carpeta que jw no escribió (RISK-174). jw no la toca y la fila no tiene acción; para usar la instalación de jw hay que quitar esa antes, con la herramienta que la puso.</li>
+  <li><b>«Modificado»</b>: lo que jw escribió tiene cambios de la persona. jw no lo pisa: actualizar se niega y quitar solo borra lo que no se editó.</li>
+  <li><b>Esto exige partir la biblioteca</b> (para el spec): hoy <code>on</code> baja, enseña y pregunta leyendo la entrada estándar de una vez. La pantalla necesita «preparar» (bajar y devolver el plan: commit, archivos, aviso) y «aplicar» (escribir y anotar el lock) como dos llamadas; el CLI las une.</li>
+</ul>
+
+<h2>Lo que no pude verificar</h2>
+<ul class="note">
+  <li>Probé el prototipo con un DOM falso en node (las rutas de teclas y los estados) y con Chrome sin cabeza (que la página carga y pinta); no lo recorrí a mano con ratón y teclado en una ventana, y no es la TUI real: no hay nada de Rust escrito. Las teclas libres (<kbd>i</kbd>) salen de la tabla <code>key_of</code> de <code>tui.rs</code>; no probé que <kbd>i</kbd> no choque con la ayuda ni con el visor.</li>
+  <li>Los textos de error de GitHub (<code>a link, refused</code>, <code>more than 200 files or 5 MB: refused</code>, <code>the repository has no …</code>) salen de <code>github.rs</code>; el de «sin red» es el de <code>git</code> de ejemplo. El commit, los bytes y el contenido de caveman son inventados (no consulté el repo real).</li>
+  <li>No ejecuté el binario: la tabla de <code>ls</code> sale de los <code>format!</code> del código, no de una captura. No probé que <code>claude plugin list --json</code> sea local del todo (lo asumo).</li>
+  <li><code>desactualizado</code> en el CLI solo aparece tras <code>--check</code>; el botón «cambia el estado» lo fuerza para ver la fila.</li>
+</ul>
+<div id="toast"></div>
+
+<script>
+const COLS=108,ROWS=27,$=id=>document.getElementById(id);
+const HOME='/Users/ana',OLD='9b1e04a7c3d58f20e1b6a47d09c2f5e83b71d460',NEW='a41f9c27e0b3d85c6f1a02e94b7d3c58e1f0a926';
+const opt={loc:'screen',keys:'space',conf:'always',state:'key',run:'inproc',phone:'none',words:'es'};
+const S={cur:0,mode:'nav',busy:null,msg:null,sheet:null,checked:null,seen:{},jobs:[],log:[],tick:0,t:null};
+const ITEMS=[
+ {n:'jw',k:'skill',src:'embedded',d:'drive the other workspaces and agents of the session'},
+ {n:'jw-tasks',k:'skill',src:'embedded',d:"turn a plan into the workspace's task list and work it to the end"},
+ {n:'agent',k:'skill',src:'embedded',d:'take a role (brain, researcher, ...) in this session'},
+ {n:'brain',k:'role',src:'embedded',d:'Orquestador del lead dentro de jw: planifica con el lead, reparte el trabajo en worktrees con otros agentes (comando `jw`), vigila, revisa lo que vuelve y le informa. No escribe el código del proyecto.'},
+ {n:'researcher',k:'role',src:'embedded',d:'Investigador: responde una pregunta a la vez leyendo código, documentos y la web, y devuelve un informe corto con fuentes y su nivel de confianza. No edita nada del proyecto.'},
+ {n:'caveman',k:'skill',src:'github',repo:'juliusbrussee/caveman',d:'talk with far fewer tokens, the same technical content'},
+ {n:'ponytail',k:'plugin',src:'plugin',repo:'DietrichGebert/ponytail',id:'ponytail@ponytail',d:'the smallest change that solves the task (a plugin with hooks)'},
+ {n:'acme-review',k:'skill',src:'github',repo:'acme/review-skill',yours:true,d:'review a diff against the team checklist'},
+];
+const GROUPS=[['Skills','skill'],['Roles','role'],['Plugins','plugin']];
+const WORD={'available':'disponible','installed':'instalado','outdated':'desactualizado','modified':'modificado','other tool':'otra herramienta','built-in':'incluido','unknown':'desconocido'};
+const GLY={'available':['○','c-dim'],'installed':['✓','c-green'],'outdated':['↑','c-yellow'],'modified':['✎','c-mag'],'other tool':['⇄','c-cyan'],'built-in':['●','c-blue'],'unknown':['?','c-red']};
+const CYCLE={embedded:['available','installed','outdated','modified','other tool'],github:['available','installed','outdated','modified','other tool'],plugin:['available','installed','unknown'],role:['built-in']};
+const flat=()=>GROUPS.flatMap(([,k])=>S.items.filter(i=>i.k===k));
+const cur=()=>flat()[S.cur];
+const dir=i=>`${HOME}/.claude/skills/${i.n}`;
+const word=st=>opt.words==='en'?st:WORD[st];
+const remote=()=>$('remote').checked?NEW:OLD;
+const short=c=>c.slice(0,7);
+
+function load(){
+  S.items=ITEMS.map(x=>({...x,st:'available',commit:null}));
+  const g=n=>S.items.find(i=>i.n===n),sc=$('start').value;
+  g('brain').st=g('researcher').st='built-in';
+  if(sc==='machine'||sc==='noclaude'){['jw','jw-tasks','agent'].forEach(n=>g(n).st='installed');g('caveman').st='other tool';g('ponytail').st=sc==='noclaude'?'unknown':'installed'}
+  if(sc==='clean'){g('jw').st=g('jw-tasks').st='installed';g('agent').st='outdated'}
+  if(['installed','outdated','modified'].includes(sc)){['jw','jw-tasks','agent'].forEach(n=>g(n).st='installed');const c=g('caveman');c.st=sc==='modified'?'modified':'installed';c.commit=OLD}
+  if(sc==='outdated')$('remote').checked=true;
+  S.cur=0;S.mode='nav';S.busy=null;S.sheet=null;S.checked=null;S.seen={};S.jobs=[];S.log=[];
+  clog('$ claude plugin list --json   (lo corre ls al abrir: un proceso local, sin red)','c-dim');
+  say('','Abrí la pantalla: no se tocó la red.','');
+  if(opt.state==='open')check(true);
+  render();
+}
+function say(kind,es,en){S.msg={kind,es,en:en||es}}
+function clog(t,c){S.log.push([t,c||'']);if(S.log.length>40)S.log.shift()}
+function cmd(t){clog('$ '+t,'c-blue')}
+
+/* ---- the plan of an install: what `on` shows after it fetched ---- */
+function plan(it){
+  const files=[['SKILL.md',it.n==='caveman'?2214:1890]];
+  if(it.n==='acme-review')files.push(['checklist.md',1020]);
+  const script=$('script').checked;
+  if(script)files.push(['scripts/'+(it.n==='caveman'?'stats.py':'lint.sh'),860]);
+  return{it,url:'https://github.com/'+it.repo,commit:remote(),files:files.map(([f,b])=>[`${dir(it)}/${f}`,b]),nonmd:files.filter(([f])=>!f.endsWith('.md')).map(([f])=>f)};
+}
+
+/* ---- actions ---- */
+function on(it){
+  cmd(`jw skillset on ${it.n}`);
+  if(it.st==='built-in'){clog(`${it.n} is built in: always available with jw role show ${it.n}`);return say('','· '+it.n+' viene dentro de jw: siempre disponible con jw role show '+it.n,`${it.n} is built in: always available with jw role show ${it.n}`)}
+  if(it.st==='other tool'){clog(`${it.n}: installed by another tool, left alone`,'c-red');return say('err',`✗ ${it.n}: instalado por otra herramienta, jw no lo toca`,`${it.n}: installed by another tool, left alone`)}
+  if(it.st==='unknown'){clog('claude did not answer','c-red');return say('err','✗ claude no contesta: no sé si '+it.n+' está instalado','claude did not answer')}
+  if(it.src==='embedded'){
+    if(it.st==='modified'){clog(`kept ${dir(it)}/SKILL.md: not written by jw or edited; the new one is ${dir(it)}/SKILL.md.new`,'c-yellow');return say('info',`· ${it.n}: dejé tu SKILL.md y escribí SKILL.md.new al lado`,`kept ${dir(it)}/SKILL.md: not written by jw or edited; the new one is …/SKILL.md.new`)}
+    const same=it.st==='installed';it.st='installed';clog((same?'unchanged ':'installed ')+dir(it)+'/SKILL.md');
+    return say('ok',`✓ ${same?'sin cambios':'instalado'} ${dir(it)}/SKILL.md`,(same?'unchanged ':'installed ')+dir(it)+'/SKILL.md')}
+  if(it.st==='modified'){clog(`${it.n}: what jw wrote there was edited, left alone: move your changes away and run it again`,'c-red');return say('err',`✗ ${it.n}: lo que jw escribió se editó; jw no lo pisa. Mueve tus cambios y vuelve a activar`,`${it.n}: what jw wrote there was edited, left alone: move your changes away and run it again`)}
+  if(it.src==='plugin'){
+    if(it.st==='installed'){clog(`plugins: ${it.id} is installed`);return say('info',`· ${it.id} ya está instalado`,`plugins: ${it.id} is installed`)}
+    return openSheet({it,plugin:true});
+  }
+  if(opt.run==='daemon'&&$('nod').checked){clog('(la pantalla pidió el trabajo al daemon y no hay daemon)','c-red');return say('err','✗ no hay daemon: este modo no puede instalar (el CLI sí podría)','no daemon')}
+  startBusy('fetch',it,2200,()=>{
+    const net=$('net').value,p=plan(it),path='skills/'+it.n+'/SKILL.md';
+    if(net==='ok'){
+      if(it.st==='installed'&&it.commit===p.commit){clog(`unchanged ${it.n} (commit ${short(p.commit)})`);return endJob(it,'done'),say('info',`· ${it.n} ya está en el commit ${short(p.commit)}: sin cambios`,`unchanged ${it.n} (commit ${short(p.commit)})`)}
+      const trusted=opt.conf==='never'||(opt.conf==='remember'&&S.seen[it.repo]);
+      clog(`from ${p.url}, branch HEAD, commit ${p.commit}`);clog(`will write ${p.files.length} file(s):`);p.files.forEach(([f,b])=>clog(`  ${f} (${b} bytes)`));
+      if(p.nonmd.length)clog(`this folder has files that are not Markdown (${p.nonmd.join(', ')}): a skill can carry scripts`,'c-yellow');
+      if(trusted){clog('(sin pregunta: --yes)','c-dim');return apply(p)}
+      return openSheet(p);
+    }
+    const why={offline:`fatal: unable to access '${'https://github.com/'+it.repo}/': Could not resolve host: github.com`,link:`${it.n}/helpers/run.sh: a link, refused`,big:'more than 200 files or 5 MB: refused',nopath:`the repository has no ${path}`}[net];
+    clog(why,'c-red');endJob(it,'failed');say('err',`✗ ${it.n}: ${why} · no se instaló nada`,`${why}`);
+  });
+}
+function off(it){
+  cmd(`jw skillset off ${it.n}`);
+  if(it.st==='built-in'){clog(`${it.n} is built in: it is always available, there is nothing to turn off`);return say('',`· ${it.n} viene dentro de jw: no hay nada que quitar`,`${it.n} is built in: it is always available, there is nothing to turn off`)}
+  if(it.src==='plugin'){
+    if(it.st==='available'){clog(`${it.n} is not installed`);return say('',`· ${it.n} no está instalado`,`${it.n} is not installed`)}
+    const m=`jw does not uninstall plugins; to remove it run: claude plugin uninstall ${it.id}`;clog(m,'c-yellow');
+    return say('info',`· jw no desinstala plugins; para quitarlo corre: claude plugin uninstall ${it.id}   (c lo copia)`,m)}
+  if(it.st==='available'){clog(`${it.n} is not installed`);return say('',`· ${it.n} no está instalado`,`${it.n} is not installed`)}
+  if(it.st==='other tool'){const m=it.src==='embedded'?`${it.n}: installed by another tool, left alone`:`${it.n}: not installed by jw, left alone`;clog(m,'c-red');return say('err','✗ '+m.replace('installed by another tool, left alone','instalado por otra herramienta, jw no lo toca').replace('not installed by jw, left alone','no lo instaló jw, jw no lo toca'),m)}
+  if(it.st==='modified'){const m=it.src==='embedded'?`kept ${dir(it)}/SKILL.md: not written by jw or edited`:`kept ${it.n}: it was edited`;clog(m,'c-yellow');return say('info',`· ${it.n}: tiene cambios tuyos; jw no borra lo que editaste`,m)}
+  it.st='available';it.commit=null;
+  const m=it.src==='embedded'?`removed ${dir(it)}/SKILL.md`:`removed 1 file(s) of ${it.n}`;clog(m);say('ok',`✓ quitado ${it.n}`,m);
+}
+function update(it){
+  if(it.st==='modified')return on(it);
+  if(it.st!=='outdated'){return say('',`· ${it.n}: no hay nada que actualizar${it.src==='github'?' (r revisa si hay commit nuevo)':''}`,'')}
+  on(it);
+}
+function check(quiet){
+  cmd('jw skillset ls --check');
+  const targets=S.items.filter(i=>i.src==='github'&&i.st==='installed');
+  if(!targets.length){clog('(nada que revisar: --check solo pregunta por lo instalado desde GitHub)','c-dim');return say('','· nada que revisar: solo se pregunta por lo instalado desde GitHub','')}
+  startBusy('check',targets[0],1300,()=>{
+    S.checked=new Date();let n=0;
+    targets.forEach(i=>{
+      clog(`git ls-remote -- https://github.com/${i.repo} HEAD`,'c-dim');
+      if($('net').value!=='ok'){clog(`warning: ${i.n}: could not reach github.com`,'c-yellow');return}
+      if(remote()!==i.commit){i.st='outdated';n++}
+    });
+    if($('net').value!=='ok')return say('err','✗ no pude preguntar a GitHub: el estado queda como estaba','warning: could not reach github.com');
+    say('ok',n?`✓ revisado: ${n} con commit nuevo (↑)`:'✓ revisado: todo al día',n?`${n} outdated`:'all up to date');
+  });
+}
+
+/* ---- busy, sheet ---- */
+function startBusy(kind,it,ms,done){
+  S.mode='busy';S.busy={kind,it,done,t:setTimeout(()=>{
+    const b=S.busy;S.busy=null;S.mode='nav';b.done();render()},ms)};
+  if(kind==='fetch'||kind==='run'||kind==='write')clog(kind==='fetch'?`fetching https://github.com/${it.repo}, branch HEAD`:'','c-dim');
+  if(kind!=='check'&&opt.run==='daemon')S.jobs.push({n:'skillset '+it.n,st:'running',t0:Date.now(),it});
+  render();
+}
+function endJob(it,st,det){const j=[...S.jobs].reverse().find(j=>j.it===it&&(j.st==='running'||j.st==='ask'));if(j){j.st=st;j.ms=Date.now()-j.t0;j.det=det}}
+function cancel(){
+  const b=S.busy;clearTimeout(b.t);S.busy=null;S.mode='nav';
+  clog('interrupted: nothing installed','c-yellow');endJob(b.it,'failed','cancelado');
+  say('info','· interrumpido: no se instaló nada','interrupted: nothing installed');render();
+}
+function openSheet(p){S.sheet=p;S.mode='sheet';if(p.it&&opt.run==='daemon')endJobAsk(p.it);render()}
+function endJobAsk(it){const j=[...S.jobs].reverse().find(j=>j.it===it&&j.st==='running');if(j)j.st='ask'}
+function decline(){
+  const p=S.sheet;S.sheet=null;S.mode='nav';clog('install? [y/N] n','c-dim');clog('not installed: you did not say yes');endJob(p.it,'failed','no dijo que sí');
+  say('info','· no se instaló: no dijiste que sí','not installed: you did not say yes');render();
+}
+function accept(){
+  const p=S.sheet;S.sheet=null;clog('install? [y/N] y','c-dim');
+  if(p.plugin)return startBusy2('run',p);
+  apply(p);
+}
+function apply(p){const it=p.it;S.mode='nav';startBusy2('write',p)}
+function startBusy2(kind,p){
+  const it=p.it;S.mode='busy';
+  S.busy={kind,it,t:setTimeout(()=>{
+    S.busy=null;S.mode='nav';it.st='installed';
+    if(p.plugin){clog(`$ claude plugin install ${it.id}`,'c-blue');clog(`plugins: ${it.id} is installed`);endJob(it,'done');say('ok',`✓ ${it.id} instalado`,`plugins: ${it.id} is installed`)}
+    else{it.commit=p.commit;S.seen[it.repo]=true;endJob(it,'done');const m=`installed ${it.n} (commit ${short(p.commit)}): ${p.files.length} file(s) in ${dir(it)}`;clog(m);say('ok',`✓ instalado ${it.n} (commit ${short(p.commit)}): ${p.files.length} archivo${p.files.length>1?'s':''} en ${dir(it)}`,m)}
+    render()},kind==='run'?1800:600)};
+  if(kind==='run'){clog(`$ claude plugin marketplace add ${it.repo}   (solo si falta)`,'c-blue');if(opt.run==='daemon')S.jobs.push({n:'skillset '+it.n,st:'running',t0:Date.now(),it})}
+  render();
+}
+
+/* ---- text ---- */
+function cmds(it){
+  const o=(c,l)=>[c,l],n=it.n,L=[];
+  if(it.k==='role'){L.push(o(`jw role show ${n}`,'ver el texto del rol (capas: proyecto, usuario, incluido)'))}
+  else if(it.src==='plugin'){
+    if(it.st==='available')L.push(o(`jw skillset on ${n}`,'muestra los comandos de claude y pregunta [y/N]'),o(`jw skillset on ${n} --yes`,'sin preguntar: solo si ya sabes qué trae'));
+    else if(it.st==='installed')L.push(o(`jw skillset off ${n}`,'NO desinstala: imprime el comando'),o(`claude plugin uninstall ${it.id}`,'lo que corres tú'));
+    else L.push(o('claude plugin list --json','lo que jw le pregunta a claude y no contestó'));
+  }else if(it.src==='embedded'){
+    if(it.st==='available')L.push(o(`jw skillset on ${n}`,'escribe el texto de jw; sin confirmación'));
+    if(it.st==='installed')L.push(o(`jw skillset off ${n}`,'quita el archivo si no lo editaste'));
+    if(it.st==='outdated')L.push(o(`jw skillset on ${n}`,'actualiza (o jw skill install, los tres de jw)'),o(`jw skillset off ${n}`,'quita'));
+    if(it.st==='modified')L.push(o(`jw skillset on ${n}`,'deja el tuyo y escribe SKILL.md.new al lado'),o(`jw skillset off ${n}`,'no borra lo editado'));
+  }else{
+    if(it.st==='available')L.push(o(`jw skillset on ${n}`,'baja, enseña de dónde y qué escribe, pregunta [y/N]'),o(`jw skillset on ${n} --yes`,'sin preguntar'));
+    if(it.st==='installed')L.push(o(`jw skillset off ${n}`,'quita lo que escribió jw, si no lo editaste'),o('jw skillset ls --check','pregunta a GitHub si hay commit nuevo'));
+    if(it.st==='outdated')L.push(o(`jw skillset on ${n}`,'baja el commit nuevo, enseña, pregunta [y/N]'),o(`jw skillset off ${n}`,'quita'));
+    if(it.st==='modified')L.push(o(`jw skillset on ${n}`,'se niega: lo editaste'),o(`jw skillset off ${n}`,'quita solo lo que no editaste'));
+  }
+  return L;
+}
+function why(it){
+  const g=it.src==='github',p=it.src==='plugin';
+  return({
+   'available':p?'No está en claude plugin list. Activar corre claude plugin install tras un sí.':g?'No está. Activar baja el repo a un temporal, enseña de dónde viene y qué escribirá, y pide un sí.':'No está en ~/.claude/skills. Activar lo escribe: es texto de jw, sin confirmar.',
+   'installed':g?`Lo escribió jw (commit ${short(it.commit||OLD)}). El estado no mira la red hasta que pulses r.`:p?'claude plugin list lo trae. jw no lo desinstala: dice el comando.':'Lo escribió jw y sigue igual.',
+   'outdated':g?'El repo tiene un commit nuevo (lo vio la revisión de GitHub). Actualizar baja, enseña y pregunta otra vez.':'jw trae un texto más nuevo que el escrito. Actualizar escribe el nuevo.',
+   'modified':g?'Lo que jw escribió tiene cambios tuyos. jw no lo pisa: actualizar se niega y quitar solo borra lo que no editaste.':'El archivo tiene cambios tuyos: jw deja el tuyo y escribe SKILL.md.new al lado.',
+   'other tool':'Hay un enlace (p. ej. de la herramienta «skills») o una carpeta que jw no escribió. jw no la toca; para usar la instalación de jw quita esa antes, con la herramienta que la puso.',
+   'built-in':`Viene dentro de jw: no hay nada que activar. Se usa con jw role show ${it.n}.`,
+   'unknown':'claude no contestó (¿no está en el PATH?): no se sabe si está instalado.'}[it.st])+(it.yours?' Entrada tuya (skillset.toml): su fuente es texto de un tercero.':'');
+}
+function wrap(s,w){const out=[];let l='';for(const x of s.split(' ')){if((l+' '+x).trim().length>w){out.push(l);l=x}else l=(l+' '+x).trim()}if(l)out.push(l);return out}
+
+/* ---- drawing: a cell buffer, like task-lists.html ---- */
+const T={g:[],
+ reset(){this.g=Array.from({length:ROWS},()=>Array.from({length:COLS},()=>({c:' ',f:'',b:''})))},
+ put(r,c,s,f,b){if(r<0||r>=ROWS)return;for(const ch of [...String(s)]){if(c>=0&&c<COLS){const x=this.g[r][c];x.c=ch;x.f=f||'';if(b!==undefined)x.b=b}c++}},
+ fill(r,c,w,b){for(let i=0;i<w;i++)if(c+i>=0&&c+i<COLS)this.g[r][c+i].b=b},
+ html(){const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  return this.g.map(row=>{let o='',k=null,buf='';for(const x of row){const cl=(x.f+' '+x.b).trim();if(cl!==k){if(buf)o+=k?`<span class="${k}">${esc(buf)}</span>`:esc(buf);k=cl;buf=''}buf+=x.c}
+   if(buf)o+=k?`<span class="${k}">${esc(buf)}</span>`:esc(buf);return o}).join('\n')}};
+const clip=(s,w)=>s.length>w?s.slice(0,w-1)+'…':s;
+function box(r,c,w,title,lines){
+  const h=lines.length+2;
+  for(let i=0;i<h;i++){T.fill(r+i,c,w,'c-box');T.put(r+i,c,' '.repeat(w),'','c-box')}
+  T.put(r,c,'┌'+'─'.repeat(w-2)+'┐','c-dim');T.put(r+h-1,c,'└'+'─'.repeat(w-2)+'┘','c-dim');
+  for(let i=1;i<h-1;i++){T.put(r+i,c,'│','c-dim');T.put(r+i,c+w-1,'│','c-dim')}
+  T.put(r,c+2,' '+title+' ','c-bold');
+  lines.forEach((l,i)=>{let x=c+2;for(const [t,f] of l){T.put(r+1+i,x,t,f);x+=[...t].length}});
+}
+const SP='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const spin=()=>SP[S.tick%SP.length];
+function legend(){
+  const k={space:['espacio activa o quita','↵ ficha'],enter:['↵ activa o quita','i ficha'],ad:['a activa · d quita','↵ ficha']}[opt.keys];
+  return `j/k mover · ${k[0]} · u actualiza · r revisa · ${k[1]} · c copia el comando · esc volver`;
+}
+function draw(){
+  T.reset();const F=flat();
+  T.put(0,1,{screen:'jw · skillset',slash:'conversación › / › skillset',settings:'Ajustes › Skillset',avisos:'Alertas   Trabajos   [Skillset]'}[opt.loc],'c-bold');
+  const r0=S.checked?`revisado en GitHub a las ${S.checked.toTimeString().slice(0,5)}`:'estado sin revisar la red (r)';
+  T.put(0,COLS-r0.length-1,r0,S.checked?'c-green':'c-dim');
+  T.put(0,COLS-r0.length-1-24,'~/.claude','c-dim');
+  let r=2,idx=0;
+  for(const [title,kind] of GROUPS){
+    const its=S.items.filter(i=>i.k===kind);
+    T.put(r++,1,title,'c-bold');
+    for(const it of its){
+      const sel=idx===S.cur,[g,gc]=GLY[it.st],busy=S.busy&&(S.busy.it===it||(S.busy.kind==='check'&&it.src==='github'&&it.st==='installed'));
+      if(sel)T.fill(r,0,COLS,'c-sel');
+      T.put(r,1,sel?'▸':' ','c-blue');
+      T.put(r,3,clip(it.n,12),sel?'c-bold':'');
+      if(busy)T.put(r,16,spin()+' '+{fetch:'bajando…',check:'revisando…',write:'escribiendo…',run:'instalando…'}[S.busy.kind],'c-blue');
+      else{T.put(r,16,g,gc);T.put(r,18,word(it.st),gc)}
+      T.put(r,36,clip({embedded:'embedded',github:'github '+it.repo,plugin:'plugin '+it.id}[it.src]+(it.yours?' (yours)':''),33),'c-dim');
+      T.put(r,70,clip(it.d,COLS-71),'c-dim');
+      r++;idx++;
+    }
+    r++;
+  }
+  const it=F[S.cur];
+  T.put(r,0,'─'.repeat(COLS),'c-dim');T.put(r,2,` ${it.n} · ${it.k} · ${it.src==='github'?'github '+it.repo:it.src==='plugin'?'plugin '+it.id:'embedded'} `,'c-bold');r++;
+  wrap(why(it),COLS-4).slice(0,3).forEach(l=>T.put(r++,2,l,''));
+  const cm=cmds(it)[0];if(cm)T.put(r++,2,'$ '+cm[0],'c-blue');
+  T.put(ROWS-3,0,'─'.repeat(COLS),'c-dim');
+  const m=S.msg;
+  if(S.busy){const b=S.busy;T.put(ROWS-2,2,spin()+' '+{fetch:`bajando github.com/${b.it.repo} a un temporal…`,check:'preguntando a GitHub por el último commit…',write:'escribiendo…',run:'claude plugin install…'}[b.kind]+'   esc cancela'+(b.kind==='write'?' (ya casi)':''),'c-blue')}
+  else if(m)T.put(ROWS-2,2,clip(opt.words==='en'?m.en:m.es,COLS-4),{ok:'c-green',err:'c-red',info:'c-yellow'}[m.kind]||'c-dim');
+  T.put(ROWS-1,1,clip(S.mode==='sheet'?'y instalar · n, ↵ o esc no instalar':S.mode==='ficha'?'esc cierra la ficha':legend(),COLS-2),'c-dim');
+  if(S.mode==='sheet')drawSheet();
+  if(S.mode==='ficha')drawFicha(it);
+}
+function drawSheet(){
+  const p=S.sheet,it=p.it,L=[],w=104;
+  if(p.plugin){
+    L.push([['Plugin de un tercero: ','' ],[it.id,'c-bold']],[['del repo de GitHub ',''],[it.repo,'c-bold'],[' (marketplace ponytail)','c-dim']],[['','']],[['Correrá en tu máquina, en este orden:','']],
+      [['  $ claude plugin marketplace add '+it.repo,'c-blue'],['   (solo si falta)','c-dim']],[['  $ claude plugin install '+it.id,'c-blue']],[['','']],
+      [['! ','c-chipy'],[' Es código de un tercero: puede correr programas en tu máquina por sus hooks.','c-yellow']]);
+  }else{
+    const upd=it.st==='outdated'||(it.st==='installed'&&it.commit&&it.commit!==p.commit);
+    L.push([['Código de un tercero, no de jw. Se baja de:','']],[['  '+p.url,'c-bold']],[['  rama HEAD · commit ',''],[p.commit,'c-bold']]);
+    if(upd)L.push([['  ahora tienes el commit '+short(it.commit||OLD)+' (el lock lo guarda)','c-dim']]);
+    L.push([['','']],[['Escribirá '+p.files.length+' archivo'+(p.files.length>1?'s':'')+':','']]);
+    p.files.forEach(([f,b])=>L.push([['  '+clip(f,w-18),'c-cyan'],[` (${b} bytes)`,'c-dim']]));
+    if(p.nonmd.length)L.push([['','']],[['! ','c-chipy'],[' La carpeta trae archivos que no son Markdown ('+p.nonmd.join(', ')+'):','c-yellow']],[['  un skill puede traer scripts.','c-yellow']]);
+  }
+  L.push([['','']],[['  y ','c-chip'],[' instalar    ',''],['  n ↵ esc ','c-sel'],[' no instalar (el defecto es no)','c-dim']]);
+  box(3,2,w,(p.plugin?'activar ':(it.st==='outdated'?'actualizar ':'activar '))+it.n+(p.plugin?' (plugin)':''),L);
+}
+function drawFicha(it){
+  const L=[[['tipo ','c-dim'],[it.k,'']],[['fuente ','c-dim'],[it.src==='github'?'https://github.com/'+it.repo:it.src==='plugin'?'plugin '+it.id+' (github '+it.repo+')':'embebido en jw','']],
+    [['estado ','c-dim'],[word(it.st),GLY[it.st][1]],['  (CLI: «'+it.st+'»)','c-dim']]];
+  if(it.k==='skill')L.push([['escribe en ','c-dim'],[dir(it)+'/','c-cyan']]);
+  if(it.commit)L.push([['commit ','c-dim'],[it.commit,'']]);
+  L.push([['','']]);
+  wrap(it.d,84).forEach(l=>L.push([[l,'c-dim']]));L.push([['','']]);
+  wrap(why(it),84).forEach(l=>L.push([[l,'']]));L.push([['','']],[['Desde el CLI:','c-dim']]);
+  cmds(it).forEach(([c,l])=>L.push([['  $ '+c,'c-blue'],['  '+l,'c-dim']]));
+  box(1,2,104,'ficha de '+it.n,L);
+}
+
+/* ---- the other panels ---- */
+function renderLs(){
+  const rows=[['NAME','KIND','STATE','SOURCE','DESCRIPTION']];
+  const order=['jw','jw-tasks','agent','brain','researcher','caveman','ponytail','acme-review'];
+  const st=[];
+  order.forEach(n=>{const i=S.items.find(x=>x.n===n);rows.push([i.n,i.k,i.st,{embedded:'embedded',github:'github '+i.repo,plugin:'plugin '+i.id}[i.src]+(i.yours?' (yours)':''),i.d]);st.push(i.st)});
+  const w=[0,1,2,3].map(c=>Math.max(...rows.map(r=>r[c].length)));
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  let out=rows.map((r,ri)=>{const cells=r.slice(0,4).map((x,c)=>{const p=esc(x.padEnd(w[c]));return c===2&&ri?`<span class="${GLY[x][1]}">${p}</span>`:p});return (cells.join('  ')+'  '+esc(r[4])).trimEnd()}).join('\n');
+  out+='\n<span class="c-dim">note: entries marked (yours) come from &lt;config dir&gt;/skillset.toml: their sources are text of third parties</span>';
+  $('ls').innerHTML=out;
+}
+function renderCmds(){
+  const it=cur(),L=cmds(it);
+  $('cmds').innerHTML=(L.length?L.map(([c,l])=>`<span class="c-blue">$ ${c}</span>   <span class="c-dim">${l}</span>`).join('\n'):'<span class="c-dim">(sin comando: jw no toca esta fila; para cambiarla usa la herramienta que la puso)</span>');
+}
+function renderLog(){
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  $('log').innerHTML=S.log.filter(l=>l[0]).map(([t,c])=>c?`<span class="${c}">${esc(t)}</span>`:esc(t)).join('\n')||'<span class="c-dim">(nada aún)</span>';
+}
+function renderJobs(){
+  const d=opt.run==='daemon';$('jobsbox').style.display=d?'':'none';
+  $('jobsnote').innerHTML=d?'Avisos › Trabajos (así se vería). El <code>Job</code> tiene <code>running | done | failed</code>: no tiene «esperando tu sí», y la hoja necesita una respuesta entre bajar y escribir. Aquí lo marco <span class="c-yellow">?</span> a mano.':'En esta opción la instalación <b>no</b> sale en Avisos › Trabajos (esa lista es del daemon); el avance está en la fila y en la barra de abajo de la pantalla.';
+  const lines=S.jobs.slice(-6).map(j=>{const g=j.st==='running'?`<span class="c-blue">${spin()}</span>`:j.st==='ask'?'<span class="c-yellow">?</span>':j.st==='done'?'<span class="c-green">✓</span>':'<span class="c-red">✗</span>';
+    return ` ${g} ${j.n.padEnd(22)} <span class="c-dim">${j.st==='ask'?'espera tu sí (estado que hoy no existe)':j.det||(j.ms?(j.ms/1000).toFixed(1)+' s':'')}</span>`});
+  $('jobs').innerHTML='<span class="c-bold"> Avisos › Trabajos</span>\n'+(lines.join('\n')||'<span class="c-dim"> (sin trabajos)</span>');
+}
+function renderPhone(){
+  const b=$('phonebox');if(opt.phone==='none'){b.innerHTML='';return}
+  const rows=GROUPS.map(([t,k])=>`<div class="sec">${t}</div>`+S.items.filter(i=>i.k===k).map(i=>`<div class="r1"><span class="${GLY[i.st][1]}">${GLY[i.st][0]}</span><span class="nm">${i.n}</span><span class="st ${GLY[i.st][1]}">${word(i.st)}</span>${opt.phone==='full'&&i.src!=='embedded'||opt.phone==='full'&&i.k==='skill'?'<button class="btn" data-ph="'+i.n+'">activar</button>':''}</div>`).join('')).join('');
+  b.innerHTML=`<div class="phone"><div class="hd">skillset del PC${opt.phone==='ro'?' · solo lectura':''}</div>${rows}</div>`;
+}
+const IMP={
+ phone:{none:'Teléfono: nada. Hoy el skillset funciona <b>sin daemon</b> y el daemon no tiene ningún comando de skillset (ni de roles ni de <code>skill install</code>).',
+  ro:'Teléfono, solo lectura: <b>exige un nodo nuevo</b> <code>skillset</code> (documento versionado: esquema, fixtures, tipos Kotlin, conformidad) y un daemon que lea <code>~/.claude</code> y le pregunte a <code>claude plugin list</code>; el código del skillset vive en <code>crates/jw</code> y el daemon no lo llama. Sin eso, el teléfono no puede ni listar. Además el puente web <b>niega por nombre</b> (<code>refused_control</code>, RISK-110): cualquier comando nuevo del skillset pasaría hasta que se añada a esa lista, con su prueba.',
+  full:'Teléfono, con instalar: instalar código de un tercero en el PC no debe poder pedirse desde fuera. El puente ya rechaza <code>artifact_publish</code> y <code>artifact_rm</code> desde un teléfono por lo mismo, y su lista es de <i>negados por nombre</i>: habría que negar <code>skillset_*</code> a mano. La hoja de confirmación la vería el teléfono, no la persona frente al PC.'},
+ run:{inproc:'Dentro del cliente: sirve en una terminal sin daemon (igual que <code>jw skillset</code>); un solo proceso hace lo que hace el CLI; si cierras la TUI se corta, y no instala nada a medias (el lock se escribe al final).',
+  daemon:'Con el daemon: sobrevive a cerrar la TUI y sale también en Trabajos del teléfono, pero no funciona sin daemon, y el contrato cambia (<code>JobKind</code> nuevo, <code>Job</code> con un estado de pregunta). Un trabajo que instala código de terceros además queda al alcance de cualquier cliente del socket.'}};
+function renderImp(){$('imp').innerHTML='<b>Qué implica lo elegido.</b> '+IMP.phone[opt.phone]+' '+IMP.run[opt.run]}
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),2200)}
+
+function render(){
+  $('scr').innerHTML=(draw(),T.html());
+  $('legend').innerHTML={space:'<kbd>j</kbd><kbd>k</kbd> mover · <kbd>espacio</kbd> activa o quita (lo de terceros abre la hoja: <kbd>y</kbd> instala, <kbd>n</kbd>/<kbd>↵</kbd>/<kbd>esc</kbd> no) · <kbd>u</kbd> actualiza · <kbd>r</kbd> revisa GitHub · <kbd>↵</kbd> ficha · <kbd>c</kbd> copia el comando · <kbd>esc</kbd> vuelve (o cancela una descarga). Ninguna lleva Alt.',
+   enter:'<kbd>j</kbd><kbd>k</kbd> mover · <kbd>↵</kbd> activa o quita · <kbd>i</kbd> ficha · <kbd>u</kbd> <kbd>r</kbd> <kbd>c</kbd> <kbd>esc</kbd> como arriba.',
+   ad:'<kbd>j</kbd><kbd>k</kbd> mover · <kbd>a</kbd> activa · <kbd>d</kbd> quita · <kbd>↵</kbd> ficha · <kbd>u</kbd> <kbd>r</kbd> <kbd>c</kbd> <kbd>esc</kbd> como arriba.'}[opt.keys];
+  renderLs();renderCmds();renderLog();renderJobs();renderPhone();renderImp();
+}
+
+/* ---- keys ---- */
+function onKey(e){
+  if(e.metaKey||e.ctrlKey||e.altKey||['Shift','Control','Alt','Meta'].includes(e.key))return;
+  const k=e.key,it=cur();let used=true;
+  if(S.mode==='busy'){if(k==='Escape'&&S.busy.kind!=='write')cancel();else used=false}
+  else if(S.mode==='sheet'){if(k==='y')accept();else if(['n','Enter','Escape'].includes(k))decline();else used=false}
+  else if(S.mode==='ficha'){if(['Escape','Enter','i'].includes(k)){S.mode='nav';render()}else used=false}
+  else{
+    const n=flat().length;
+    if(k==='j'||k==='ArrowDown')S.cur=(S.cur+1)%n;
+    else if(k==='k'||k==='ArrowUp')S.cur=(S.cur+n-1)%n;
+    else if(k===' '&&opt.keys==='space'||k==='Enter'&&opt.keys==='enter')toggle(it);
+    else if(k==='a'&&opt.keys==='ad')on(it);
+    else if(k==='d'&&opt.keys==='ad')off(it);
+    else if(k==='Enter'&&opt.keys!=='enter'||k==='i'&&opt.keys==='enter')S.mode='ficha';
+    else if(k==='u')update(it);
+    else if(k==='r')check();
+    else if(k==='c'){const c=cmds(it)[0];if(c)toast('copiado (OSC 52): '+c[0]);else toast('esta fila no tiene comando')}
+    else if(k==='Escape')say('','· esc volvería a los workspaces (en el prototipo no hay más)','');
+    else used=false;
+  }
+  if(used){e.preventDefault();render()}
+}
+function toggle(it){
+  if(it.st==='built-in'||it.st==='other tool'||it.st==='unknown'||it.st==='available')return on(it);
+  return off(it); // installed, outdated and modified are all installed: space takes away (what was edited stays); u keeps the refusal
+}
+
+/* ---- wiring ---- */
+$('term').addEventListener('keydown',onKey);
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(t.dataset&&t.dataset.o){opt[t.dataset.o]=t.value;if(t.dataset.o==='state'||t.dataset.o==='run'){clearTimeout(S.busy&&S.busy.t);S.busy=null;load()}else render();return}
+  if(t.id==='start'||t.id==='rst'){load()}
+  else render();
+});
+$('rst').onclick=()=>{load();$('term').focus()};
+$('cyc').onclick=()=>{const it=cur(),c=CYCLE[it.k==='role'?'role':it.src],i=c.indexOf(it.st);it.st=c[(i+1)%c.length];it.commit=['installed','outdated','modified'].includes(it.st)&&it.src==='github'?OLD:null;say('','· (prueba) '+it.n+' pasa a «'+it.st+'»','');render();$('term').focus()};
+document.addEventListener('click',e=>{const p=e.target.dataset&&e.target.dataset.ph;if(p)toast('el puente web rechazaría esto: unsupported')});
+setInterval(()=>{S.tick++;if(S.busy||S.jobs.some(j=>j.st==='running'))render()},100);
+load();$('term').focus();
+</script>
+</body></html>

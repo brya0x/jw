@@ -86,25 +86,25 @@ pub(super) fn read(path: &Path) -> Option<String> {
 }
 
 /// Install a skill file by the table of the spec and say what was done.
-pub(super) fn install(path: &Path, text: &str) -> Out {
+pub(super) fn install(path: &Path, text: &str, say: &mut dyn FnMut(String)) -> Out {
     let existing = read(path);
     match decide(existing.as_deref(), text) {
         Plan::Write => {
             put(path, &marked(text))?;
-            println!("installed {}", path.display());
+            say(format!("installed {}", path.display()));
         }
-        Plan::Unchanged => println!("unchanged {}", path.display()),
+        Plan::Unchanged => say(format!("unchanged {}", path.display())),
         Plan::Keep => {
             let mut new: OsString = path.as_os_str().to_owned();
             new.push(".new");
             let new = Path::new(&new);
             put(new, &marked(text))?;
-            println!(
+            say(format!(
                 "kept {}: not written by {} or edited; the new one is {}",
                 path.display(),
                 bin(),
                 new.display()
-            );
+            ));
         }
     }
     Ok(())
@@ -162,12 +162,12 @@ mod tests {
     fn install_writes_refreshes_keeps_and_leaves_a_new_file_beside_the_kept() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s/SKILL.md");
-        install(&path, TEXT).unwrap();
+        install(&path, TEXT, &mut |_| {}).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), marked(TEXT));
-        install(&path, "---\nname: x\n---\nnewer\n").unwrap();
+        install(&path, "---\nname: x\n---\nnewer\n", &mut |_| {}).unwrap();
         assert!(std::fs::read_to_string(&path).unwrap().contains("newer"));
         std::fs::write(&path, "mine\n").unwrap();
-        install(&path, TEXT).unwrap();
+        install(&path, TEXT, &mut |_| {}).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine\n");
         let new = dir.path().join("s/SKILL.md.new");
         assert_eq!(std::fs::read_to_string(new).unwrap(), marked(TEXT));
