@@ -206,6 +206,7 @@ impl Parser {
                     self.push(Item::Divider {
                         text: "conversación compactada".into(),
                         kind: DividerKind::Compact,
+                        count: None,
                     });
                 }
                 "system" if entry["subtype"] == "turn_duration" => {

@@ -138,7 +138,7 @@ sealed interface ConvItem {
     data class Result(val ms: Long, val tools: Int, val cost: Long) : ConvItem
 
     @Serializable @SerialName("divider")
-    data class Divider(val text: String, val kind: DividerKind) : ConvItem
+    data class Divider(val text: String, val kind: DividerKind, val count: Int? = null) : ConvItem
 }
 
 @Serializable

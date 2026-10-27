@@ -226,23 +226,20 @@ pub enum Item {
         output: Vec<String>,
     },
     /// What a command answered, as lines.
-    Out {
-        lines: Vec<String>,
-    },
+    Out { lines: Vec<String> },
     Note {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tone: Option<Tone>,
     },
     /// The end of a turn: how long it took, how many tools it used and what it cost.
-    Result {
-        ms: u64,
-        tools: u32,
-        cost: u64,
-    },
+    Result { ms: u64, tools: u32, cost: u64 },
     Divider {
         text: String,
         kind: DividerKind,
+        /// How many restarts a `restart` line stands for; absent is 1 (N183).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u32>,
     },
 }
 

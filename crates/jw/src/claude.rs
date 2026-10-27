@@ -625,8 +625,19 @@ mod tests {
         let d = Item::Divider {
             text: "el daemon se reinició · 20:10".into(),
             kind: DividerKind::Restart,
+            count: None,
         };
         assert_eq!(item_lines(&d), ["── el daemon se reinició · 20:10 ──"]);
+        // A line that stands for many restarts is drawn from its text alone (REQ-997).
+        let many = Item::Divider {
+            text: "el daemon se reinició 20 veces · la última a las 11:41".into(),
+            kind: DividerKind::Restart,
+            count: Some(20),
+        };
+        assert_eq!(
+            item_lines(&many),
+            ["── el daemon se reinició 20 veces · la última a las 11:41 ──"]
+        );
     }
 
     #[test]
