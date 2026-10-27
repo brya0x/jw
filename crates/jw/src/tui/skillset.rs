@@ -13,7 +13,7 @@ use contract::themes::Rgb;
 use crossterm::event::KeyCode;
 
 use super::{Grid, Rect, Style, clip, look, shell};
-use crate::agent::skillset::{self, Ask, Item, Place, Sheet, Step};
+use crate::agent::skillset::{self, Ask, Event, Item, Place, Sheet, Step};
 
 /// The groups of the list, in order: the title and the `kind` of the library.
 const GROUPS: [(&str, &str); 3] = [
@@ -63,6 +63,8 @@ pub enum Reply {
     Done(Result<Vec<String>, String>),
     /// Something third-party is fetched and waits for the yes.
     Asked(Sheet),
+    /// A step of the work that has not answered yet (N186; REQ-1047).
+    Step(Event),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,12 +73,17 @@ enum Running {
     Checking,
     Fetching,
     Writing,
+    Removing,
+    /// The commands of a plugin.
+    Installing,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct Busy {
     running: Running,
     what: String,
+    /// The entry the work is on, whose row shows it (REQ-1046).
+    name: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -304,6 +311,158 @@ fn sheet_lines(sheet: &Sheet) -> Vec<(String, Style2)> {
     l
 }
 
+/// What the CLI says when nobody said yes.
+const NOT_SAID_YES: &str = "not installed: you did not say yes";
+
+fn archivos(n: usize) -> String {
+    format!("{n} archivo{}", if n == 1 { "" } else { "s" })
+}
+
+/// A line of the library in Spanish, with the tone it has (REQ-1049, REQ-1050); `ran`: the work ran
+/// the commands of a plugin. `None` for a line that has no Spanish form.
+fn spanish(line: &str, ran: bool) -> Option<(Tone, String)> {
+    let bin = &identity::get().name;
+    let ok = |s: String| Some((Tone::Ok, s));
+    let info = |s: String| Some((Tone::Info, s));
+    if let Some(rest) = line.strip_prefix("installed ") {
+        let github = rest
+            .split_once(" file(s) in ")
+            .and_then(|(left, dir)| left.rsplit_once("): ").map(|(head, n)| (head, n, dir)));
+        return match github {
+            Some((head, n, dir)) => {
+                let n = n.parse().unwrap_or(0);
+                ok(format!("instalado {head}): {} en {dir}", archivos(n)))
+            }
+            None => ok(format!("instalado {rest}")),
+        };
+    }
+    if let Some(rest) = line.strip_prefix("unchanged ") {
+        return match rest.split_once(" (commit ") {
+            Some((name, commit)) => info(format!(
+                "{name} ya está en el commit {}: sin cambios",
+                commit.trim_end_matches(')')
+            )),
+            None => info(format!("sin cambios: {rest}")),
+        };
+    }
+    if let Some(rest) = line.strip_prefix("removed ") {
+        return match rest.split_once(" file(s) of ") {
+            Some((n, name)) => ok(format!(
+                "quitado {name} ({})",
+                archivos(n.parse().unwrap_or(0))
+            )),
+            None => ok(format!("quitado {rest}")),
+        };
+    }
+    if let Some(rest) = line.strip_prefix("kept ") {
+        if let Some(name) = rest.strip_suffix(": it was edited") {
+            return info(format!(
+                "{name}: tiene cambios tuyos; no se borra lo que editaste"
+            ));
+        }
+        let mark = format!(": not written by {bin} or edited");
+        if let Some((path, new)) = rest.split_once(&format!("{mark}; the new one is ")) {
+            return info(format!(
+                "{path}: no lo escribió {bin} o lo editaste; se deja el tuyo y el nuevo está en {new}"
+            ));
+        }
+        if let Some(path) = rest.strip_suffix(&mark) {
+            return info(format!(
+                "{path}: no lo escribió {bin} o lo editaste; no se borra"
+            ));
+        }
+    }
+    if let Some(name) = line.strip_suffix(" is not installed") {
+        return info(format!("{name} no está instalado"));
+    }
+    if let Some((name, rest)) = line.split_once(" is built in: ") {
+        let said = match rest.strip_prefix("always available with ") {
+            Some(command) => format!("siempre disponible con {command}"),
+            None => "no hay nada que quitar".to_owned(),
+        };
+        return info(format!("{name} viene dentro de {bin}: {said}"));
+    }
+    if let Some(command) = line.strip_prefix(&format!(
+        "{bin} does not uninstall plugins; to remove it run: "
+    )) {
+        return info(format!(
+            "{bin} no desinstala plugins; para quitarlo corre: {command}"
+        ));
+    }
+    if let Some(plugin) = line
+        .strip_prefix("plugins: ")
+        .and_then(|r| r.strip_suffix(" is installed"))
+    {
+        return if ran {
+            ok(format!("{plugin} instalado"))
+        } else {
+            info(format!("{plugin} ya está instalado"))
+        };
+    }
+    if let Some(name) = line.strip_suffix(": installed by another tool, left alone") {
+        return info(format!(
+            "{name}: instalado por otra herramienta; {bin} no lo toca. Para usar el de {bin}, quita esa antes con la herramienta que la puso"
+        ));
+    }
+    if let Some(name) = line.strip_suffix(&format!(": not installed by {bin}, left alone")) {
+        return info(format!("{name}: no lo instaló {bin}; no lo toca"));
+    }
+    if let Some(name) = line.strip_suffix(&format!(
+        ": what {bin} wrote there was edited, left alone: move your changes away and run it again"
+    )) {
+        return Some((
+            Tone::Err,
+            format!(
+                "{name}: lo que {bin} escribió se editó; no lo pisa. Mueve tus cambios y vuelve a activar"
+            ),
+        ));
+    }
+    match line {
+        "interrupted: nothing installed" => info("interrumpido: no se instaló nada".to_owned()),
+        NOT_SAID_YES => info("no se instaló: no dijiste que sí".to_owned()),
+        CLOSED => info("no se instaló nada: cerraste la pantalla antes del sí".to_owned()),
+        _ => None,
+    }
+}
+
+/// What a work that ended well says: the lines of the library in Spanish, `✓` when something was
+/// written or taken away, and not the `$ claude …` lines of a plugin, which were its steps.
+fn result(lines: &[String]) -> (Tone, String) {
+    let ran = lines.iter().any(|l| l.starts_with("$ "));
+    let said: Vec<(Tone, String)> = lines
+        .iter()
+        .filter(|l| !l.starts_with("$ "))
+        .map(|l| spanish(l, ran).unwrap_or((Tone::Info, l.clone())))
+        .collect();
+    let tone = if said.iter().any(|(t, _)| *t == Tone::Ok) {
+        Tone::Ok
+    } else {
+        Tone::Info
+    };
+    let text: Vec<&str> = said.iter().map(|(_, t)| t.as_str()).collect();
+    (tone, text.join("  ·  "))
+}
+
+/// What a work that failed says: a refusal the library words is information or a failure by what it
+/// is (REQ-1050), anything else is `✗` with the reason, and says nothing was installed when the work
+/// was an install that writes nothing until it ends (REQ-1024).
+fn failure(why: &str, installing: bool) -> (Tone, String) {
+    if why.starts_with("interrupted") {
+        return (Tone::Info, "interrumpido: no se instaló nada".to_owned());
+    }
+    spanish(why, false).unwrap_or_else(|| {
+        let more = if installing {
+            " · no se instaló nada"
+        } else {
+            ""
+        };
+        (Tone::Err, format!("{why}{more}"))
+    })
+}
+
+/// What is said when the screen was closed before the yes.
+const CLOSED: &str = "not installed: the screen was closed";
+
 fn rank(kind: &str) -> usize {
     GROUPS
         .iter()
@@ -331,6 +490,7 @@ impl Screen {
             busy: Some(Busy {
                 running: Running::Reading,
                 what: "leyendo el catálogo…".into(),
+                name: None,
             }),
             msg: None,
             checked: false,
@@ -350,16 +510,60 @@ impl Screen {
         .to_owned()
     }
 
-    fn start(&mut self, running: Running, what: impl Into<String>) {
+    fn start(&mut self, running: Running, name: Option<String>, what: impl Into<String>) {
         self.busy = Some(Busy {
             running,
             what: what.into(),
+            name,
         });
         self.msg = None;
     }
 
     fn say(&mut self, tone: Tone, text: impl Into<String>) {
         self.msg = Some((tone, text.into()));
+    }
+
+    /// A line of the library, in Spanish when it has a form (REQ-1049).
+    fn say_line(&mut self, line: &str) {
+        let (tone, text) = spanish(line, false).unwrap_or((Tone::Info, line.to_owned()));
+        self.say(tone, text);
+    }
+
+    /// The step the work is in, on the line above the keys (REQ-1047).
+    fn step(&mut self, event: Event) {
+        let Some(busy) = self.busy.as_mut() else {
+            return;
+        };
+        busy.what = match event {
+            Event::Fetching { url, branch } => {
+                format!("bajando {url} (rama {branch}) a un temporal…")
+            }
+            Event::Fetched { commit, files } => format!(
+                "bajado el commit {} ({}): preparando la hoja…",
+                &commit[..commit.len().min(7)],
+                archivos(files)
+            ),
+            Event::Writing { files } => format!("escribiendo {}…", archivos(files)),
+            Event::Locking => "guardando el lock de lo instalado…".to_owned(),
+            Event::Running(command) => format!("{command}…"),
+        };
+    }
+
+    /// What the row of `item` says while the work is on it, in place of its chip (REQ-1046).
+    fn row_word(&self, item: &Item) -> Option<&'static str> {
+        let busy = self.busy.as_ref()?;
+        let mine = busy.name.as_deref() == Some(item.name.as_str());
+        match busy.running {
+            Running::Checking => {
+                (src(item) == Src::Github && item.state == "installed").then_some("revisando…")
+            }
+            Running::Fetching if mine => Some("bajando…"),
+            Running::Writing if mine => Some("escribiendo…"),
+            Running::Removing if mine => Some("quitando…"),
+            Running::Installing if mine => Some("instalando…"),
+            Running::Reading if mine => Some("leyendo…"),
+            _ => None,
+        }
     }
 
     pub fn press(&mut self, code: KeyCode) -> Act {
@@ -369,19 +573,17 @@ impl Screen {
                 return match code {
                     KeyCode::Char('y') => {
                         self.mode = Mode::List;
-                        self.start(
-                            Running::Writing,
-                            if plugin {
-                                "claude plugin install…"
-                            } else {
-                                "escribiendo…"
-                            },
-                        );
+                        let name = self.item().map(|i| i.name.clone());
+                        if plugin {
+                            self.start(Running::Installing, name, "claude plugin install…");
+                        } else {
+                            self.start(Running::Writing, name, "escribiendo…");
+                        }
                         Act::Apply
                     }
                     KeyCode::Char('n') | KeyCode::Enter | KeyCode::Esc => {
                         self.mode = Mode::List;
-                        self.say(Tone::Info, "not installed: you did not say yes");
+                        self.say_line(NOT_SAID_YES);
                         Act::Decline
                     }
                     _ => Act::None,
@@ -401,7 +603,7 @@ impl Screen {
                     self.say(Tone::Info, "cancelando…");
                     Act::Cancel
                 }
-                (KeyCode::Esc, Running::Writing) => {
+                (KeyCode::Esc, Running::Writing | Running::Removing | Running::Installing) => {
                     self.say(Tone::Info, NO_CANCEL);
                     Act::None
                 }
@@ -423,6 +625,7 @@ impl Screen {
             KeyCode::Char('r') => {
                 self.start(
                     Running::Checking,
+                    None,
                     "preguntando a GitHub por el último commit…",
                 );
                 Act::Read { check: true }
@@ -462,7 +665,11 @@ impl Screen {
         };
         let name = item.name.clone();
         if matches!(item.state, "installed" | "outdated" | "modified") {
-            self.start(Running::Writing, format!("quitando {name}…"));
+            self.start(
+                Running::Removing,
+                Some(name.clone()),
+                format!("quitando {name}…"),
+            );
             return Act::Off(name);
         }
         self.on()
@@ -479,10 +686,11 @@ impl Screen {
             let from = item.source.trim_start_matches("github ").to_owned();
             self.start(
                 Running::Fetching,
+                Some(name.clone()),
                 format!("bajando github.com/{from} a un temporal…"),
             );
         } else {
-            self.start(Running::Reading, format!("{name}…"));
+            self.start(Running::Reading, Some(name.clone()), format!("{name}…"));
         }
         Act::On(name)
     }
@@ -511,26 +719,21 @@ impl Screen {
                 self.mode = Mode::Sheet(sheet);
                 Act::None
             }
+            Reply::Step(event) => {
+                self.step(event);
+                Act::None
+            }
             Reply::Done(Ok(lines)) => {
                 self.busy = None;
-                let done = lines.iter().any(|l| {
-                    l.starts_with("installed ")
-                        || l.starts_with("removed ")
-                        || l.starts_with("plugins: ")
-                });
-                self.say(
-                    if done { Tone::Ok } else { Tone::Info },
-                    lines.join("  ·  "),
-                );
+                let (tone, text) = result(&lines);
+                self.say(tone, text);
                 Act::Read { check: false }
             }
             Reply::Done(Err(why)) => {
-                self.busy = None;
-                if why.starts_with("interrupted") {
-                    self.say(Tone::Info, "interrupted: nothing installed");
-                } else {
-                    self.say(Tone::Err, why);
-                }
+                let was = self.busy.take().map(|b| b.running);
+                let installing = matches!(was, Some(Running::Fetching | Running::Writing));
+                let (tone, text) = failure(&why, installing);
+                self.say(tone, text);
                 Act::None
             }
             Reply::Items {
@@ -635,7 +838,8 @@ impl Screen {
             (Some(b), _) => {
                 let cancel = match b.running {
                     Running::Fetching => "   esc cancela",
-                    Running::Writing => "   (no se puede cancelar)",
+                    Running::Writing => "   (no se puede cancelar · ya casi)",
+                    Running::Removing | Running::Installing => "   (no se puede cancelar)",
                     _ => "",
                 };
                 g.put(
@@ -719,7 +923,7 @@ impl Screen {
             let ry = top + i;
             match row {
                 Some(Err(title)) => g.put(x0, ry, title, Style::fg(look::fg()).bold().on(ground)),
-                Some(Ok(idx)) => self.draw_row(g, (x0, ry, iw), *idx, ground),
+                Some(Ok(idx)) => self.draw_row(g, (x0, ry, iw), *idx, (ground, now_ms)),
                 None => {}
             }
         }
@@ -740,7 +944,13 @@ impl Screen {
         }
     }
 
-    fn draw_row(&self, g: &mut Grid, (x0, y, iw): (usize, usize, usize), idx: usize, ground: Rgb) {
+    fn draw_row(
+        &self,
+        g: &mut Grid,
+        (x0, y, iw): (usize, usize, usize),
+        idx: usize,
+        (ground, now_ms): (Rgb, u64),
+    ) {
         let item = &self.items[idx];
         let on = idx == self.cur && self.mode == Mode::List;
         let ground = if on { look::sel() } else { ground };
@@ -756,12 +966,11 @@ impl Screen {
             if on { name.bold() } else { name },
         );
         let (glyph, word, colour) = chip(item.state);
-        g.put(
-            x0 + 16,
-            y,
-            &clip(&format!("{glyph} {word}"), 18),
-            Style::fg(colour).on(ground),
-        );
+        let (text, colour) = match self.row_word(item) {
+            Some(busy) => (format!("{} {busy}", shell::spin(now_ms)), look::blue()),
+            None => (format!("{glyph} {word}"), colour),
+        };
+        g.put(x0 + 16, y, &clip(&text, 18), Style::fg(colour).on(ground));
         let dim = Style::fg(look::dim()).on(ground);
         g.put(x0 + 36, y, &clip(&item.source, 32), dim);
         g.put(
@@ -870,6 +1079,8 @@ pub struct Worker {
     pending: Option<Ask>,
     cancel: Arc<AtomicBool>,
     open: bool,
+    /// What a work answered after the screen was closed: shown when it is opened again (REQ-1052).
+    late: Option<Reply>,
 }
 
 impl Worker {
@@ -887,13 +1098,22 @@ impl Worker {
             pending: None,
             cancel: Arc::new(AtomicBool::new(false)),
             open: false,
+            late: None,
         }
     }
 
-    fn spawn(&self, work: impl FnOnce(&Place) -> Done + Send + 'static) {
+    /// The work gets the place and a way to tell its steps, which go in the channel the answers use.
+    fn spawn(&self, work: impl FnOnce(&Place, &mut dyn FnMut(Event)) -> Done + Send + 'static) {
         let (place, tx) = (self.place.clone(), self.tx.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(work(&place));
+            let mut step = |event| {
+                let _ = tx.send(Done {
+                    reply: Reply::Step(event),
+                    ask: None,
+                });
+            };
+            let done = work(&place, &mut step);
+            let _ = tx.send(done);
         });
     }
 
@@ -901,7 +1121,7 @@ impl Worker {
         match act {
             Act::Read { check } => {
                 self.open = true;
-                self.spawn(move |p| Done {
+                self.spawn(move |p, _| Done {
                     reply: Reply::Items {
                         result: skillset::items(p, check),
                         checked: check,
@@ -913,7 +1133,7 @@ impl Worker {
                 // A flag for each download: one that was stopped does not stop the next.
                 self.cancel = Arc::new(AtomicBool::new(false));
                 let cancel = self.cancel.clone();
-                self.spawn(move |p| match skillset::on(p, &name, cancel, &mut |_| {}) {
+                self.spawn(move |p, step| match skillset::on(p, &name, cancel, step) {
                     Ok(Step::Done(lines)) => Done {
                         reply: Reply::Done(Ok(lines)),
                         ask: None,
@@ -928,16 +1148,23 @@ impl Worker {
                     },
                 });
             }
-            Act::Off(name) => self.spawn(move |p| Done {
+            Act::Off(name) => self.spawn(move |p, _| Done {
                 reply: Reply::Done(skillset::off(p, &name)),
                 ask: None,
             }),
             Act::Apply => {
-                if let Some(ask) = self.pending.take() {
-                    self.spawn(move |p| Done {
-                        reply: Reply::Done(skillset::apply(p, ask, &mut |_| {})),
+                match self.pending.take() {
+                    Some(ask) => self.spawn(move |p, step| Done {
+                        reply: Reply::Done(skillset::apply(p, ask, step)),
                         ask: None,
-                    });
+                    }),
+                    // Never leave the screen working on what nobody holds (REQ-1054).
+                    None => {
+                        let _ = self.tx.send(Done {
+                            reply: Reply::Done(Err("la hoja ya no está".into())),
+                            ask: None,
+                        });
+                    }
                 }
             }
             Act::Decline => self.pending = None,
@@ -951,14 +1178,27 @@ impl Worker {
         }
     }
 
-    /// What the threads have answered since the last time; a fetched thing that arrives after the
-    /// screen was closed is dropped (and its directory deleted).
+    /// What the threads have answered since the last time. After the screen was closed a fetched
+    /// thing is dropped (and its directory deleted) and what a work answered is kept for the next
+    /// time it is opened, after its list (REQ-1052).
     pub fn poll(&mut self) -> Vec<Reply> {
         let mut replies = Vec::new();
         while let Ok(done) = self.rx.try_recv() {
             if self.open {
                 self.pending = done.ask.or(self.pending.take());
+                let list = matches!(done.reply, Reply::Items { .. });
                 replies.push(done.reply);
+                if list {
+                    replies.extend(self.late.take());
+                }
+            } else {
+                match done.reply {
+                    Reply::Done(answer) => self.late = Some(Reply::Done(answer)),
+                    Reply::Asked(_) => {
+                        self.late = Some(Reply::Done(Ok(vec![CLOSED.to_owned()])));
+                    }
+                    Reply::Items { .. } | Reply::Step(_) => {}
+                }
             }
         }
         replies
@@ -1131,19 +1371,19 @@ mod tests {
                 "agent",
                 "installed",
                 Act::Off("agent".into()),
-                Running::Writing,
+                Running::Removing,
             ),
             (
                 "caveman",
                 "outdated",
                 Act::Off("caveman".into()),
-                Running::Writing,
+                Running::Removing,
             ),
             (
                 "caveman",
                 "modified",
                 Act::Off("caveman".into()),
-                Running::Writing,
+                Running::Removing,
             ),
             (
                 "caveman",
@@ -1187,12 +1427,14 @@ mod tests {
         s.busy = Some(Busy {
             running: Running::Writing,
             what: "escribiendo…".into(),
+            name: None,
         });
         assert_eq!(s.press(KeyCode::Esc), Act::None);
         assert_eq!(msg(&s), NO_CANCEL);
         s.busy = Some(Busy {
             running: Running::Reading,
             what: "leyendo".into(),
+            name: None,
         });
         assert_eq!(s.press(KeyCode::Esc), Act::Close);
         let mut idle = screen(&[]);
@@ -1239,7 +1481,7 @@ mod tests {
             assert_eq!(s.press(no), Act::Decline, "{no:?}");
             assert_eq!(s.mode, Mode::List);
             assert!(s.busy.is_none());
-            assert_eq!(msg(&s), "not installed: you did not say yes");
+            assert_eq!(msg(&s), "no se instaló: no dijiste que sí");
         }
     }
 
@@ -1312,25 +1554,18 @@ mod tests {
         ])));
         assert_eq!(act, Act::Read { check: false });
         assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Ok));
-        assert!(msg(&s).starts_with("installed caveman"));
+        assert_eq!(
+            msg(&s),
+            "instalado caveman (commit abc1234): 1 archivo en /x"
+        );
         s.reply(Reply::Done(Ok(vec![
             "kept /x/SKILL.md: not written by jw or edited".into(),
         ])));
         assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Info));
-        s.reply(Reply::Done(Err(
-            "caveman: installed by another tool, left alone".into(),
-        )));
-        assert_eq!(
-            s.msg,
-            Some((
-                Tone::Err,
-                "caveman: installed by another tool, left alone".into()
-            ))
-        );
         s.reply(Reply::Done(Err("interrupted".into())));
         assert_eq!(
             s.msg,
-            Some((Tone::Info, "interrupted: nothing installed".into()))
+            Some((Tone::Info, "interrumpido: no se instaló nada".into()))
         );
     }
 
@@ -1465,6 +1700,12 @@ mod tests {
 
     /// Run what the screen asks through a worker, and what that asks in turn, until every answer is in.
     fn pump(s: &mut Screen, w: &mut Worker, first: Act) {
+        pump_seen(s, w, first);
+    }
+
+    /// `pump`, and the steps the work told on the way.
+    fn pump_seen(s: &mut Screen, w: &mut Worker, first: Act) -> Vec<Event> {
+        let mut seen = Vec::new();
         let mut acts = vec![first];
         let mut in_flight = 0;
         let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -1477,11 +1718,20 @@ mod tests {
                 w.run(act);
             }
             if in_flight == 0 {
-                return;
+                return seen;
             }
             let replies = w.poll();
-            in_flight -= replies.len();
+            // A kept answer of a closed screen comes with the list and was not asked for now.
+            in_flight = in_flight.saturating_sub(
+                replies
+                    .iter()
+                    .filter(|r| !matches!(r, Reply::Step(_)))
+                    .count(),
+            );
             for r in replies {
+                if let Reply::Step(e) = &r {
+                    seen.push(e.clone());
+                }
                 let act = s.reply(r);
                 if act != Act::None {
                     acts.push(act);
@@ -1527,7 +1777,7 @@ mod tests {
         pump(&mut s, &mut w, act);
         assert!(world.skill_file().exists());
         assert!(
-            msg(&s).starts_with("installed caveman (commit "),
+            msg(&s).starts_with("instalado caveman (commit "),
             "{}",
             msg(&s)
         );
@@ -1563,10 +1813,444 @@ mod tests {
         }
         assert!(!world.skill_file().exists());
         assert!(
-            matches!(s.mode, Mode::Sheet(_)) || msg(&s) == "interrupted: nothing installed",
+            matches!(s.mode, Mode::Sheet(_)) || msg(&s) == "interrumpido: no se instaló nada",
             "{:?} {}",
             s.mode,
             msg(&s)
         );
+    }
+
+    /// The screen drawn at `now_ms` in plain text.
+    fn drawn(s: &Screen, now_ms: u64) -> String {
+        look::set(
+            contract::themes::get(contract::themes::DEFAULT_DARK, true).palette,
+            true,
+        );
+        let mut g = Grid::new(110, 30);
+        s.draw(&mut g, (0, 0, 110, 30), now_ms);
+        g.rows_plain().join("\n")
+    }
+
+    fn row_of<'a>(text: &'a str, name: &str) -> &'a str {
+        text.lines()
+            .find(|l| l.contains(&format!(" {name} ")) || l.contains(&format!("▸ {name}")))
+            .unwrap_or_else(|| panic!("no row of {name}\n{text}"))
+    }
+
+    #[test]
+    fn the_row_at_work_has_the_spinner_and_its_word_in_place_of_the_chip_and_the_chip_comes_back() {
+        let mut s = screen(&[("caveman", "installed")]);
+        goto(&mut s, "ponytail");
+        s.press(KeyCode::Char(' '));
+        s.reply(Reply::Asked(Sheet::Plugin {
+            plugin: "ponytail@ponytail".into(),
+            repo: "o/r".into(),
+            marketplace: "ponytail".into(),
+            commands: vec![],
+        }));
+        s.press(KeyCode::Char('y'));
+        let (a, b) = (drawn(&s, 0), drawn(&s, 110));
+        let (ra, rb) = (row_of(&a, "ponytail"), row_of(&b, "ponytail"));
+        assert!(
+            ra.contains("⠋ instalando…") && rb.contains("⠙ instalando…"),
+            "{ra}\n{rb}"
+        );
+        assert!(!ra.contains("disponible"), "the chip gives way: {ra}");
+        assert!(
+            row_of(&a, "caveman").contains("instalado"),
+            "another row keeps its chip"
+        );
+        for (name, state, act, word) in [
+            (
+                "caveman",
+                "available",
+                Act::On("caveman".into()),
+                "bajando…",
+            ),
+            ("agent", "installed", Act::Off("agent".into()), "quitando…"),
+            ("jw", "installed", Act::Off("jw".into()), "quitando…"),
+        ] {
+            let mut s = screen(&[(name, state)]);
+            goto(&mut s, name);
+            assert_eq!(s.press(KeyCode::Char(' ')), act);
+            let text = drawn(&s, 0);
+            assert!(row_of(&text, name).contains(word), "{name}\n{text}");
+        }
+        // The write of a sheet says it too, and the foot ends with the same words (REQ-1047).
+        let mut s = screen(&[]);
+        goto(&mut s, "caveman");
+        s.reply(Reply::Asked(sheet()));
+        s.press(KeyCode::Char('y'));
+        let text = drawn(&s, 0);
+        assert!(
+            row_of(&text, "caveman").contains("⠋ escribiendo…"),
+            "{text}"
+        );
+        assert!(
+            text.contains("⠋ escribiendo…   (no se puede cancelar · ya casi)"),
+            "{text}"
+        );
+        let later = drawn(&s, 110);
+        assert!(
+            later.contains("⠙ escribiendo…   (no se puede cancelar · ya casi)"),
+            "the foot's spinner turns: {later}"
+        );
+        // The answer ends it: the chip is back.
+        s.reply(Reply::Done(Ok(vec![
+            "installed caveman (commit abc1234): 1 file(s) in /x".into(),
+        ])));
+        s.reply(Reply::Items {
+            result: Ok((catalog(&[("caveman", "installed")]), vec![])),
+            checked: false,
+        });
+        assert!(row_of(&drawn(&s, 0), "caveman").contains("✓ instalado"));
+    }
+
+    #[test]
+    fn r_shows_revisando_on_every_installed_github_row_and_only_there() {
+        let mut s = screen(&[("caveman", "installed")]);
+        s.press(KeyCode::Char('r'));
+        let text = drawn(&s, 0);
+        assert!(row_of(&text, "caveman").contains("⠋ revisando…"), "{text}");
+        assert!(!row_of(&text, "agent").contains("revisando"), "{text}");
+        assert!(
+            text.contains("⠋ preguntando a GitHub por el último commit…"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_foot_follows_the_steps_the_work_tells_and_a_step_with_nothing_running_is_ignored() {
+        let mut s = screen(&[]);
+        s.reply(Reply::Step(Event::Locking));
+        assert!(s.busy.is_none(), "no work, no step");
+        goto(&mut s, "caveman");
+        s.press(KeyCode::Char(' '));
+        for (event, want) in [
+            (
+                Event::Fetching {
+                    url: "https://github.com/o/r".into(),
+                    branch: "HEAD".into(),
+                },
+                "⠋ bajando https://github.com/o/r (rama HEAD) a un temporal…   esc cancela",
+            ),
+            (
+                Event::Fetched {
+                    commit: "a".repeat(40),
+                    files: 1,
+                },
+                "⠋ bajado el commit aaaaaaa (1 archivo): preparando la hoja…   esc cancela",
+            ),
+        ] {
+            assert_eq!(s.reply(Reply::Step(event)), Act::None);
+            assert!(drawn(&s, 0).contains(want), "{want}\n{}", drawn(&s, 0));
+        }
+        s.reply(Reply::Asked(sheet()));
+        s.press(KeyCode::Char('y'));
+        for (event, want) in [
+            (
+                Event::Writing { files: 2 },
+                "⠋ escribiendo 2 archivos…   (no se puede cancelar · ya casi)",
+            ),
+            (
+                Event::Locking,
+                "⠋ guardando el lock de lo instalado…   (no se puede cancelar · ya casi)",
+            ),
+        ] {
+            s.reply(Reply::Step(event));
+            assert!(drawn(&s, 0).contains(want), "{want}\n{}", drawn(&s, 0));
+        }
+        let mut p = screen(&[]);
+        goto(&mut p, "ponytail");
+        p.press(KeyCode::Char(' '));
+        p.reply(Reply::Asked(Sheet::Plugin {
+            plugin: "ponytail@ponytail".into(),
+            repo: "o/r".into(),
+            marketplace: "m".into(),
+            commands: vec![],
+        }));
+        p.press(KeyCode::Char('y'));
+        p.reply(Reply::Step(Event::Running(
+            "$ claude plugin install ponytail@ponytail".into(),
+        )));
+        assert!(
+            drawn(&p, 0)
+                .contains("⠋ $ claude plugin install ponytail@ponytail…   (no se puede cancelar)"),
+            "{}",
+            drawn(&p, 0)
+        );
+    }
+
+    #[test]
+    fn a_failure_is_drawn_with_a_cross_and_its_reason_and_the_spinner_is_gone() {
+        let mut s = screen(&[]);
+        goto(&mut s, "caveman");
+        s.press(KeyCode::Char(' '));
+        s.reply(Reply::Done(Err(
+            "fatal: unable to access the repository".into()
+        )));
+        let text = drawn(&s, 0);
+        assert!(
+            text.contains("✗ fatal: unable to access the repository · no se instaló nada"),
+            "{text}"
+        );
+        assert!(!text.contains("bajando"), "{text}");
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Err));
+        // A refusal that is not an install says no more than it said.
+        let mut o = screen(&[]);
+        o.reply(Reply::Done(Err("the lock: it is read only".into())));
+        assert_eq!(msg(&o), "the lock: it is read only");
+    }
+
+    #[test]
+    fn what_another_tool_owns_is_information_with_the_way_out_and_a_modified_one_is_a_failure() {
+        let mut s = screen(&[("caveman", "other tool")]);
+        goto(&mut s, "caveman");
+        s.press(KeyCode::Char(' '));
+        s.reply(Reply::Done(Err(
+            "caveman: installed by another tool, left alone".into(),
+        )));
+        let bin = &identity::get().name;
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Info));
+        let text = msg(&s);
+        assert!(
+            text.starts_with(&format!(
+                "caveman: instalado por otra herramienta; {bin} no lo toca."
+            )),
+            "{text}"
+        );
+        assert!(text.contains("quita esa antes"), "{text}");
+        assert!(drawn(&s, 0).contains("· caveman: instalado por otra herramienta"));
+        s.reply(Reply::Done(Err(format!(
+            "caveman: not installed by {bin}, left alone"
+        ))));
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Info));
+        s.reply(Reply::Done(Err(format!(
+            "caveman: what {bin} wrote there was edited, left alone: move your changes away and run it again"
+        ))));
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Err));
+        assert!(msg(&s).starts_with("caveman: lo que"), "{}", msg(&s));
+    }
+
+    #[test]
+    fn every_line_the_library_says_has_a_spanish_form_with_its_tone() {
+        let bin = &identity::get().name;
+        for (line, tone, text) in [
+            (
+                "installed /h/skills/jw/SKILL.md",
+                Tone::Ok,
+                "instalado /h/skills/jw/SKILL.md".to_owned(),
+            ),
+            (
+                "unchanged /h/skills/jw/SKILL.md",
+                Tone::Info,
+                "sin cambios: /h/skills/jw/SKILL.md".into(),
+            ),
+            (
+                "unchanged caveman (commit abc1234)",
+                Tone::Info,
+                "caveman ya está en el commit abc1234: sin cambios".into(),
+            ),
+            (
+                "removed 2 file(s) of caveman",
+                Tone::Ok,
+                "quitado caveman (2 archivos)".into(),
+            ),
+            (
+                "removed /h/skills/jw/SKILL.md",
+                Tone::Ok,
+                "quitado /h/skills/jw/SKILL.md".into(),
+            ),
+            (
+                "kept caveman: it was edited",
+                Tone::Info,
+                "caveman: tiene cambios tuyos; no se borra lo que editaste".into(),
+            ),
+            (
+                "caveman is not installed",
+                Tone::Info,
+                "caveman no está instalado".into(),
+            ),
+            (
+                &format!("brain is built in: always available with {bin} role show brain"),
+                Tone::Info,
+                format!(
+                    "brain viene dentro de {bin}: siempre disponible con {bin} role show brain"
+                ),
+            ),
+            (
+                "brain is built in: it is always available, there is nothing to turn off",
+                Tone::Info,
+                format!("brain viene dentro de {bin}: no hay nada que quitar"),
+            ),
+            (
+                &format!(
+                    "{bin} does not uninstall plugins; to remove it run: claude plugin uninstall p@m"
+                ),
+                Tone::Info,
+                format!(
+                    "{bin} no desinstala plugins; para quitarlo corre: claude plugin uninstall p@m"
+                ),
+            ),
+            (
+                "interrupted: nothing installed",
+                Tone::Info,
+                "interrumpido: no se instaló nada".into(),
+            ),
+        ] {
+            assert_eq!(spanish(line, false), Some((tone, text)), "{line}");
+        }
+        let new = "/h/skills/jw/SKILL.md.new";
+        let kept = spanish(
+            &format!(
+                "kept /h/skills/jw/SKILL.md: not written by {bin} or edited; the new one is {new}"
+            ),
+            false,
+        )
+        .unwrap();
+        assert_eq!(kept.0, Tone::Info);
+        assert!(
+            kept.1.contains("se deja el tuyo") && kept.1.ends_with(new),
+            "{kept:?}"
+        );
+        // A plugin that ran says it was installed; one that was there already says so.
+        let ran = vec![
+            "$ claude plugin install p@m".to_owned(),
+            "plugins: p@m is installed".to_owned(),
+        ];
+        assert_eq!(result(&ran), (Tone::Ok, "p@m instalado".to_owned()));
+        assert_eq!(
+            result(&["plugins: p@m is installed".to_owned()]),
+            (Tone::Info, "p@m ya está instalado".to_owned())
+        );
+        // A line with no Spanish form is shown as the library says it.
+        assert_eq!(
+            result(&["something new".to_owned()]),
+            (Tone::Info, "something new".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_real_install_tells_where_it_fetches_the_commit_the_files_and_the_lock() {
+        let world = World::new();
+        let mut w = Worker::new(world.place.clone());
+        let mut s = Screen::new();
+        pump(&mut s, &mut w, Act::Read { check: false });
+        goto(&mut s, "caveman");
+        let act = s.press(KeyCode::Char(' '));
+        let seen = pump_seen(&mut s, &mut w, act);
+        assert!(
+            matches!(&seen[..], [Event::Fetching { url, .. }, Event::Fetched { files: 1, .. }]
+                if url.ends_with("/gh/juliusbrussee/caveman")),
+            "{seen:?}"
+        );
+        assert!(matches!(s.mode, Mode::Sheet(_)));
+        let act = s.press(KeyCode::Char('y'));
+        let seen = pump_seen(&mut s, &mut w, act);
+        assert_eq!(seen, [Event::Writing { files: 1 }, Event::Locking]);
+        assert!(s.busy.is_none());
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Ok));
+    }
+
+    #[test]
+    fn a_plugin_that_fails_keeps_its_command_whole_in_the_line_and_is_not_said_to_install_nothing()
+    {
+        let world = World::new();
+        std::fs::write(world.dir.path().join("install.fails"), "").unwrap();
+        let mut w = Worker::new(world.place.clone());
+        let mut s = Screen::new();
+        pump(&mut s, &mut w, Act::Read { check: false });
+        goto(&mut s, "ponytail");
+        let act = s.press(KeyCode::Char(' '));
+        pump(&mut s, &mut w, act);
+        let act = s.press(KeyCode::Char('y'));
+        let seen = pump_seen(&mut s, &mut w, act);
+        assert!(
+            seen.iter().any(|e| matches!(e, Event::Running(c) if c.ends_with("plugin install ponytail@ponytail"))),
+            "{seen:?}"
+        );
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Err));
+        let text = msg(&s);
+        assert!(
+            text.contains("plugin install ponytail@ponytail failed") && text.ends_with(": nope"),
+            "{text}"
+        );
+        assert!(s.busy.is_none());
+    }
+
+    #[test]
+    fn esc_during_the_download_says_interrupted_in_spanish() {
+        let mut s = screen(&[]);
+        goto(&mut s, "caveman");
+        s.press(KeyCode::Char(' '));
+        assert_eq!(s.press(KeyCode::Esc), Act::Cancel);
+        s.reply(Reply::Done(Err("interrupted: nothing installed".into())));
+        assert_eq!(msg(&s), "interrumpido: no se instaló nada");
+        assert!(drawn(&s, 0).contains("· interrumpido: no se instaló nada"));
+    }
+
+    #[test]
+    fn an_answer_that_comes_after_the_screen_was_closed_is_shown_when_it_is_opened_again() {
+        let world = World::new();
+        let mut w = Worker::new(world.place.clone());
+        // Close while an embedded skill is being written: the answer has no screen to go to.
+        w.run(Act::Read { check: false });
+        w.run(Act::On(identity::get().name.clone()));
+        w.run(Act::Close);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while w.late.is_none() {
+            assert!(w.poll().is_empty(), "nothing reaches a closed screen");
+            assert!(
+                std::time::Instant::now() < until,
+                "the worker did not answer"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Opened again: the list first, then what happened while it was closed.
+        let mut s = Screen::new();
+        pump(&mut s, &mut w, Act::Read { check: false });
+        assert!(w.late.is_none(), "it is said once");
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Ok));
+        assert!(msg(&s).starts_with("instalado "), "{}", msg(&s));
+        // A fetched thing that arrives after the close is dropped, and the line says so.
+        let mut w = Worker::new(world.place.clone());
+        w.tx.send(Done {
+            reply: Reply::Asked(sheet()),
+            ask: None,
+        })
+        .unwrap();
+        w.tx.send(Done {
+            reply: Reply::Step(Event::Locking),
+            ask: None,
+        })
+        .unwrap();
+        assert!(w.poll().is_empty());
+        let mut s = Screen::new();
+        pump(&mut s, &mut w, Act::Read { check: false });
+        assert_eq!(
+            msg(&s),
+            "no se instaló nada: cerraste la pantalla antes del sí"
+        );
+        assert!(w.pending.is_none());
+    }
+
+    #[test]
+    fn a_yes_with_nothing_held_answers_with_a_cross_and_does_not_stay_busy() {
+        let mut w = Worker::new(Place::here());
+        let mut s = screen(&[]);
+        goto(&mut s, "caveman");
+        s.reply(Reply::Asked(sheet()));
+        assert_eq!(s.press(KeyCode::Char('y')), Act::Apply);
+        assert!(s.busy.is_some());
+        w.open = true;
+        w.run(Act::Apply);
+        let replies = w.poll();
+        assert_eq!(replies.len(), 1);
+        for r in replies {
+            s.reply(r);
+        }
+        assert!(s.busy.is_none());
+        assert_eq!(s.msg.as_ref().map(|m| m.0), Some(Tone::Err));
+        assert!(msg(&s).starts_with("la hoja ya no está"), "{}", msg(&s));
     }
 }
