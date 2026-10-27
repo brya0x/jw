@@ -10,7 +10,7 @@ use super::skillset::confirm;
 use super::{Fail, Out, fail};
 
 /// The program of the plugins; found in the `PATH`.
-const CLAUDE: &str = "claude";
+pub(super) const CLAUDE: &str = "claude";
 
 /// The arguments of `claude` that install a plugin of `repo`'s marketplace, in order.
 fn commands(plugin: &str, repo: &str, marketplace_there: bool) -> Vec<Vec<String>> {
@@ -36,12 +36,12 @@ fn keys(json: &str, key: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// What `claude` prints for `args`, or why it could not.
-fn capture(args: &[&str]) -> Result<String, String> {
-    let shown = format!("{CLAUDE} {}", args.join(" "));
-    let out = Command::new(CLAUDE).args(args).output().map_err(|e| {
+/// What `claude` (the program `claude`) prints for `args`, or why it could not.
+fn capture(claude: &str, args: &[&str]) -> Result<String, String> {
+    let shown = format!("{claude} {}", args.join(" "));
+    let out = Command::new(claude).args(args).output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            format!("{CLAUDE} is not in the PATH: install it first")
+            format!("{claude} is not in the PATH: install it first")
         } else {
             format!("{shown}: {e}")
         }
@@ -53,49 +53,103 @@ fn capture(args: &[&str]) -> Result<String, String> {
     }
 }
 
-fn look(args: &[&str], key: &str) -> Out<Vec<String>> {
-    let text = capture(args).map_err(Fail::Error)?;
-    keys(&text, key).map_err(|e| Fail::Error(format!("{CLAUDE} {}: {e}", args.join(" "))))
+fn look(claude: &str, args: &[&str], key: &str) -> Out<Vec<String>> {
+    let text = capture(claude, args).map_err(Fail::Error)?;
+    keys(&text, key).map_err(|e| Fail::Error(format!("{claude} {}: {e}", args.join(" "))))
 }
 
 /// The ids (`<plugin>@<marketplace>`) of the installed plugins.
-pub(super) fn installed_ids() -> Out<Vec<String>> {
-    look(&["plugin", "list", "--json"], "id")
+pub(super) fn installed_ids(claude: &str) -> Out<Vec<String>> {
+    look(claude, &["plugin", "list", "--json"], "id")
+}
+
+/// What installing a plugin would do: its marketplace and the `claude` commands, in order.
+pub(crate) struct Offer {
+    pub plugin: String,
+    pub marketplace: String,
+    pub repo: String,
+    pub todo: Vec<Vec<String>>,
+}
+
+impl Offer {
+    /// The lines that say it (REQ-1004): the plugin, where from, what would run and the warning.
+    pub(super) fn lines(&self, claude: &str) -> Vec<String> {
+        let mut lines = vec![format!(
+            "plugin {} from github {} (marketplace {})",
+            self.plugin, self.repo, self.marketplace
+        )];
+        for c in &self.todo {
+            lines.push(format!("  would run: {claude} {}", c.join(" ")));
+        }
+        lines.push(
+            "this is code of a third party; it can run programs on your machine through its hooks"
+                .into(),
+        );
+        lines
+    }
+}
+
+/// What there is to ask: `None` when the plugin is installed already (REQ-1004).
+pub(super) fn prepare(claude: &str, plugin: &str, repo: &str) -> Out<Option<Offer>> {
+    if installed_ids(claude)?.iter().any(|i| i == plugin) {
+        return Ok(None);
+    }
+    let marketplace = plugin.split_once('@').map_or("", |(_, m)| m);
+    let marketplaces = look(claude, &["plugin", "marketplace", "list", "--json"], "name")?;
+    Ok(Some(Offer {
+        plugin: plugin.to_owned(),
+        marketplace: marketplace.to_owned(),
+        repo: repo.to_owned(),
+        todo: commands(plugin, repo, marketplaces.iter().any(|m| m == marketplace)),
+    }))
+}
+
+/// Run the commands of an offer after a yes (REQ-1005, REQ-1006). `quiet`: the screen's, with
+/// stdin closed and the output of `claude` captured, the first line of its stderr in the error.
+pub(super) fn run(claude: &str, offer: &Offer, quiet: bool, say: &mut dyn FnMut(String)) -> Out {
+    for c in &offer.todo {
+        say(format!("$ {claude} {}", c.join(" ")));
+        let mut cmd = Command::new(claude);
+        cmd.args(c);
+        let (ok, shown, tail) = if quiet {
+            let out = cmd
+                .output()
+                .map_err(|e| Fail::Error(format!("{claude} {}: {e}", c.join(" "))))?;
+            let tail = String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| format!(": {}", l.trim()))
+                .unwrap_or_default();
+            (out.status.success(), out.status.to_string(), tail)
+        } else {
+            let status = cmd
+                .status()
+                .map_err(|e| Fail::Error(format!("{claude} {}: {e}", c.join(" "))))?;
+            (status.success(), status.to_string(), String::new())
+        };
+        if !ok {
+            return fail(format!("{claude} {} failed ({shown}){tail}", c.join(" ")));
+        }
+    }
+    Ok(())
 }
 
 /// Say what would be installed and from where, ask, and run `claude plugin` for it (REQ-1004 to
 /// REQ-1006). A plugin that is installed is skipped.
 pub(super) fn on(plugin: &str, repo: &str, yes: bool) -> Out {
-    let installed = installed_ids()?;
-    if installed.iter().any(|i| i == plugin) {
+    let Some(offer) = prepare(CLAUDE, plugin, repo)? else {
         println!("plugins: {plugin} is installed");
         return Ok(());
+    };
+    for l in offer.lines(CLAUDE) {
+        println!("{l}");
     }
-    let marketplace = plugin.split_once('@').map_or("", |(_, m)| m);
-    let marketplaces = look(&["plugin", "marketplace", "list", "--json"], "name")?;
-    let todo = commands(plugin, repo, marketplaces.iter().any(|m| m == marketplace));
-    println!("plugin {plugin} from github {repo} (marketplace {marketplace})");
-    for c in &todo {
-        println!("  would run: {CLAUDE} {}", c.join(" "));
-    }
-    println!(
-        "this is code of a third party; it can run programs on your machine through its hooks"
-    );
     if !confirm(yes)? {
         println!("not installed: you did not say yes");
         return Ok(());
     }
-    for c in &todo {
-        println!("$ {CLAUDE} {}", c.join(" "));
-        let status = Command::new(CLAUDE)
-            .args(c)
-            .status()
-            .map_err(|e| Fail::Error(format!("{CLAUDE} {}: {e}", c.join(" "))))?;
-        if !status.success() {
-            return fail(format!("{CLAUDE} {} failed ({status})", c.join(" ")));
-        }
-    }
-    Ok(())
+    run(CLAUDE, &offer, false, &mut |l| println!("{l}"))
 }
 
 #[cfg(test)]

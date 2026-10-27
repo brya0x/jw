@@ -148,6 +148,9 @@ impl Drop for Work {
 struct Job {
     work: Work,
     stop: Arc<AtomicBool>,
+    /// The caller owns the terminal (the skillset screen): no signal handlers, no output of the
+    /// children on it, and what `git` said on stderr comes back in the error (RISK-174, RISK-175).
+    quiet: bool,
 }
 
 impl Job {
@@ -160,6 +163,16 @@ impl Job {
         Ok(Job {
             work: Work::make(keep)?,
             stop,
+            quiet: false,
+        })
+    }
+
+    /// A job that a flag of the caller stops, with no handler of signals (REQ-1034, REQ-1035).
+    fn cancellable(stop: Arc<AtomicBool>) -> Result<Job, String> {
+        Ok(Job {
+            work: Work::make(false)?,
+            stop,
+            quiet: true,
         })
     }
 
@@ -179,14 +192,40 @@ impl Job {
         }
         let program = cmd.get_program().to_string_lossy().into_owned();
         cmd.stdin(Stdio::null()).process_group(0);
+        if self.quiet {
+            cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+        }
         let mut child = cmd
             .spawn()
             .map_err(|e| Fail::Error(format!("cannot run {program}: {e}")))?;
+        // A reader of its own, so a full pipe cannot stop the child while this loop waits for it.
+        let reader = child.stderr.take().map(|mut s| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = std::io::Read::read_to_string(&mut s, &mut text);
+                text
+            })
+        });
+        let last_line = |reader: Option<std::thread::JoinHandle<String>>| {
+            reader
+                .and_then(|t| t.join().ok())
+                .and_then(|t| {
+                    t.lines()
+                        .rev()
+                        .find(|l| !l.trim().is_empty())
+                        .map(|l| l.trim().to_owned())
+                })
+                .map(|l| format!(": {l}"))
+                .unwrap_or_default()
+        };
         loop {
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => return Ok(()),
                 Ok(Some(status)) => {
-                    return Err(Fail::Error(format!("{program} failed ({status})")));
+                    return Err(Fail::Error(format!(
+                        "{program} failed ({status}){}",
+                        last_line(reader)
+                    )));
                 }
                 Ok(None) => {}
                 Err(e) => return Err(Fail::Error(format!("{program}: {e}"))),
@@ -260,7 +299,26 @@ pub(crate) fn checkout(
     git_ref: Option<&str>,
     allow_file: bool,
 ) -> Result<(Checkout, String), String> {
-    let job = Job::start(false)?;
+    checkout_with(Job::start(false)?, url, git_ref, allow_file)
+}
+
+/// `checkout` for a caller that owns the terminal: `cancel` set from anywhere ends the fetch, the
+/// directory is deleted and the error is `interrupted`; no handler of signals is registered (REQ-1034).
+pub(crate) fn checkout_cancellable(
+    url: &str,
+    git_ref: Option<&str>,
+    allow_file: bool,
+    cancel: Arc<AtomicBool>,
+) -> Result<(Checkout, String), String> {
+    checkout_with(Job::cancellable(cancel)?, url, git_ref, allow_file)
+}
+
+fn checkout_with(
+    job: Job,
+    url: &str,
+    git_ref: Option<&str>,
+    allow_file: bool,
+) -> Result<(Checkout, String), String> {
     let fetched = job.fetch(url, git_ref, allow_file);
     if let Err(f) = fetched {
         return Err(match f {
