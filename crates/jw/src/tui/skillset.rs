@@ -314,6 +314,9 @@ fn sheet_lines(sheet: &Sheet) -> Vec<(String, Style2)> {
 /// What the CLI says when nobody said yes.
 const NOT_SAID_YES: &str = "not installed: you did not say yes";
 
+/// What is said when the screen was closed before the yes.
+const CLOSED: &str = "not installed: the screen was closed";
+
 fn archivos(n: usize) -> String {
     format!("{n} archivo{}", if n == 1 { "" } else { "s" })
 }
@@ -418,7 +421,8 @@ fn spanish(line: &str, ran: bool) -> Option<(Tone, String)> {
         ));
     }
     match line {
-        "interrupted: nothing installed" => info("interrumpido: no se instaló nada".to_owned()),
+        // The fetch ends with a bare `interrupted` when the flag was up before it began.
+        l if l.starts_with("interrupted") => info("interrumpido: no se instaló nada".to_owned()),
         NOT_SAID_YES => info("no se instaló: no dijiste que sí".to_owned()),
         CLOSED => info("no se instaló nada: cerraste la pantalla antes del sí".to_owned()),
         _ => None,
@@ -447,9 +451,6 @@ fn result(lines: &[String]) -> (Tone, String) {
 /// is (REQ-1050), anything else is `✗` with the reason, and says nothing was installed when the work
 /// was an install that writes nothing until it ends (REQ-1024).
 fn failure(why: &str, installing: bool) -> (Tone, String) {
-    if why.starts_with("interrupted") {
-        return (Tone::Info, "interrumpido: no se instaló nada".to_owned());
-    }
     spanish(why, false).unwrap_or_else(|| {
         let more = if installing {
             " · no se instaló nada"
@@ -459,9 +460,6 @@ fn failure(why: &str, installing: bool) -> (Tone, String) {
         (Tone::Err, format!("{why}{more}"))
     })
 }
-
-/// What is said when the screen was closed before the yes.
-const CLOSED: &str = "not installed: the screen was closed";
 
 fn rank(kind: &str) -> usize {
     GROUPS
@@ -2236,7 +2234,7 @@ mod tests {
 
     #[test]
     fn a_yes_with_nothing_held_answers_with_a_cross_and_does_not_stay_busy() {
-        let mut w = Worker::new(Place::here());
+        let mut w = Worker::new(World::new().place);
         let mut s = screen(&[]);
         goto(&mut s, "caveman");
         s.reply(Reply::Asked(sheet()));
