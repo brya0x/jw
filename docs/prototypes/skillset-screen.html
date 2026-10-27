@@ -17,7 +17,7 @@ p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12
 .term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
 .c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
 .c-sel{background:var(--sel)}.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
-.c-chip{background:var(--green);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}
+.c-chip{background:var(--green);color:var(--bg);font-weight:700}.c-chipr{background:var(--red);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}
 .ctl{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0;align-items:flex-start}
 .ctl fieldset{border:1px solid #2f3440;border-radius:8px;padding:6px 10px 8px;margin:0;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
 .ctl fieldset.dec{flex-direction:column;align-items:flex-start;gap:2px;min-width:230px;max-width:330px}
@@ -76,6 +76,11 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
     <label><input type="radio" name="words" data-o="words" value="es" checked> <span><b class="rec">español en la pantalla</b> (como el resto de la TUI: «descartar», «cancela»); el CLI sigue en inglés (RAT-174) y se ve tal cual abajo (recomendado)</span></label>
     <label><input type="radio" name="words" data-o="words" value="en"> <span>las palabras del CLI también en la pantalla (<code>other tool</code>, <code>built-in</code>)</span></label>
   </fieldset>
+  <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el aviso al terminar un trabajo (OPEN-103)</legend>
+    <label><input type="radio" name="notice" data-o="notice" value="box" checked> <span><b class="rec">un cuadro de una línea</b> en la fila bajo el título, a la derecha, 2,2 s y se va; del color del resultado (<span class="c-green">✓</span> verde, <span class="c-yellow">·</span> amarillo, <span class="c-red">✗</span> rojo). La línea de abajo conserva el resultado hasta la próxima acción. Dibujo nuevo: una fila de la rejilla, ninguna tecla (recomendado: es lo que se pidió)</span></label>
+    <label><input type="radio" name="notice" data-o="notice" value="line"> <span>sin dibujo nuevo: la propia línea de resultado de abajo se resalta 2,2 s (fondo del color del resultado) y vuelve a su color</span></label>
+    <label><input type="radio" name="notice" data-o="notice" value="none"> <span>ninguno: solo la línea de abajo, fija (lo que hace la pantalla hoy)</span></label>
+  </fieldset>
 </div>
 <p class="imp" id="imp"></p>
 
@@ -132,10 +137,12 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>«Otra herramienta»</b> es lo que hay hoy en tu máquina con caveman: un enlace de la herramienta <code>skills</code> (<code>../../.agents/skills/caveman</code>) o una carpeta que jw no escribió (RISK-174). jw no la toca y la fila no tiene acción; para usar la instalación de jw hay que quitar esa antes, con la herramienta que la puso.</li>
   <li><b>«Modificado»</b>: lo que jw escribió tiene cambios de la persona. jw no lo pisa: actualizar se niega y quitar solo borra lo que no se editó.</li>
   <li><b>Esto exige partir la biblioteca</b> (para el spec): hoy <code>on</code> baja, enseña y pregunta leyendo la entrada estándar de una vez. La pantalla necesita «preparar» (bajar y devolver el plan: commit, archivos, aviso) y «aplicar» (escribir y anotar el lock) como dos llamadas; el CLI las une.</li>
+  <li><b>El aviso al terminar</b> (OPEN-103, lo pedido el 2026-10-27): cuando un trabajo acaba (instalar, quitar, revisar, cancelar, decir que no a la hoja), su resultado sale además en un cuadro de una línea en la fila bajo el título, 2,2 s (lo que dura el toast de esta página), y se va solo; el resultado de abajo no se mueve. Teclas, <kbd>u</kbd> sin nada que actualizar y mover el cursor no lo disparan. No es el <code>toast</code> flotante de esta página (ese es de HTML; solo lo usan <kbd>c</kbd> y el teléfono): este se dibuja en la rejilla de la terminal.</li>
 </ul>
 
 <h2>Lo que no pude verificar</h2>
 <ul class="note">
+  <li>El aviso: no probé con una terminal real cuánto se nota 2,2 s ni si la fila bajo el título está libre en la TUI (allí la fila de arriba lleva «GitHub revisado» a la derecha y la de abajo el título «Skills»); la posición exacta del cuadro es una propuesta de este prototipo.</li>
   <li>Probé el prototipo con un DOM falso en node (las rutas de teclas y los estados) y con Chrome sin cabeza (que la página carga y pinta); no lo recorrí a mano con ratón y teclado en una ventana, y no es la TUI real: no hay nada de Rust escrito. Las teclas libres (<kbd>i</kbd>) salen de la tabla <code>key_of</code> de <code>tui.rs</code>; no probé que <kbd>i</kbd> no choque con la ayuda ni con el visor.</li>
   <li>Los textos de error de GitHub (<code>a link, refused</code>, <code>more than 200 files or 5 MB: refused</code>, <code>the repository has no …</code>) salen de <code>github.rs</code>; el de «sin red» es el de <code>git</code> de ejemplo. El commit, los bytes y el contenido de caveman son inventados (no consulté el repo real).</li>
   <li>No ejecuté el binario: la tabla de <code>ls</code> sale de los <code>format!</code> del código, no de una captura. No probé que <code>claude plugin list --json</code> sea local del todo (lo asumo).</li>
@@ -146,8 +153,8 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 <script>
 const COLS=108,ROWS=27,$=id=>document.getElementById(id);
 const HOME='/Users/ana',OLD='9b1e04a7c3d58f20e1b6a47d09c2f5e83b71d460',NEW='a41f9c27e0b3d85c6f1a02e94b7d3c58e1f0a926';
-const opt={loc:'screen',keys:'space',conf:'always',state:'key',run:'inproc',phone:'none',words:'es'};
-const S={cur:0,mode:'nav',busy:null,msg:null,sheet:null,checked:null,seen:{},jobs:[],log:[],tick:0,t:null};
+const opt={loc:'screen',keys:'space',conf:'always',state:'key',run:'inproc',phone:'none',words:'es',notice:'box'};
+const S={cur:0,mode:'nav',busy:null,msg:null,sheet:null,checked:null,seen:{},jobs:[],log:[],tick:0,t:null,notice:null,fromWork:false};
 const ITEMS=[
  {n:'jw',k:'skill',src:'embedded',d:'drive the other workspaces and agents of the session'},
  {n:'jw-tasks',k:'skill',src:'embedded',d:"turn a plan into the workspace's task list and work it to the end"},
@@ -177,15 +184,22 @@ function load(){
   if(sc==='clean'){g('jw').st=g('jw-tasks').st='installed';g('agent').st='outdated'}
   if(['installed','outdated','modified'].includes(sc)){['jw','jw-tasks','agent'].forEach(n=>g(n).st='installed');const c=g('caveman');c.st=sc==='modified'?'modified':'installed';c.commit=OLD}
   if(sc==='outdated')$('remote').checked=true;
-  S.cur=0;S.mode='nav';S.busy=null;S.sheet=null;S.checked=null;S.seen={};S.jobs=[];S.log=[];
+  S.cur=0;S.mode='nav';S.busy=null;S.sheet=null;S.checked=null;S.seen={};S.jobs=[];S.log=[];S.notice=null;S.fromWork=false;
   clog('$ claude plugin list --json   (lo corre ls al abrir: un proceso local, sin red)','c-dim');
   say('','Abrí la pantalla: no se tocó la red.','');
   if(opt.state==='open')check(true);
   render();
 }
-function say(kind,es,en){S.msg={kind,es,en:en||es}}
+/* The notice (OPEN-103): a result that comes after a work (`cmd` marks its start) is also said for 2.2 s. */
+function say(kind,es,en){
+  S.msg={kind,es,en:en||es};
+  if(!S.fromWork)return;
+  S.fromWork=false;S.notice={until:Date.now()+2200,m:S.msg};
+  setTimeout(()=>{if(S.notice&&Date.now()>=S.notice.until){S.notice=null;render()}},2250);
+}
+const noticeOn=()=>opt.notice!=='none'&&S.notice&&Date.now()<S.notice.until;
 function clog(t,c){S.log.push([t,c||'']);if(S.log.length>40)S.log.shift()}
-function cmd(t){clog('$ '+t,'c-blue')}
+function cmd(t){clog('$ '+t,'c-blue');S.fromWork=true}
 
 /* ---- the plan of an install: what `on` shows after it fetched ---- */
 function plan(it){
@@ -384,10 +398,17 @@ function draw(){
   T.put(ROWS-3,0,'─'.repeat(COLS),'c-dim');
   const m=S.msg;
   if(S.busy){const b=S.busy;T.put(ROWS-2,2,spin()+' '+{fetch:`bajando github.com/${b.it.repo} a un temporal…`,check:'preguntando a GitHub por el último commit…',write:'escribiendo…',run:'claude plugin install…'}[b.kind]+'   esc cancela'+(b.kind==='write'?' (ya casi)':''),'c-blue')}
-  else if(m)T.put(ROWS-2,2,clip(opt.words==='en'?m.en:m.es,COLS-4),{ok:'c-green',err:'c-red',info:'c-yellow'}[m.kind]||'c-dim');
+  else if(m){
+    const txt=clip(opt.words==='en'?m.en:m.es,COLS-4),flash=noticeOn()&&opt.notice==='line'&&S.notice.m===m;
+    T.put(ROWS-2,2,flash?' '+txt+' ':txt,flash?({ok:'c-chip',err:'c-chipr',info:'c-chipy'}[m.kind]||'c-sel'):({ok:'c-green',err:'c-red',info:'c-yellow'}[m.kind]||'c-dim'));
+  }
   T.put(ROWS-1,1,clip(S.mode==='sheet'?'y instalar · n, ↵ o esc no instalar':S.mode==='ficha'?'esc cierra la ficha':legend(),COLS-2),'c-dim');
   if(S.mode==='sheet')drawSheet();
   if(S.mode==='ficha')drawFicha(it);
+  if(noticeOn()&&opt.notice==='box'){
+    const m=S.notice.m,t=' '+({ok:'✓',err:'✗'}[m.kind]||'·')+' '+clip((opt.words==='en'?m.en:m.es).replace(/^[✓✗·] /,''),62)+' ';
+    T.put(1,COLS-t.length-1,t,{ok:'c-chip',err:'c-chipr',info:'c-chipy'}[m.kind]||'c-sel');
+  }
 }
 function drawSheet(){
   const p=S.sheet,it=p.it,L=[],w=104;
