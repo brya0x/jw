@@ -1907,7 +1907,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - OPEN-100 The phone: a read-only list of the skillset, and any `on`/`off` from it. Not built (RAT-179). A list needs a node of the contract, a daemon that reads `~/.claude`, and the name of whatever command it gets in the bridge's refused list if it ever installs; an install is not recommended at all.
 - OPEN-101 A role of the skillset in this screen: `↵` on a role shows its text (`jw role show`) and taking a role from a screen is OPEN-91's; the card says only the command.
 - OPEN-102 A log of what a work did (where it fetched from, the commit, each file, the `$ claude …` commands that ran), drawn in the screen and opened with a key: the prototype has it only in the page beside the terminal (`#log`), so it needs a drawing and a key (REQ-1034) and a prototype first. The user asked for it on 2026-10-27 and put it out of N186. Until then a failed plugin's command is in the `✗` line (REQ-1053).
-- OPEN-103 A notice of a few seconds when a work ends (the prototype's toast, `:460`, 2.2 s, is only called by `c`): asked for on 2026-10-27, it needs a drawing and its prototype first.
+- OPEN-103 A notice of a few seconds when a work ends (the prototype's toast, `:460`, 2.2 s, is only called by `c`): asked for on 2026-10-27, it needs a drawing and its prototype first. The prototype now has it as the decision «el aviso al al terminar un trabajo» (`docs/prototypes/skillset-screen.html`: a one-line box under the title for 2.2 s, or the result line highlighted, or none), waiting for the user's approval.
 - OPEN-104 The loop of the client while the daemon is lost (RISK-180): the skillset screen could keep drawing and taking keys; not asked for.
 
 ## Corrections
