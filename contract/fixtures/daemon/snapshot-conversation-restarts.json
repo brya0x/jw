@@ -1,0 +1,57 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000e2",
+    "type": "conversation",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 3,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "session": "2cab1f5a-3d20-4cd2-9d13-485b39b26147",
+    "name": "arregla el test que falla",
+    "accent": "blue",
+    "model": "sonnet-5.5",
+    "effort": "high",
+    "mode": "manual",
+    "status": "dead",
+    "first": 0,
+    "items": [
+      {
+        "t": "user",
+        "text": "arregla el test que falla"
+      },
+      {
+        "t": "text",
+        "text": "Era un orden de las claves en el JSON; ya pasa."
+      },
+      {
+        "t": "result",
+        "ms": 12000,
+        "tools": 3,
+        "cost": 40000
+      },
+      {
+        "t": "divider",
+        "text": "el daemon se reinició · 11:08",
+        "kind": "restart"
+      },
+      {
+        "t": "user",
+        "text": "sigue por donde ibas"
+      },
+      {
+        "t": "divider",
+        "text": "el daemon se reinició 20 veces · la última a las 11:41",
+        "kind": "restart",
+        "count": 20
+      }
+    ],
+    "queue": [],
+    "tasks": [],
+    "todos": [],
+    "artifacts": [],
+    "commands": [],
+    "cost": 0
+  }
+}
