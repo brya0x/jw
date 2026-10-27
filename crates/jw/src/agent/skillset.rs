@@ -2,8 +2,6 @@
 //! removes (`off`); activating installs for real (N184b, REQ-1008 to REQ-1022). It reads files and
 //! runs `git` and `claude`, so it works with no daemon.
 
-#![allow(dead_code)] // the screen (N185b) is the caller of what it asks for
-
 mod catalog;
 mod github;
 mod lock;
@@ -77,6 +75,7 @@ impl Place {
         }
     }
 
+    #[cfg(test)]
     /// A place of one's own: a Claude configuration, a roles folder, the lock, the person's file,
     /// the base of GitHub (a folder of repositories, `file` protocol) and a `claude` program.
     pub(crate) fn at(
@@ -1023,7 +1022,7 @@ pub(crate) fn off(place: &Place, name: &str) -> Result<Vec<String>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1162,9 +1161,9 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::Ordering;
 
-    struct World {
-        dir: tempfile::TempDir,
-        place: Place,
+    pub(crate) struct World {
+        pub(crate) dir: tempfile::TempDir,
+        pub(crate) place: Place,
     }
 
     fn git(dir: &Path, args: &[&str]) -> String {
@@ -1193,7 +1192,7 @@ mod tests {
     }
 
     impl World {
-        fn new() -> World {
+        pub(crate) fn new() -> World {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path();
             std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -1236,7 +1235,7 @@ mod tests {
             self.dir.path().join("gh/juliusbrussee/caveman")
         }
 
-        fn skill_file(&self) -> PathBuf {
+        pub(crate) fn skill_file(&self) -> PathBuf {
             self.dir.path().join("claude/skills/caveman/SKILL.md")
         }
 

@@ -52,6 +52,7 @@ mod select;
 mod settings;
 mod shell;
 mod side;
+mod skillset;
 mod split;
 mod tasks;
 mod tree;
@@ -442,6 +443,8 @@ pub enum Key {
     Right,
     Enter,
     Avisos,
+    /// The skillset screen: the catalog of skills, roles and plugins, and what activates them (`i`).
+    Skillset,
     NewPane,
     /// The menu of programs a new panel can start (`N`).
     NewProgram,
@@ -886,6 +889,9 @@ pub struct View {
     diff: Option<Changes>,
     /// The tasks view that takes the place of the workspace's panels, and the `tasks` nodes read (N180f2).
     tasks: Option<tasks::TasksView>,
+    /// The skillset screen while it is open, and what it asks the loop to do (REQ-1023).
+    skillset: Option<skillset::Screen>,
+    skillset_acts: Vec<skillset::Act>,
     task_docs: HashMap<String, contract::tasks::Tasks>,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
@@ -996,6 +1002,8 @@ impl View {
             prs_asks: Vec::new(),
             diff: None,
             tasks: None,
+            skillset: None,
+            skillset_acts: Vec::new(),
             task_docs: HashMap::new(),
             project: None,
             project_asks: Vec::new(),
@@ -1261,6 +1269,58 @@ impl View {
             }
             tasks::Outcome::Close => After::Continue,
             tasks::Outcome::File(path) => self.open_file(&path, None),
+        }
+    }
+
+    /// `i`: the skillset screen over the whole client, reading the catalog (REQ-1023).
+    fn open_skillset(&mut self) -> After {
+        self.skillset = Some(skillset::Screen::new());
+        self.skillset_acts
+            .push(skillset::Act::Read { check: false });
+        After::Continue
+    }
+
+    /// A key while the skillset screen is shown: every key is the screen's, a chord with Ctrl or Alt
+    /// is none and no key reaches a pane (REQ-1026).
+    fn skillset_key(&mut self, ev: KeyEvent) -> After {
+        let Some(mut screen) = self.skillset.take() else {
+            return After::Continue;
+        };
+        if ev
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            self.skillset = Some(screen);
+            return After::Continue;
+        }
+        match screen.press(ev.code) {
+            skillset::Act::None => {}
+            skillset::Act::Close => {
+                self.skillset_acts.push(skillset::Act::Close);
+                return After::Continue;
+            }
+            skillset::Act::Copy(text) => {
+                self.skillset = Some(screen);
+                return After::Copy(text);
+            }
+            act => self.skillset_acts.push(act),
+        }
+        self.skillset = Some(screen);
+        After::Continue
+    }
+
+    /// What the skillset screen wants done, for the loop to give to its worker (REQ-1035).
+    pub fn take_skillset_acts(&mut self) -> Vec<skillset::Act> {
+        std::mem::take(&mut self.skillset_acts)
+    }
+
+    /// What the worker answered; a screen that was closed meanwhile ignores it.
+    pub fn skillset_replied(&mut self, reply: skillset::Reply) {
+        if let Some(screen) = self.skillset.as_mut() {
+            let act = screen.reply(reply);
+            if act != skillset::Act::None {
+                self.skillset_acts.push(act);
+            }
         }
     }
 
@@ -3749,6 +3809,9 @@ impl View {
             self.help = false;
             return After::Continue;
         }
+        if self.skillset.is_some() {
+            return self.skillset_key(ev);
+        }
         if self.viewer_overlay() {
             if self.tree_on && self.tree_focus {
                 return self.tree_key(ev);
@@ -3921,6 +3984,10 @@ impl View {
     /// or typed into whatever has the keyboard, a line break being Enter.
     pub fn paste(&mut self, text: &str) -> After {
         self.flash.clear();
+        // A paste must never become the keys of the sheet (`y` installs).
+        if self.skillset.is_some() {
+            return After::Continue;
+        }
         if self.viewer_overlay() || self.viewer_typing() {
             return After::Continue;
         }
@@ -4183,6 +4250,7 @@ impl View {
                 Level::Terminal => {}
             },
             (Mode::Workspaces, Key::Changes) => return self.toggle_diff(),
+            (Mode::Workspaces, Key::Skillset) => return self.open_skillset(),
             (Mode::Workspaces, Key::Tasks) if level != Level::Terminal => {
                 return self.toggle_tasks();
             }
@@ -4907,7 +4975,7 @@ impl View {
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
         // The tasks view covers the panels: a click does not reach what it hides (REQ-951).
-        if self.tasks.is_some() {
+        if self.tasks.is_some() || self.skillset.is_some() {
             return After::Continue;
         }
         if self.help {
@@ -5075,7 +5143,7 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if self.tasks.is_some() {
+        if self.tasks.is_some() || self.skillset.is_some() {
             return After::Continue;
         }
         if self.viewer_gets(x, y)
@@ -6595,11 +6663,17 @@ impl View {
             .filter(|_| self.viewer_overlay() || self.viewer_typing())
             .map(Viewing::hint);
         let tasks_hint = self.tasks.as_ref().map(tasks::TasksView::hint);
+        let skillset_hint = self.skillset.as_ref().map(skillset::Screen::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             _ if tasks_hint.is_some() => (
                 " TAREAS ",
                 look::blue(),
                 tasks_hint.as_deref().unwrap_or_default(),
+            ),
+            _ if skillset_hint.is_some() => (
+                " SKILLSET ",
+                look::blue(),
+                skillset_hint.as_deref().unwrap_or_default(),
             ),
             _ if viewer_hint.is_some() => (
                 " LEER ",
@@ -6798,6 +6872,10 @@ impl View {
         }
         if let Some(menu) = &self.launcher {
             menu.draw(&mut g, (px, 1, pw, rows.saturating_sub(2)), &self.programs);
+        }
+        // The skillset takes the whole screen but the status bar.
+        if let Some(screen) = &self.skillset {
+            screen.draw(&mut g, (0, 0, cols, rows.saturating_sub(1)), self.now_ms);
         }
         if let Some(question) = &self.manage {
             question.draw(
@@ -7364,6 +7442,7 @@ const STOP: &str = "■ ^C";
 const SCROLL_STEP: usize = 3;
 /// The keys of each level, for the box `?` opens. Only what the client does is listed.
 const WORKSPACE_KEYS: &[(&str, &str)] = &[
+    ("i", "skillset: ver y activar skills, roles y plugins"),
     ("j k", "mover por los workspaces"),
     ("↵", "entrar al workspace; en un grupo, plegarlo o abrirlo"),
     (
@@ -7408,6 +7487,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("q", "salir (los paneles siguen)"),
 ];
 const PANEL_KEYS: &[(&str, &str)] = &[
+    ("i", "skillset: ver y activar skills, roles y plugins"),
     ("h j k l", "ir al panel de ese lado"),
     ("tab", "el panel siguiente"),
     ("↵", "escribir en el panel"),
@@ -7862,6 +7942,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('-') => Key::SplitCol,
         KeyCode::Enter => Key::Enter,
         KeyCode::Char('a') => Key::Avisos,
+        KeyCode::Char('i') => Key::Skillset,
         KeyCode::Char('n') => Key::NewPane,
         KeyCode::Char('N') => Key::NewProgram,
         KeyCode::Char('d') => Key::Changes,
@@ -8877,6 +8958,7 @@ pub fn run() -> Result<(), String> {
     view.set_programs(Programs::read());
     view.set_os_dark(settings::os_is_dark());
     let mut phone_worker: Option<phone::Worker> = None;
+    let mut skills = skillset::Worker::here();
     let (sync_tx, sync_rx) = std::sync::mpsc::channel::<Reply>();
     let (work_tx, work_rx) = std::sync::mpsc::channel::<Worked>();
     let (files_tx, files_rx) = std::sync::mpsc::channel::<FilesReply>();
@@ -9010,6 +9092,12 @@ pub fn run() -> Result<(), String> {
         for ask in view.take_prs_asks() {
             spawn_prs(ask, prs_tx.clone());
         }
+        for act in view.take_skillset_acts() {
+            skills.run(act);
+        }
+        for reply in skills.poll() {
+            view.skillset_replied(reply);
+        }
         view.ask_older();
         view.ask_sent();
         for ask in view.take_file_asks() {
@@ -9045,7 +9133,9 @@ pub fn run() -> Result<(), String> {
                 Event::Key(ev) if ev.kind == KeyEventKind::Press => view.press_key(ev),
                 Event::Paste(text) => view.paste(&text),
                 // what the tasks view covers is not reached by the mouse either (selecting, dragging)
-                Event::Mouse(_) if view.tasks.is_some() => After::Continue,
+                Event::Mouse(_) if view.tasks.is_some() || view.skillset.is_some() => {
+                    After::Continue
+                }
                 Event::Mouse(m) => {
                     let (cols, rows) = (cols as usize, rows as usize);
                     let (x, y) = (m.column as usize, m.row as usize);
@@ -13234,6 +13324,114 @@ mod tests {
         );
         v.set_programs(Programs::parse(PROGRAMS));
         assert!(!v.plain(120, 30).contains("se sigue con la lista anterior"));
+    }
+
+    // ---- the skillset screen (N185b; REQ-1023, REQ-1026, REQ-1035, REQ-1037)
+
+    fn some_items() -> skillset::Reply {
+        let item = |name: &str, kind: &'static str, state: &'static str, source: &str| {
+            crate::agent::skillset::Item {
+                name: name.into(),
+                kind,
+                state,
+                source: source.into(),
+                description: String::new(),
+                yours: false,
+                commit: None,
+            }
+        };
+        skillset::Reply::Items {
+            result: Ok((
+                vec![
+                    item("jw", "skill", "installed", "embedded"),
+                    item(
+                        "caveman",
+                        "skill",
+                        "other tool",
+                        "github juliusbrussee/caveman",
+                    ),
+                    item("brain", "role", "built-in", "embedded"),
+                ],
+                vec![],
+            )),
+            checked: false,
+        }
+    }
+
+    #[test]
+    fn i_opens_the_skillset_screen_asking_for_the_list_and_esc_leaves_it() {
+        let mut v = fixture_view();
+        assert_eq!(tap(&mut v, 'i'), After::Continue);
+        assert!(v.skillset.is_some());
+        assert_eq!(
+            v.take_skillset_acts(),
+            [skillset::Act::Read { check: false }],
+            "opening only asks; the worker of the loop does the reading"
+        );
+        v.skillset_replied(some_items());
+        let t = v.plain(120, 30);
+        for want in [
+            "skillset",
+            "Skills",
+            "▸ jw",
+            "✓ instalado",
+            "⇄ otra herramienta",
+            "● incluido",
+            "SKILLSET",
+        ] {
+            assert!(t.contains(want), "{want}\n{t}");
+        }
+        v.press_key(plain(KeyCode::Esc));
+        assert!(v.skillset.is_none());
+        assert_eq!(v.take_skillset_acts(), [skillset::Act::Close]);
+        assert!(
+            !v.plain(120, 30).contains("Plugins"),
+            "the workspaces are back"
+        );
+    }
+
+    #[test]
+    fn while_the_skillset_is_open_its_keys_are_the_only_ones_and_a_paste_is_not_keys() {
+        let mut v = fixture_view();
+        tap(&mut v, 'i');
+        v.skillset_replied(some_items());
+        let _ = v.take_skillset_acts();
+        // The keys of the workspaces mean nothing here: not Avisos, not quit, not a new pane.
+        for c in ['a', 'q', 'n', 'd', 'T', 'x'] {
+            assert_eq!(tap(&mut v, c), After::Continue, "{c}");
+            assert!(v.skillset.is_some());
+            assert_eq!(v.mode, Mode::Workspaces);
+        }
+        assert!(v.take_skillset_acts().is_empty());
+        // A chord with Ctrl or Alt is none.
+        v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        v.press_key(key(KeyCode::Char('j'), KeyModifiers::ALT));
+        assert!(v.take_skillset_acts().is_empty());
+        // A paste that carries a `y` must not be the yes of a sheet.
+        assert_eq!(v.paste("y\ny\n"), After::Continue);
+        assert!(v.take_skillset_acts().is_empty());
+        // `c` copies the command of the row under the cursor; space asks the library to act on it.
+        assert!(matches!(tap(&mut v, 'c'), After::Copy(c) if c.ends_with("skillset off jw")));
+        v.press_key(plain(KeyCode::Char('j')));
+        tap(&mut v, ' ');
+        assert_eq!(
+            v.take_skillset_acts(),
+            [skillset::Act::On("caveman".into())]
+        );
+    }
+
+    #[test]
+    fn the_help_of_the_workspaces_lists_i_for_the_skillset() {
+        assert!(
+            WORKSPACE_KEYS
+                .iter()
+                .any(|(k, what)| *k == "i" && what.contains("skillset"))
+        );
+        assert!(
+            PANEL_KEYS
+                .iter()
+                .any(|(k, what)| *k == "i" && what.contains("skillset"))
+        );
     }
 
     #[test]
