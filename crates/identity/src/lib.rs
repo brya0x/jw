@@ -82,6 +82,16 @@ pub fn user_roles_dir() -> PathBuf {
     config_dir().join("roles")
 }
 
+/// The entries the person adds to the skillset: `<config dir>/skillset.toml` (N184b, REQ-1009).
+pub fn skillset_file() -> PathBuf {
+    config_dir().join("skillset.toml")
+}
+
+/// What the skillset installed from outside: `<state dir>/skillset.lock` (N184b, REQ-1016).
+pub fn skillset_lock() -> PathBuf {
+    state_dir().join("skillset.lock")
+}
+
 /// The daemon's socket: `$<PREFIX>_SOCKET`, else `<state_dir>/<name>.sock`.
 pub fn socket_path() -> PathBuf {
     match std::env::var_os(env_var("SOCKET")) {
@@ -132,6 +142,8 @@ mod tests {
             PathBuf::from(format!("/w/.{name}/roles"))
         );
         assert_eq!(user_roles_dir(), config_dir().join("roles"));
+        assert_eq!(skillset_file(), config_dir().join("skillset.toml"));
+        assert_eq!(skillset_lock(), state_dir().join("skillset.lock"));
         let skill = &get().agent_skill;
         assert!(
             !skill.is_empty()

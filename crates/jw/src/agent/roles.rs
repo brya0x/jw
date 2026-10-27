@@ -77,7 +77,7 @@ fn parse(text: &str) -> (String, &str) {
 }
 
 /// `[a-z0-9][a-z0-9_-]*`: what a role's file stem can be.
-fn valid_name(name: &str) -> bool {
+pub(super) fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()
@@ -147,6 +147,14 @@ fn read_project(dir: &Path, warnings: &mut Vec<String>) -> Vec<Role> {
         return Vec::new();
     };
     read_dir(dir, Layer::Project, Some(&root), warnings)
+}
+
+/// The built-in roles' names and descriptions, for the catalog of the skillset (REQ-1008).
+pub(super) fn built_in_descriptions() -> Vec<(String, String)> {
+    built_in()
+        .into_iter()
+        .map(|r| (r.name, r.description))
+        .collect()
 }
 
 fn built_in() -> Vec<Role> {

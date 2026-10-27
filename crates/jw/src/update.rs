@@ -42,7 +42,7 @@ struct Opts {
 }
 
 /// A `<ref>` is a branch, a tag or a full hash, and is never an option of `git` (REQ-978).
-fn valid_ref(r: &str) -> bool {
+pub(crate) fn valid_ref(r: &str) -> bool {
     (1..=200).contains(&r.len())
         && r.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
@@ -233,6 +233,76 @@ impl Job {
             allow_file,
         )
     }
+}
+
+/// A repository fetched into a temporary directory that is deleted when this drops, a signal
+/// included (N184b, REQ-1014): the means of `update`, for the skillset.
+pub(crate) struct Checkout {
+    job: Job,
+}
+
+impl Checkout {
+    pub(crate) fn dir(&self) -> &Path {
+        self.job.dir()
+    }
+}
+
+/// Fetch `url` at `git_ref` (its `HEAD` when none) and the commit that came; `allow_file` lets the
+/// `file` protocol through, for the tests of the commands. An interrupt is an error here.
+pub(crate) fn checkout(
+    url: &str,
+    git_ref: Option<&str>,
+    allow_file: bool,
+) -> Result<(Checkout, String), String> {
+    let job = Job::start(false)?;
+    let fetched = job.fetch(url, git_ref, allow_file);
+    if let Err(f) = fetched {
+        return Err(match f {
+            Fail::Interrupted => "interrupted".to_owned(),
+            Fail::Error(e) => e,
+        });
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(job.dir())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git rev-parse failed ({})", out.status));
+    }
+    let commit = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    Ok((Checkout { job }, commit))
+}
+
+/// The commit a branch (its `HEAD` when none) of `url` is at now, from `git ls-remote`: it fetches
+/// nothing and never asks for a password (N184b, REQ-1010).
+pub(crate) fn ls_remote(
+    url: &str,
+    branch: Option<&str>,
+    allow_file: bool,
+) -> Result<String, String> {
+    let refspec = branch.map_or_else(|| "HEAD".to_owned(), |b| format!("refs/heads/{b}"));
+    let out = Command::new("git")
+        .args(["ls-remote", "--", url, &refspec])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env(
+            "GIT_ALLOW_PROTOCOL",
+            if allow_file { "https:file" } else { "https" },
+        )
+        .env("GIT_HTTP_LOW_SPEED_LIMIT", "1000")
+        .env("GIT_HTTP_LOW_SPEED_TIME", "15")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git ls-remote {url} failed ({})", out.status));
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{url} has no {refspec}"))
 }
 
 /// `SIGINT` to the group, then `SIGKILL` if it is still there after the grace; waits for it

@@ -10,7 +10,7 @@ use crate::version::VERSION;
 
 /// What to do with the file that is already there.
 #[derive(Debug, PartialEq, Eq)]
-enum Plan {
+pub(super) enum Plan {
     Write,
     Unchanged,
     Keep,
@@ -48,7 +48,7 @@ fn split_mark(file: &str) -> Option<(&str, &str)> {
     Some((&file[..at], hash))
 }
 
-fn decide(existing: Option<&str>, text: &str) -> Plan {
+pub(super) fn decide(existing: Option<&str>, text: &str) -> Plan {
     let Some(on_disk) = existing else {
         return Plan::Write;
     };
@@ -75,14 +75,19 @@ fn put(path: &Path, text: &str) -> Out {
         .map_err(|e| Fail::Error(format!("{}: {e}", path.display())))
 }
 
-/// Install a skill file by the table of the spec and say what was done.
-pub(super) fn install(path: &Path, text: &str) -> Out {
-    let existing = match std::fs::read_to_string(path) {
+/// What is on disk at `path`: nothing, or its text. A file that cannot be read (not UTF-8, no
+/// permission) is not ours to replace, so it reads as text that is not a mark.
+pub(super) fn read(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
         Ok(s) => Some(s),
         Err(e) if e.kind() == ErrorKind::NotFound => None,
-        // Unreadable (not UTF-8, no permission): not ours to replace.
         Err(_) => Some(String::new()),
-    };
+    }
+}
+
+/// Install a skill file by the table of the spec and say what was done.
+pub(super) fn install(path: &Path, text: &str) -> Out {
+    let existing = read(path);
     match decide(existing.as_deref(), text) {
         Plan::Write => {
             put(path, &marked(text))?;

@@ -387,7 +387,7 @@ fn what_is_installed_is_skipped_with_no_question_and_a_failing_command_stops_wit
     let out = fake.run(&[], "{fake}:/usr/bin:/bin", false);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert!(text(&out.stdout).contains("plugins: ponytail@ponytail is installed\n"));
-    assert_eq!(fake.log(), LOOKS);
+    assert_eq!(fake.log(), [LOOKS[0]]);
 
     let fake = Fake::new("d", "[]");
     let out = fake.run(&["--yes"], "{fake}:/usr/bin:/bin", true);

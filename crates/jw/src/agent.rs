@@ -35,6 +35,7 @@ mod artifact;
 mod plugins;
 mod roles;
 mod skillfile;
+mod skillset;
 mod tasks;
 
 const SKILL: &str = include_str!("../skill/SKILL.md");
@@ -99,6 +100,9 @@ fn usage_of(cmd: &str) -> String {
         ),
         "tasks" => tasks::usage(),
         "role" => format!("usage: {b} role ls [--json]\n       {b} role show <name>"),
+        "skillset" => format!(
+            "usage: {b} skillset ls [--json] [--check]\n       {b} skillset on <name> [--yes]\n       {b} skillset off <name>"
+        ),
         _ => format!("usage: {b} skill [install [--plugins [--yes]]]"),
     }
 }
@@ -115,6 +119,7 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("artifact", rest) => artifact::run(rest),
         ("tasks", rest) => tasks::run(rest),
         ("role", rest) => roles::run(rest),
+        ("skillset", rest) => skillset::run(rest),
         ("group", ["ls", rest @ ..]) => group_ls(rest),
         ("group", ["new", rest @ ..]) => group_new(rest),
         ("group", ["rename", rest @ ..]) => group_rename(rest),
@@ -1300,6 +1305,11 @@ fn tasks_skill_text() -> String {
         )
 }
 
+/// The name of the skill of the roles: the identity's `agent_skill` (REQ-997).
+fn roles_skill_name() -> &'static str {
+    &identity::get().agent_skill
+}
+
 /// The skill of the roles (N184, REQ-997): the binary's name and the skill's own, from the identity.
 fn roles_skill_text() -> String {
     ROLES_SKILL
@@ -1336,16 +1346,6 @@ fn tasks_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<
     )
 }
 
-/// Where the skill of the roles goes: `skills/<agent_skill>/SKILL.md` (REQ-997).
-fn roles_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<PathBuf> {
-    Some(
-        claude_base(config_dir, home)?
-            .join("skills")
-            .join(&identity::get().agent_skill)
-            .join("SKILL.md"),
-    )
-}
-
 /// Whether the first skill is installed, which is what lets `update` refresh them (REQ-1002).
 pub(crate) fn skill_installed() -> bool {
     skill_path(
@@ -1372,30 +1372,17 @@ pub(crate) fn tasks_nudge() -> String {
     )
 }
 
-/// `skill install` writes the skill of the session, the one of the task lists (REQ-932) and the one
-/// of the roles (REQ-997), each by the mark's table (REQ-1000); `--plugins` then offers the plugins
-/// (REQ-1004), and `--yes` is its answer.
+/// `skill install` is `skillset on` of the three skills of the binary (REQ-932, REQ-997, REQ-1019), each
+/// by the mark's table (REQ-1000); `--plugins` then offers the plugins of the built-in catalog (REQ-1013),
+/// and `--yes` is its answer.
 fn skill_install(args: &[&str]) -> Out {
     let a = Args::parse(args, &[], &["plugins", "yes"])?;
     if !a.pos.is_empty() || (a.has("yes") && !a.has("plugins")) {
         return Err(Fail::Usage(String::new()));
     }
-    let (config, home) = (
-        std::env::var("CLAUDE_CONFIG_DIR").ok(),
-        std::env::var("HOME").ok(),
-    );
-    let (Some(skill), Some(tasks), Some(roles)) = (
-        skill_path(config.clone(), home.clone()),
-        tasks_skill_path(config.clone(), home.clone()),
-        roles_skill_path(config, home),
-    ) else {
-        return fail("no HOME and no CLAUDE_CONFIG_DIR to install into");
-    };
-    skillfile::install(&skill, &skill_text())?;
-    skillfile::install(&tasks, &tasks_skill_text())?;
-    skillfile::install(&roles, &roles_skill_text())?;
+    skillset::install_own_skills()?;
     if a.has("plugins") {
-        plugins::offer(a.has("yes"))?;
+        skillset::install_own_plugins(a.has("yes"))?;
     }
     Ok(())
 }

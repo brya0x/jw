@@ -1,57 +1,29 @@
-//! `skill install --plugins`: the few plugins jw recommends, which are code of third parties, offered
-//! with what they are and where they come from and installed only after a yes (N184, REQ-1003 to
-//! REQ-1006). It runs `claude plugin` and never edits claude's settings itself (REQ-1007).
+//! A `plugin` entry of the skillset: third-party code with hooks, offered with what it is and where it
+//! comes from and installed only after a yes (N184, REQ-1004 to REQ-1006; N184b, REQ-1013). It runs
+//! `claude plugin` and never edits claude's settings itself (REQ-1007).
 
-use std::io::{BufRead, IsTerminal, Write};
 use std::process::Command;
 
 use serde_json::Value;
 
+use super::skillset::confirm;
 use super::{Fail, Out, fail};
-
-/// What jw recommends, and the only thing this module installs.
-struct Plugin {
-    name: &'static str,
-    marketplace: &'static str,
-    /// `<owner>/<repo>` on GitHub.
-    source: &'static str,
-}
-
-const PLUGINS: [Plugin; 1] = [Plugin {
-    name: "ponytail",
-    marketplace: "ponytail",
-    source: "DietrichGebert/ponytail",
-}];
 
 /// The program of the plugins; found in the `PATH`.
 const CLAUDE: &str = "claude";
 
-impl Plugin {
-    fn id(&self) -> String {
-        format!("{}@{}", self.name, self.marketplace)
+/// The arguments of `claude` that install a plugin of `repo`'s marketplace, in order.
+fn commands(plugin: &str, repo: &str, marketplace_there: bool) -> Vec<Vec<String>> {
+    let mut commands = Vec::new();
+    if !marketplace_there {
+        commands.push(
+            ["plugin", "marketplace", "add", repo]
+                .map(String::from)
+                .to_vec(),
+        );
     }
-}
-
-/// A plugin that is not there yet, and whether its marketplace is not either.
-struct Pending<'a> {
-    plugin: &'a Plugin,
-    add_marketplace: bool,
-}
-
-impl Pending<'_> {
-    /// The arguments of `claude` that install it, in order.
-    fn commands(&self) -> Vec<Vec<String>> {
-        let mut commands = Vec::new();
-        if self.add_marketplace {
-            commands.push(
-                ["plugin", "marketplace", "add", self.plugin.source]
-                    .map(String::from)
-                    .to_vec(),
-            );
-        }
-        commands.push(vec!["plugin".into(), "install".into(), self.plugin.id()]);
-        commands
-    }
+    commands.push(vec!["plugin".into(), "install".into(), plugin.to_owned()]);
+    commands
 }
 
 /// The `key` of each object of a JSON array (`id` of `plugin list`, `name` of `marketplace list`).
@@ -62,26 +34,6 @@ fn keys(json: &str, key: &str) -> Result<Vec<String>, String> {
         .iter()
         .filter_map(|i| i.get(key)?.as_str().map(str::to_owned))
         .collect())
-}
-
-fn pending<'a>(
-    plugins: &'a [Plugin],
-    installed: &[String],
-    marketplaces: &[String],
-) -> Vec<Pending<'a>> {
-    plugins
-        .iter()
-        .filter(|p| !installed.contains(&p.id()))
-        .map(|plugin| Pending {
-            plugin,
-            add_marketplace: !marketplaces.iter().any(|m| m == plugin.marketplace),
-        })
-        .collect()
-}
-
-/// Only `y` or `yes` goes on.
-fn is_yes(line: &str) -> bool {
-    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// What `claude` prints for `args`, or why it could not.
@@ -106,59 +58,41 @@ fn look(args: &[&str], key: &str) -> Out<Vec<String>> {
     keys(&text, key).map_err(|e| Fail::Error(format!("{CLAUDE} {}: {e}", args.join(" "))))
 }
 
-/// Say what would be installed, ask, and run `claude plugin` for each (REQ-1004 to REQ-1006).
-pub(super) fn offer(yes: bool) -> Out {
-    let installed = look(&["plugin", "list", "--json"], "id")?;
-    let marketplaces = look(&["plugin", "marketplace", "list", "--json"], "name")?;
-    for p in PLUGINS.iter().filter(|p| installed.contains(&p.id())) {
-        println!("plugins: {} is installed", p.id());
-    }
-    let todo = pending(&PLUGINS, &installed, &marketplaces);
-    if todo.is_empty() {
+/// The ids (`<plugin>@<marketplace>`) of the installed plugins.
+pub(super) fn installed_ids() -> Out<Vec<String>> {
+    look(&["plugin", "list", "--json"], "id")
+}
+
+/// Say what would be installed and from where, ask, and run `claude plugin` for it (REQ-1004 to
+/// REQ-1006). A plugin that is installed is skipped.
+pub(super) fn on(plugin: &str, repo: &str, yes: bool) -> Out {
+    let installed = installed_ids()?;
+    if installed.iter().any(|i| i == plugin) {
+        println!("plugins: {plugin} is installed");
         return Ok(());
     }
-    for p in &todo {
-        println!(
-            "plugin {} from github {} (marketplace {})",
-            p.plugin.id(),
-            p.plugin.source,
-            p.plugin.marketplace
-        );
-        for c in p.commands() {
-            println!("  would run: {CLAUDE} {}", c.join(" "));
-        }
+    let marketplace = plugin.split_once('@').map_or("", |(_, m)| m);
+    let marketplaces = look(&["plugin", "marketplace", "list", "--json"], "name")?;
+    let todo = commands(plugin, repo, marketplaces.iter().any(|m| m == marketplace));
+    println!("plugin {plugin} from github {repo} (marketplace {marketplace})");
+    for c in &todo {
+        println!("  would run: {CLAUDE} {}", c.join(" "));
     }
     println!(
         "this is code of a third party; it can run programs on your machine through its hooks"
     );
-    if !yes {
-        if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-            return fail(
-                "not installed: no terminal to ask on; run this in a terminal or pass --yes",
-            );
-        }
-        eprint!("install? [y/N] ");
-        let mut line = String::new();
-        let _ = std::io::stderr().flush();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|e| Fail::Error(e.to_string()))?;
-        if !is_yes(&line) {
-            println!("not installed: you did not say yes");
-            return Ok(());
-        }
+    if !confirm(yes)? {
+        println!("not installed: you did not say yes");
+        return Ok(());
     }
-    for p in &todo {
-        for c in p.commands() {
-            println!("$ {CLAUDE} {}", c.join(" "));
-            let status = Command::new(CLAUDE)
-                .args(&c)
-                .status()
-                .map_err(|e| Fail::Error(format!("{CLAUDE} {}: {e}", c.join(" "))))?;
-            if !status.success() {
-                return fail(format!("{CLAUDE} {} failed ({status})", c.join(" ")));
-            }
+    for c in &todo {
+        println!("$ {CLAUDE} {}", c.join(" "));
+        let status = Command::new(CLAUDE)
+            .args(c)
+            .status()
+            .map_err(|e| Fail::Error(format!("{CLAUDE} {}: {e}", c.join(" "))))?;
+        if !status.success() {
+            return fail(format!("{CLAUDE} {} failed ({status})", c.join(" ")));
         }
     }
     Ok(())
@@ -168,73 +102,41 @@ pub(super) fn offer(yes: bool) -> Out {
 mod tests {
     use super::*;
 
-    /// The shape `claude plugin list --json` and `claude plugin marketplace list --json` print.
-    const LIST: &str = r#"[
-      {"id": "rust-analyzer-lsp@claude-plugins-official", "version": "1.0.0", "scope": "user", "enabled": true},
-      {"id": "vercel@claude-plugins-official", "version": "0.50.0", "scope": "user", "enabled": true,
-       "mcpServers": {"vercel": {"type": "http", "url": "https://mcp.vercel.com"}}}
-    ]"#;
-    const MARKETS: &str = r#"[
-      {"name": "claude-plugins-official", "source": "github", "repo": "anthropics/claude-plugins-official"}
-    ]"#;
-
-    fn todo(list: &str, markets: &str) -> Vec<(String, Vec<String>)> {
-        let (i, m) = (keys(list, "id").unwrap(), keys(markets, "name").unwrap());
-        pending(&PLUGINS, &i, &m)
+    #[test]
+    fn a_plugin_comes_with_its_marketplace_when_that_is_missing() {
+        let both: Vec<_> = commands("ponytail@ponytail", "DietrichGebert/ponytail", false)
             .iter()
-            .map(|p| {
-                let cmds = p.commands().iter().map(|c| c.join(" ")).collect();
-                (p.plugin.id(), cmds)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_list_is_short_fixed_and_every_source_is_an_owner_and_a_repo() {
-        assert!(!PLUGINS.is_empty() && PLUGINS.len() <= 3);
-        for p in &PLUGINS {
-            let (owner, repo) = p.source.split_once('/').expect("owner/repo");
-            for part in [owner, repo, p.name, p.marketplace] {
-                assert!(
-                    !part.is_empty()
-                        && part
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
-                    "{part}"
-                );
-            }
-            assert_eq!(p.id(), format!("{}@{}", p.name, p.marketplace));
-        }
-        assert_eq!(PLUGINS[0].id(), "ponytail@ponytail");
-    }
-
-    #[test]
-    fn a_plugin_that_is_not_installed_comes_with_its_marketplace_when_that_is_missing_too() {
+            .map(|c| c.join(" "))
+            .collect();
         assert_eq!(
-            todo(LIST, MARKETS),
-            [(
-                "ponytail@ponytail".into(),
-                vec![
-                    "plugin marketplace add DietrichGebert/ponytail".into(),
-                    "plugin install ponytail@ponytail".into()
-                ]
-            )]
+            both,
+            [
+                "plugin marketplace add DietrichGebert/ponytail",
+                "plugin install ponytail@ponytail"
+            ]
         );
-        let markets = r#"[{"name": "ponytail"}]"#;
-        assert_eq!(
-            todo(LIST, markets)[0].1,
-            ["plugin install ponytail@ponytail"]
-        );
+        let one = commands("ponytail@ponytail", "DietrichGebert/ponytail", true);
+        assert_eq!(one, [["plugin", "install", "ponytail@ponytail"]]);
     }
 
+    /// The shape `claude plugin list --json` and `claude plugin marketplace list --json` print.
     #[test]
-    fn what_is_installed_is_skipped() {
-        let list = r#"[{"id": "ponytail@ponytail", "version": "5.3.2"}]"#;
-        assert!(todo(list, MARKETS).is_empty());
-        // Another marketplace's `ponytail` is not this one.
-        let other = r#"[{"id": "ponytail@somebody-else"}]"#;
-        assert_eq!(todo(other, MARKETS).len(), 1);
-        assert!(todo("[]", "[]").len() == 1);
+    fn the_ids_and_the_marketplaces_are_read_from_what_claude_prints() {
+        let list = r#"[
+          {"id": "rust-analyzer-lsp@claude-plugins-official", "version": "1.0.0", "scope": "user", "enabled": true},
+          {"id": "vercel@claude-plugins-official", "version": "0.50.0",
+           "mcpServers": {"vercel": {"type": "http", "url": "https://mcp.vercel.com"}}}
+        ]"#;
+        assert_eq!(
+            keys(list, "id").unwrap(),
+            [
+                "rust-analyzer-lsp@claude-plugins-official",
+                "vercel@claude-plugins-official"
+            ]
+        );
+        let markets =
+            r#"[{"name": "claude-plugins-official", "source": "github", "repo": "anthropics/x"}]"#;
+        assert_eq!(keys(markets, "name").unwrap(), ["claude-plugins-official"]);
     }
 
     #[test]
@@ -246,15 +148,5 @@ mod tests {
             keys("[{\"id\": 3}, {}]", "id").unwrap(),
             Vec::<String>::new()
         );
-    }
-
-    #[test]
-    fn only_yes_goes_on() {
-        for yes in ["y", "Y\n", " yes ", "YES"] {
-            assert!(is_yes(yes), "{yes:?}");
-        }
-        for no in ["", "n", "\n", "ye", "yep", "sure"] {
-            assert!(!is_yes(no), "{no:?}");
-        }
     }
 }
