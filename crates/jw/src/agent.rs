@@ -1305,12 +1305,12 @@ fn tasks_skill_text() -> String {
         )
 }
 
-/// The name of the skill of the roles: the identity's `agent_skill` (REQ-997).
+/// The name of the skill of the roles: the identity's `agent_skill` (REQ-1005).
 fn roles_skill_name() -> &'static str {
     &identity::get().agent_skill
 }
 
-/// The skill of the roles (N184, REQ-997): the binary's name and the skill's own, from the identity.
+/// The skill of the roles (N184, REQ-1005): the binary's name and the skill's own, from the identity.
 fn roles_skill_text() -> String {
     ROLES_SKILL
         .replace("{bin}", bin())
@@ -1346,7 +1346,7 @@ fn tasks_skill_path(config_dir: Option<String>, home: Option<String>) -> Option<
     )
 }
 
-/// Whether the first skill is installed, which is what lets `update` refresh them (REQ-1002).
+/// Whether the first skill is installed, which is what lets `update` refresh them (REQ-1010).
 pub(crate) fn skill_installed() -> bool {
     skill_path(
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
@@ -1372,8 +1372,8 @@ pub(crate) fn tasks_nudge() -> String {
     )
 }
 
-/// `skill install` is `skillset on` of the three skills of the binary (REQ-932, REQ-997, REQ-1019), each
-/// by the mark's table (REQ-1000); `--plugins` then offers the plugins of the built-in catalog (REQ-1013),
+/// `skill install` is `skillset on` of the three skills of the binary (REQ-932, REQ-1005, REQ-1027), each
+/// by the mark's table (REQ-1008); `--plugins` then offers the plugins of the built-in catalog (REQ-1021),
 /// and `--yes` is its answer.
 fn skill_install(args: &[&str]) -> Out {
     let a = Args::parse(args, &[], &["plugins", "yes"])?;

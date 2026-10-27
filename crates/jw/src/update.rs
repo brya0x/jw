@@ -149,7 +149,7 @@ struct Job {
     work: Work,
     stop: Arc<AtomicBool>,
     /// The caller owns the terminal (the skillset screen): no signal handlers, no output of the
-    /// children on it, and what `git` said on stderr comes back in the error (RISK-174, RISK-175).
+    /// children on it, and what `git` said on stderr comes back in the error (RISK-176, RISK-177).
     quiet: bool,
 }
 
@@ -167,7 +167,7 @@ impl Job {
         })
     }
 
-    /// A job that a flag of the caller stops, with no handler of signals (REQ-1034, REQ-1035).
+    /// A job that a flag of the caller stops, with no handler of signals (REQ-1042, REQ-1043).
     fn cancellable(stop: Arc<AtomicBool>) -> Result<Job, String> {
         Ok(Job {
             work: Work::make(false)?,
@@ -275,7 +275,7 @@ impl Job {
 }
 
 /// A repository fetched into a temporary directory that is deleted when this drops, a signal
-/// included (N184b, REQ-1014): the means of `update`, for the skillset.
+/// included (N184b, REQ-1022): the means of `update`, for the skillset.
 pub(crate) struct Checkout {
     job: Job,
 }
@@ -286,7 +286,7 @@ impl Checkout {
     }
 
     /// A signal came since the fetch began: the handlers of `Job` replace the default action, so the
-    /// process does not die of it and whoever goes on must look (REQ-1014).
+    /// process does not die of it and whoever goes on must look (REQ-1022).
     pub(crate) fn interrupted(&self) -> bool {
         self.job.interrupted()
     }
@@ -303,7 +303,7 @@ pub(crate) fn checkout(
 }
 
 /// `checkout` for a caller that owns the terminal: `cancel` set from anywhere ends the fetch, the
-/// directory is deleted and the error is `interrupted`; no handler of signals is registered (REQ-1034).
+/// directory is deleted and the error is `interrupted`; no handler of signals is registered (REQ-1042).
 pub(crate) fn checkout_cancellable(
     url: &str,
     git_ref: Option<&str>,
@@ -340,7 +340,7 @@ fn checkout_with(
 }
 
 /// The commit a branch (its `HEAD` when none) of `url` is at now, from `git ls-remote`: it fetches
-/// nothing and never asks for a password (N184b, REQ-1010).
+/// nothing and never asks for a password (N184b, REQ-1018).
 pub(crate) fn ls_remote(
     url: &str,
     branch: Option<&str>,
@@ -474,7 +474,7 @@ fn build(job: &Job, o: &Opts, url: &str, from_env: bool) -> Out<String> {
 }
 
 /// The binary `cargo install` just wrote: `$CARGO_INSTALL_ROOT/bin`, else `$CARGO_HOME/bin`, else
-/// `~/.cargo/bin` (REQ-1002).
+/// `~/.cargo/bin` (REQ-1010).
 fn installed_binary(
     install_root: Option<PathBuf>,
     cargo_home: Option<PathBuf>,
@@ -496,7 +496,7 @@ fn installed_binary_here() -> Option<PathBuf> {
 }
 
 /// A person who has the first skill gets the three refreshed by the binary just installed, whose texts
-/// are the new ones; with none installed nothing is (REQ-1002). It never fails the update.
+/// are the new ones; with none installed nothing is (REQ-1010). It never fails the update.
 fn refresh_skills() {
     if !crate::agent::skill_installed() {
         return;

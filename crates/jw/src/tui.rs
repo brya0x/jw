@@ -889,7 +889,7 @@ pub struct View {
     diff: Option<Changes>,
     /// The tasks view that takes the place of the workspace's panels, and the `tasks` nodes read (N180f2).
     tasks: Option<tasks::TasksView>,
-    /// The skillset screen while it is open, and what it asks the loop to do (REQ-1023).
+    /// The skillset screen while it is open, and what it asks the loop to do (REQ-1031).
     skillset: Option<skillset::Screen>,
     skillset_acts: Vec<skillset::Act>,
     task_docs: HashMap<String, contract::tasks::Tasks>,
@@ -1272,7 +1272,7 @@ impl View {
         }
     }
 
-    /// `i`: the skillset screen over the whole client, reading the catalog (REQ-1023).
+    /// `i`: the skillset screen over the whole client, reading the catalog (REQ-1031).
     fn open_skillset(&mut self) -> After {
         self.skillset = Some(skillset::Screen::new());
         self.skillset_acts
@@ -1281,7 +1281,7 @@ impl View {
     }
 
     /// A key while the skillset screen is shown: every key is the screen's, a chord with Ctrl or Alt
-    /// is none and no key reaches a pane (REQ-1026).
+    /// is none and no key reaches a pane (REQ-1034).
     fn skillset_key(&mut self, ev: KeyEvent) -> After {
         let Some(mut screen) = self.skillset.take() else {
             return After::Continue;
@@ -1309,7 +1309,7 @@ impl View {
         After::Continue
     }
 
-    /// What the skillset screen wants done, for the loop to give to its worker (REQ-1035).
+    /// What the skillset screen wants done, for the loop to give to its worker (REQ-1043).
     pub fn take_skillset_acts(&mut self) -> Vec<skillset::Act> {
         std::mem::take(&mut self.skillset_acts)
     }
@@ -13326,7 +13326,7 @@ mod tests {
         assert!(!v.plain(120, 30).contains("se sigue con la lista anterior"));
     }
 
-    // ---- the skillset screen (N185b; REQ-1023, REQ-1026, REQ-1035, REQ-1037)
+    // ---- the skillset screen (N185b; REQ-1031, REQ-1034, REQ-1043, REQ-1045)
 
     fn some_items() -> skillset::Reply {
         let item = |name: &str, kind: &'static str, state: &'static str, source: &str| {

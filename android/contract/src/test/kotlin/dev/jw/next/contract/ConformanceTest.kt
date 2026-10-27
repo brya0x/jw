@@ -259,6 +259,14 @@ class ConformanceTest {
         assertEquals(listOf(true, false), node.items.filterIsInstance<ConvItem.Tool>().map { it.lost })
     }
 
+    /** A line that stands for several restarts says how many; one that stands for one says nothing (REQ-991). */
+    @Test
+    fun aRestartDividerHasAnOptionalCount() {
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-restarts.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
+        assertEquals(listOf<Int?>(null, 20), node.items.filterIsInstance<ConvItem.Divider>().map { it.count })
+    }
+
     /** The idle conversation fixture carries what Claude proposes next (REQ-572). */
     @Test
     fun anIdleConversationCarriesWhatClaudeProposesNext() {

@@ -1,5 +1,5 @@
 //! `skillset`: one catalog of skills, roles and plugins that jw lists (`ls`) and activates (`on`) or
-//! removes (`off`); activating installs for real (N184b, REQ-1008 to REQ-1022). It reads files and
+//! removes (`off`); activating installs for real (N184b, REQ-1016 to REQ-1030). It reads files and
 //! runs `git` and `claude`, so it works with no daemon.
 
 mod catalog;
@@ -49,7 +49,7 @@ impl State {
 
 /// Where the skillset works: the Claude configuration, the user's roles, the lock, the person's file,
 /// the base of GitHub and the program `claude`. `here` is the process's; a test or the screen's test
-/// builds its own, so none of them reads the real home or the network (REQ-1035).
+/// builds its own, so none of them reads the real home or the network (REQ-1043).
 #[derive(Clone, Debug)]
 pub(crate) struct Place {
     claude: Option<PathBuf>,
@@ -110,7 +110,7 @@ struct Ctx {
 
 impl Ctx {
     /// `strict`: a lock that cannot be read is an error (`on`, `off`); else it is a warning and an
-    /// empty lock, which only makes things look as if another tool installed them (RISK-171).
+    /// empty lock, which only makes things look as if another tool installed them (RISK-173).
     fn load(strict: bool, warnings: &mut Vec<String>) -> Out<Ctx> {
         Ctx::load_at(&Place::here(), strict, warnings)
     }
@@ -142,7 +142,7 @@ impl Ctx {
     }
 }
 
-/// The catalog and the person's entries (REQ-1009).
+/// The catalog and the person's entries (REQ-1017).
 fn catalog(file: &Path, warnings: &mut Vec<String>) -> Vec<Entry> {
     let mut all = catalog::builtin();
     let mine = catalog::yours(file, &all, warnings);
@@ -221,7 +221,7 @@ impl Dest {
         is_link(self.role_file.as_ref().unwrap_or(&self.dir)) || is_link(&self.dir)
     }
 
-    /// May jw touch this file of its lock entry? (REQ-1017)
+    /// May jw touch this file of its lock entry? (REQ-1025)
     fn owns(&self, file: &Path) -> bool {
         match &self.role_file {
             Some(f) => file == f,
@@ -370,7 +370,7 @@ fn table(rows: &[Row]) -> String {
 }
 
 /// The entries with their states, in the catalog's order; `check` asks GitHub for the commit of each
-/// installed `github` entry (REQ-1010). What could not be done comes back as warnings.
+/// installed `github` entry (REQ-1018). What could not be done comes back as warnings.
 fn rows(place: &Place, check: bool) -> Out<(Vec<Row>, Vec<String>)> {
     let mut warnings = Vec::new();
     let ctx = Ctx::load_at(place, false, &mut warnings)?;
@@ -444,13 +444,13 @@ fn run_ls(args: &[&str]) -> Out {
     Ok(())
 }
 
-/// `y` or `yes` (REQ-1005).
+/// `y` or `yes` (REQ-1013).
 fn is_yes(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// The person's yes: `--yes`, or `install? [y/N]` at a terminal; with neither, nothing is installed
-/// (REQ-1005, REQ-1014).
+/// (REQ-1013, REQ-1022).
 pub(super) fn confirm(yes: bool) -> Out<bool> {
     if yes {
         return Ok(true);
@@ -488,7 +488,7 @@ fn other_tool(name: &str) -> Fail {
     Fail::Error(format!("{name}: installed by another tool, left alone"))
 }
 
-/// An embedded skill, written by the mark's table (REQ-1012); one that is a link is another tool's.
+/// An embedded skill, written by the mark's table (REQ-1020); one that is a link is another tool's.
 fn on_embedded_skill(ctx: &Ctx, e: &Entry, say: &mut dyn FnMut(String)) -> Out {
     let base = ctx.claude()?;
     let (path, text) =
@@ -500,7 +500,7 @@ fn on_embedded_skill(ctx: &Ctx, e: &Entry, say: &mut dyn FnMut(String)) -> Out {
 }
 
 /// `skill install`: the three embedded skills of the built-in catalog and nothing of the person's
-/// file (REQ-1019). One that is another tool's does not stop the others.
+/// file (REQ-1027). One that is another tool's does not stop the others.
 pub(super) fn install_own_skills() -> Out {
     let ctx = Ctx::load(false, &mut Vec::new())?;
     ctx.claude()?;
@@ -516,7 +516,7 @@ pub(super) fn install_own_skills() -> Out {
     first.map_or(Ok(()), Err)
 }
 
-/// `skill install --plugins`: the plugins of the built-in catalog and no other (REQ-1013).
+/// `skill install --plugins`: the plugins of the built-in catalog and no other (REQ-1021).
 pub(super) fn install_own_plugins(yes: bool) -> Out {
     for e in catalog::builtin() {
         if let Source::Plugin { plugin, repo } = &e.source {
@@ -536,7 +536,7 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// A `github` entry fetched and not written yet: what the sheet shows and `apply` writes (REQ-1014).
+/// A `github` entry fetched and not written yet: what the sheet shows and `apply` writes (REQ-1022).
 pub(crate) struct Prepared {
     entry: Entry,
     url: String,
@@ -548,7 +548,7 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
-    /// The lines of the confirmation, as the CLI prints them (REQ-1014).
+    /// The lines of the confirmation, as the CLI prints them (REQ-1022).
     fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!(
@@ -576,7 +576,7 @@ enum Prep {
     Ask(Box<Prepared>),
 }
 
-/// The refusals of `on` for a `github` entry whose destination is not free (REQ-1015).
+/// The refusals of `on` for a `github` entry whose destination is not free (REQ-1023).
 fn refusal(st: State, name: &str) -> Option<Fail> {
     match st {
         State::OtherTool => Some(other_tool(name)),
@@ -640,7 +640,7 @@ fn prepare_github(
 
 /// The rest of `on` after a yes: the destination is looked at again (the fetch took a while), the
 /// files are written, what an earlier install wrote and this one does not have is taken away if it
-/// is as it was, and the lock is written last. The line that says it (REQ-1014 to REQ-1016).
+/// is as it was, and the lock is written last. The line that says it (REQ-1022 to REQ-1024).
 fn apply_github(ctx: &mut Ctx, plan: &Prepared) -> Out<String> {
     let e = &plan.entry;
     let Source::Github { repo, path, .. } = &e.source else {
@@ -723,7 +723,7 @@ fn on_github(ctx: &mut Ctx, e: &Entry, yes: bool) -> Out {
         println!("{line}");
     }
     // A Ctrl-C is not a yes: the handlers of the fetch keep the process alive, so it is looked at
-    // after the answer is read and again before anything is written (REQ-1014).
+    // after the answer is read and again before anything is written (REQ-1022).
     let said_yes = confirm(yes)?;
     if plan.fetched.interrupted() {
         return fail("interrupted: nothing installed");
@@ -869,7 +869,7 @@ fn text(f: Fail) -> String {
     }
 }
 
-/// One row of the list: the catalog's entry and its state, with the CLI's words (REQ-1024).
+/// One row of the list: the catalog's entry and its state, with the CLI's words (REQ-1032).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Item {
     pub name: String,
@@ -882,7 +882,7 @@ pub(crate) struct Item {
 }
 
 /// The entries in the catalog's order with their states; `check` is `ls --check`. The second part is
-/// what could not be read or asked (REQ-1023, REQ-1033).
+/// what could not be read or asked (REQ-1031, REQ-1041).
 pub(crate) fn items(place: &Place, check: bool) -> Result<(Vec<Item>, Vec<String>), String> {
     let (rows, warnings) = rows(place, check).map_err(text)?;
     let items = rows
@@ -904,14 +904,14 @@ pub(crate) fn items(place: &Place, check: bool) -> Result<(Vec<Item>, Vec<String
     Ok((items, warnings))
 }
 
-/// What is to be asked before something third-party is written (REQ-1029): it holds what was fetched
+/// What is to be asked before something third-party is written (REQ-1037): it holds what was fetched
 /// (and its temporary directory, deleted when it drops) or the `claude` commands.
 pub(crate) enum Ask {
     Github(Box<Prepared>),
     Plugin(plugins::Offer),
 }
 
-/// What the sheet draws of an `Ask`, as plain data (REQ-1028, REQ-1030).
+/// What the sheet draws of an `Ask`, as plain data (REQ-1036, REQ-1038).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Sheet {
     Github {
@@ -995,7 +995,7 @@ pub(crate) fn on(place: &Place, name: &str, cancel: Arc<AtomicBool>) -> Result<S
     Ok(step)
 }
 
-/// The rest of `on` after the person's yes (REQ-1028, REQ-1030): the lines the CLI would print. The
+/// The rest of `on` after the person's yes (REQ-1036, REQ-1038): the lines the CLI would print. The
 /// commands of a plugin run with their output captured.
 pub(crate) fn apply(place: &Place, ask: Ask) -> Result<Vec<String>, String> {
     match ask {
@@ -1012,7 +1012,7 @@ pub(crate) fn apply(place: &Place, ask: Ask) -> Result<Vec<String>, String> {
     }
 }
 
-/// `skillset off <name>`: the lines the CLI would print (REQ-1031).
+/// `skillset off <name>`: the lines the CLI would print (REQ-1039).
 pub(crate) fn off(place: &Place, name: &str) -> Result<Vec<String>, String> {
     let mut ctx = Ctx::load_at(place, true, &mut Vec::new()).map_err(text)?;
     let (entry, _) = find(&ctx.file, name).map_err(text)?;

@@ -72,22 +72,22 @@ pub fn tasks_path(folder: &Path) -> PathBuf {
     folder.join(format!(".{}", get().name)).join("tasks.md")
 }
 
-/// A repository's own roles: `<folder>/.<name>/roles` (N184, REQ-992).
+/// A repository's own roles: `<folder>/.<name>/roles` (N184, REQ-1000).
 pub fn roles_dir(folder: &Path) -> PathBuf {
     folder.join(format!(".{}", get().name)).join("roles")
 }
 
-/// The person's own roles: `<config dir>/roles` (N184, REQ-992).
+/// The person's own roles: `<config dir>/roles` (N184, REQ-1000).
 pub fn user_roles_dir() -> PathBuf {
     config_dir().join("roles")
 }
 
-/// The entries the person adds to the skillset: `<config dir>/skillset.toml` (N184b, REQ-1009).
+/// The entries the person adds to the skillset: `<config dir>/skillset.toml` (N184b, REQ-1017).
 pub fn skillset_file() -> PathBuf {
     config_dir().join("skillset.toml")
 }
 
-/// What the skillset installed from outside: `<state dir>/skillset.lock` (N184b, REQ-1016).
+/// What the skillset installed from outside: `<state dir>/skillset.lock` (N184b, REQ-1024).
 pub fn skillset_lock() -> PathBuf {
     state_dir().join("skillset.lock")
 }

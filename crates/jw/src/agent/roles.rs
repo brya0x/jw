@@ -1,5 +1,5 @@
-//! `role`: the roles an agent can take, from three layers, the nearest first (N184, REQ-991 to
-//! REQ-996). They read files and the binary and nothing else, so they work with no daemon.
+//! `role`: the roles an agent can take, from three layers, the nearest first (N184, REQ-999 to
+//! REQ-1004). They read files and the binary and nothing else, so they work with no daemon.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -96,10 +96,10 @@ fn role_of(name: &str, text: &str, layer: Layer) -> Role {
 }
 
 /// The `*.md` files of a folder as roles; a folder that is not there has none and a file that cannot
-/// be read is a warning (REQ-996).
+/// be read is a warning (REQ-1004).
 ///
 /// `jail` is the canonical folder every file must be inside once its links are followed: a repository's
-/// role that is a link to a file outside it is a warning and not a read (RISK-163).
+/// role that is a link to a file outside it is a warning and not a read (RISK-165).
 fn read_dir(
     dir: &Path,
     layer: Layer,
@@ -149,7 +149,7 @@ fn read_project(dir: &Path, warnings: &mut Vec<String>) -> Vec<Role> {
     read_dir(dir, Layer::Project, Some(&root), warnings)
 }
 
-/// The built-in roles' names and descriptions, for the catalog of the skillset (REQ-1008).
+/// The built-in roles' names and descriptions, for the catalog of the skillset (REQ-1016).
 pub(super) fn built_in_descriptions() -> Vec<(String, String)> {
     built_in()
         .into_iter()
@@ -183,7 +183,7 @@ fn resolve(layers: Vec<Vec<Role>>) -> Vec<Found> {
 }
 
 /// The folder of a repository's roles: from the current folder upward to the first one that has it,
-/// stopping after the first `.git` (REQ-992, as the task list is found).
+/// stopping after the first `.git` (REQ-1000, as the task list is found).
 fn project_dir(from: &Path) -> Option<PathBuf> {
     for dir in from.ancestors() {
         let roles = identity::roles_dir(dir);
@@ -229,7 +229,7 @@ fn layers_of(hides: &[Layer]) -> String {
         .join(", ")
 }
 
-/// The table of `ls` and the lines after it (REQ-993).
+/// The table of `ls` and the lines after it (REQ-1001).
 fn table(found: &[Found]) -> String {
     let width = |f: fn(&Found) -> usize| found.iter().map(f).max().unwrap_or(0);
     let (nw, lw) = (

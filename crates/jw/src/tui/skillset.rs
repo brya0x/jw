@@ -1,4 +1,4 @@
-//! The skillset screen of the terminal client (N185; REQ-1023 to REQ-1037): the catalog of
+//! The skillset screen of the terminal client (N185; REQ-1031 to REQ-1045): the catalog of
 //! `jw skillset ls` as a list, and the keys that activate and remove what is in it. `Screen` is a pure
 //! state: a key gives back what must be done (`Act`) and what the thread answered (`Reply`) is applied
 //! to it, so the keys, the sheet and the lines are tested with no terminal. `Worker` is the thread's
@@ -22,7 +22,7 @@ const GROUPS: [(&str, &str); 3] = [
     ("Plugins", "plugin"),
 ];
 
-/// What the person is told when a write cannot be stopped (REQ-1034).
+/// What the person is told when a write cannot be stopped (REQ-1042).
 const NO_CANCEL: &str = "no se puede cancelar: ya se está escribiendo";
 
 const KEYS_LIST: &str = "j k mover · espacio activa o quita · u actualiza · r revisa GitHub · ↵ ficha · c copia el comando · esc vuelve";
@@ -110,7 +110,7 @@ fn src(item: &Item) -> Src {
     }
 }
 
-/// The glyph, the word and the colour of a state (REQ-1025): the CLI's words are English, the
+/// The glyph, the word and the colour of a state (REQ-1033): the CLI's words are English, the
 /// screen's are Spanish.
 fn chip(state: &str) -> (&'static str, &'static str, Rgb) {
     match state {
@@ -153,7 +153,7 @@ fn why(item: &Item) -> String {
     format!("{text}{mine}")
 }
 
-/// The commands of the CLI that apply to a row, the first being its main action (REQ-1024).
+/// The commands of the CLI that apply to a row, the first being its main action (REQ-1032).
 fn commands(item: &Item) -> Vec<(String, &'static str)> {
     let bin = &identity::get().name;
     let (n, id) = (
@@ -217,7 +217,7 @@ enum Style2 {
     Warn,
 }
 
-/// The lines of the sheet: the CLI's confirmation (REQ-1014, REQ-1004) drawn, with the question.
+/// The lines of the sheet: the CLI's confirmation (REQ-1022, REQ-1012) drawn, with the question.
 fn sheet_lines(sheet: &Sheet) -> Vec<(String, Style2)> {
     let mut l = Vec::new();
     match sheet {
@@ -322,7 +322,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// A screen that is reading the catalog (REQ-1023): the loop asks for `Act::Read` when it opens it.
+    /// A screen that is reading the catalog (REQ-1031): the loop asks for `Act::Read` when it opens it.
     pub fn new() -> Screen {
         Screen {
             items: Vec::new(),
@@ -454,7 +454,7 @@ impl Screen {
         }
     }
 
-    /// `espacio` (REQ-1027, REQ-1028, REQ-1031): what is there goes away, what is not comes in, and
+    /// `espacio` (REQ-1035, REQ-1036, REQ-1039): what is there goes away, what is not comes in, and
     /// what cannot be changed is asked to say why (the library's line).
     fn toggle(&mut self) -> Act {
         let Some(item) = self.item() else {
@@ -487,7 +487,7 @@ impl Screen {
         Act::On(name)
     }
 
-    /// `u` (REQ-1032).
+    /// `u` (REQ-1040).
     fn update(&mut self) -> Act {
         match self.item().map(|i| i.state) {
             Some("outdated" | "modified") => self.on(),
@@ -862,7 +862,7 @@ struct Done {
 }
 
 /// The thread's side: does what the screen asks with the library of the CLI, in the client's
-/// process, and keeps what waits for the yes (REQ-1035). Nothing here reads the terminal.
+/// process, and keeps what waits for the yes (REQ-1043). Nothing here reads the terminal.
 pub struct Worker {
     place: Place,
     tx: Sender<Done>,

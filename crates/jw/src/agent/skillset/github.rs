@@ -1,5 +1,5 @@
 //! A `github` entry: the repository fetched into a temporary directory (the means of `update`), the
-//! files of the skill's folder read from it and written to their place (N184b, REQ-1014 to REQ-1016).
+//! files of the skill's folder read from it and written to their place (N184b, REQ-1022 to REQ-1024).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +11,7 @@ const MAX_FILES: usize = 200;
 const MAX_BYTES: usize = 5_000_000;
 
 /// The base of every URL: `<PREFIX>_SKILLSET_GITHUB` when it is set (for the tests of the commands,
-/// RISK-169, and then the `file` protocol is let through), else `https://github.com` (REQ-1021).
+/// RISK-171, and then the `file` protocol is let through), else `https://github.com` (REQ-1029).
 pub(super) fn base() -> (String, bool) {
     match std::env::var(identity::env_var("SKILLSET_GITHUB")) {
         Ok(b) if !b.is_empty() => (b.trim_end_matches('/').to_owned(), true),
@@ -64,7 +64,7 @@ pub(super) fn fetch(
 }
 
 /// The files to copy, read with `symlink_metadata`: a link anywhere on the way is a refusal of the
-/// whole install, as are too many files or too many bytes (REQ-1015, RISK-170).
+/// whole install, as are too many files or too many bytes (REQ-1023, RISK-172).
 fn collect(root: &Path, path: &str, role: bool) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut at = root.to_path_buf();
     for part in path.split('/') {
@@ -133,7 +133,7 @@ fn walk(
     Ok(())
 }
 
-/// The names that are not Markdown: a skill can carry scripts (REQ-1014).
+/// The names that are not Markdown: a skill can carry scripts (REQ-1022).
 pub(super) fn not_markdown(files: &[(String, Vec<u8>)]) -> Vec<&str> {
     files
         .iter()
@@ -142,7 +142,7 @@ pub(super) fn not_markdown(files: &[(String, Vec<u8>)]) -> Vec<&str> {
         .collect()
 }
 
-/// Write each file through a rename; if one fails, remove what this run wrote (REQ-1016).
+/// Write each file through a rename; if one fails, remove what this run wrote (REQ-1024).
 pub(super) fn write_all(files: &[(PathBuf, Vec<u8>)], limit: Option<&Path>) -> Result<(), String> {
     let mut written: Vec<&Path> = Vec::new();
     for (path, bytes) in files {

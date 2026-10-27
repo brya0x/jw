@@ -39,13 +39,13 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 .imp{border-left:3px solid var(--yellow);padding-left:10px;max-width:920px}
 </style></head><body>
 <h1>jw · la pantalla del skillset (N185, fase 1: prototipo)</h1>
-<p class="note">Aquí la persona ve el catálogo (skills, roles y plugins) y los <b>activa</b>: lo que los instala en su <code>~/.claude</code>. Es la pantalla que N184 dejó fuera (OPEN-90, OPEN-94). Todo lo que ves es lo que hoy hace <code>jw skillset ls|on|off</code> (a la derecha de la terminal va el CLI de verdad, línea por línea, con las palabras en inglés tal cual salen). Los datos son de ejemplo: el commit, los bytes y la red están simulados; <b>nada toca tu <code>~/.claude</code> ni la red</b>. La terminal tiene el foco al abrir la página.</p>
+<p class="note">Aquí la persona ve el catálogo (skills, roles y plugins) y los <b>activa</b>: lo que los instala en su <code>~/.claude</code>. Es la pantalla que N184 dejó fuera (OPEN-91, OPEN-95). Todo lo que ves es lo que hoy hace <code>jw skillset ls|on|off</code> (a la derecha de la terminal va el CLI de verdad, línea por línea, con las palabras en inglés tal cual salen). Los datos son de ejemplo: el commit, los bytes y la red están simulados; <b>nada toca tu <code>~/.claude</code> ni la red</b>. La terminal tiene el foco al abrir la página.</p>
 
 <h2>Decisiones</h2>
 <div class="ctl">
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde vive la pantalla</legend>
     <label><input type="radio" name="loc" data-o="loc" value="screen" checked> <span><b class="rec">pantalla propia</b>, tecla <kbd>i</kbd> (de «instalar»; libre) como <kbd>a</kbd> abre Avisos; con su cursor y sus teclas por fila, modelada en <code>Mode::Avisos</code> (recomendado)</span></label>
-    <label><input type="radio" name="loc" data-o="loc" value="slash"> <span>entrada de la caja <code>/</code> (la de OPEN-94): la caja es de <i>una conversación</i> y el skillset es de la persona (<code>~/.claude</code>); no abre sin conversación</span></label>
+    <label><input type="radio" name="loc" data-o="loc" value="slash"> <span>entrada de la caja <code>/</code> (la de OPEN-95): la caja es de <i>una conversación</i> y el skillset es de la persona (<code>~/.claude</code>); no abre sin conversación</span></label>
     <label><input type="radio" name="loc" data-o="loc" value="settings"> <span>pestaña de ajustes <kbd>,</kbd>: es un formulario de preguntas sobre <code>settings.json</code>, no una lista con acciones por fila</span></label>
     <label><input type="radio" name="loc" data-o="loc" value="avisos"> <span>tercera pestaña de Avisos: Avisos cuenta lo que <i>pasó</i>; esto es donde la persona <i>decide</i></span></label>
   </fieldset>
@@ -61,7 +61,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   </fieldset>
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el estado: cuándo se mira</legend>
     <label><input type="radio" name="state" data-o="state" value="key" checked> <span><b class="rec">abrir no toca la red</b>; <kbd>r</kbd> revisa (<code>ls --check</code>, un <code>git ls-remote</code> por skill de GitHub instalado). Abrir sí lanza <code>claude plugin list --json</code>: un proceso local, no la red (recomendado)</span></label>
-    <label><input type="radio" name="state" data-o="state" value="open"> <span>revisar la red al abrir (puede colgar o tardar; RISK-173; abrir deja de ser instantáneo)</span></label>
+    <label><input type="radio" name="state" data-o="state" value="open"> <span>revisar la red al abrir (puede colgar o tardar; RISK-175; abrir deja de ser instantáneo)</span></label>
   </fieldset>
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>dónde corre el trabajo</legend>
     <label><input type="radio" name="run" data-o="run" value="inproc" checked> <span><b class="rec">dentro del cliente</b>: la pantalla llama a la misma biblioteca que el CLI, en un hilo, con el avance dibujado en la pantalla; sin daemon; <kbd>esc</kbd> cancela y no instala nada (recomendado)</span></label>
@@ -73,7 +73,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
     <label><input type="radio" name="phone" data-o="phone" value="full"> <span>también instalar desde el teléfono (no lo recomiendo)</span></label>
   </fieldset>
   <fieldset class="dec"><legend><span class="tag-dec">PARA DECIDIR</span>el idioma de los estados</legend>
-    <label><input type="radio" name="words" data-o="words" value="es" checked> <span><b class="rec">español en la pantalla</b> (como el resto de la TUI: «descartar», «cancela»); el CLI sigue en inglés (RAT-172) y se ve tal cual abajo (recomendado)</span></label>
+    <label><input type="radio" name="words" data-o="words" value="es" checked> <span><b class="rec">español en la pantalla</b> (como el resto de la TUI: «descartar», «cancela»); el CLI sigue en inglés (RAT-174) y se ve tal cual abajo (recomendado)</span></label>
     <label><input type="radio" name="words" data-o="words" value="en"> <span>las palabras del CLI también en la pantalla (<code>other tool</code>, <code>built-in</code>)</span></label>
   </fieldset>
 </div>
@@ -127,9 +127,9 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>Una lista, tres tipos.</b> Skills, Roles y Plugins, cada fila con su chip de estado: <span class="c-green">✓ instalado</span> · <span class="c-dim">○ disponible</span> · <span class="c-yellow">↑ desactualizado</span> · <span class="c-mag">✎ modificado</span> · <span class="c-cyan">⇄ otra herramienta</span> · <span class="c-blue">● incluido</span> · <span class="c-red">? desconocido</span>. Las palabras salen de <code>jw skillset ls --json</code>; la pantalla las traduce (decisión de arriba).</li>
   <li><b>Los skills de jw</b> (<code>jw</code>, <code>jw-tasks</code>, <code>agent</code>) se activan y se quitan al instante, sin hoja: son texto del propio jw. Desactualizado se arregla con <kbd>u</kbd> (escribe el nuevo). Si el archivo es tuyo (modificado), jw deja el tuyo y escribe <code>SKILL.md.new</code> al lado.</li>
   <li><b>Lo de GitHub</b> (caveman y lo que la persona añada en su <code>skillset.toml</code>, marcado <code>(yours)</code>): <b>primero se baja</b> a un temporal (es lo lento; por eso hay avance y <kbd>esc</kbd> cancela: <code>interrupted: nothing installed</code>), <b>después</b> sale la hoja con lo que de verdad hay (URL, rama, commit completo, archivos con ruta absoluta y bytes, y el aviso si algo no es Markdown), y solo con <kbd>y</kbd> se escribe (rápido) y se anota el lock. Si el commit es el mismo que el instalado, no hay hoja: <code>unchanged</code>.</li>
-  <li><b>Los plugins</b> van al revés: no se baja nada; la hoja dice qué comandos correrá <code>claude plugin …</code>, y lo lento viene <i>después</i> del sí. <b>Quitar un plugin no lo desinstala</b>: jw nunca edita los ajustes de claude y solo corre <code>claude plugin</code> con un sí (REQ-1018, OPEN-98), así que dice el comando (<kbd>c</kbd> lo copia).</li>
+  <li><b>Los plugins</b> van al revés: no se baja nada; la hoja dice qué comandos correrá <code>claude plugin …</code>, y lo lento viene <i>después</i> del sí. <b>Quitar un plugin no lo desinstala</b>: jw nunca edita los ajustes de claude y solo corre <code>claude plugin</code> con un sí (REQ-1026, OPEN-99), así que dice el comando (<kbd>c</kbd> lo copia).</li>
   <li><b>Los roles</b> (<code>brain</code>, <code>researcher</code>) vienen dentro de jw: no hay nada que activar; la fila lleva a <code>jw role show</code>. Un rol de GitHub (si alguien lo añade) sí se instalaría como un archivo <code>.md</code>.</li>
-  <li><b>«Otra herramienta»</b> es lo que hay hoy en tu máquina con caveman: un enlace de la herramienta <code>skills</code> (<code>../../.agents/skills/caveman</code>) o una carpeta que jw no escribió (RISK-172). jw no la toca y la fila no tiene acción; para usar la instalación de jw hay que quitar esa antes, con la herramienta que la puso.</li>
+  <li><b>«Otra herramienta»</b> es lo que hay hoy en tu máquina con caveman: un enlace de la herramienta <code>skills</code> (<code>../../.agents/skills/caveman</code>) o una carpeta que jw no escribió (RISK-174). jw no la toca y la fila no tiene acción; para usar la instalación de jw hay que quitar esa antes, con la herramienta que la puso.</li>
   <li><b>«Modificado»</b>: lo que jw escribió tiene cambios de la persona. jw no lo pisa: actualizar se niega y quitar solo borra lo que no se editó.</li>
   <li><b>Esto exige partir la biblioteca</b> (para el spec): hoy <code>on</code> baja, enseña y pregunta leyendo la entrada estándar de una vez. La pantalla necesita «preparar» (bajar y devolver el plan: commit, archivos, aviso) y «aplicar» (escribir y anotar el lock) como dos llamadas; el CLI las une.</li>
 </ul>

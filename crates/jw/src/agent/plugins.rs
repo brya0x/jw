@@ -1,6 +1,6 @@
 //! A `plugin` entry of the skillset: third-party code with hooks, offered with what it is and where it
-//! comes from and installed only after a yes (N184, REQ-1004 to REQ-1006; N184b, REQ-1013). It runs
-//! `claude plugin` and never edits claude's settings itself (REQ-1007).
+//! comes from and installed only after a yes (N184, REQ-1012 to REQ-1014; N184b, REQ-1021). It runs
+//! `claude plugin` and never edits claude's settings itself (REQ-1015).
 
 use std::process::Command;
 
@@ -72,7 +72,7 @@ pub(crate) struct Offer {
 }
 
 impl Offer {
-    /// The lines that say it (REQ-1004): the plugin, where from, what would run and the warning.
+    /// The lines that say it (REQ-1012): the plugin, where from, what would run and the warning.
     pub(super) fn lines(&self, claude: &str) -> Vec<String> {
         let mut lines = vec![format!(
             "plugin {} from github {} (marketplace {})",
@@ -89,7 +89,7 @@ impl Offer {
     }
 }
 
-/// What there is to ask: `None` when the plugin is installed already (REQ-1004).
+/// What there is to ask: `None` when the plugin is installed already (REQ-1012).
 pub(super) fn prepare(claude: &str, plugin: &str, repo: &str) -> Out<Option<Offer>> {
     if installed_ids(claude)?.iter().any(|i| i == plugin) {
         return Ok(None);
@@ -104,7 +104,7 @@ pub(super) fn prepare(claude: &str, plugin: &str, repo: &str) -> Out<Option<Offe
     }))
 }
 
-/// Run the commands of an offer after a yes (REQ-1005, REQ-1006). `quiet`: the screen's, with
+/// Run the commands of an offer after a yes (REQ-1013, REQ-1014). `quiet`: the screen's, with
 /// stdin closed and the output of `claude` captured, the first line of its stderr in the error.
 pub(super) fn run(claude: &str, offer: &Offer, quiet: bool, say: &mut dyn FnMut(String)) -> Out {
     for c in &offer.todo {
@@ -135,8 +135,8 @@ pub(super) fn run(claude: &str, offer: &Offer, quiet: bool, say: &mut dyn FnMut(
     Ok(())
 }
 
-/// Say what would be installed and from where, ask, and run `claude plugin` for it (REQ-1004 to
-/// REQ-1006). A plugin that is installed is skipped.
+/// Say what would be installed and from where, ask, and run `claude plugin` for it (REQ-1012 to
+/// REQ-1014). A plugin that is installed is skipped.
 pub(super) fn on(plugin: &str, repo: &str, yes: bool) -> Out {
     let Some(offer) = prepare(CLAUDE, plugin, repo)? else {
         println!("plugins: {plugin} is installed");

@@ -121,7 +121,7 @@ impl Rig {
             .env(identity::env_var("STATE_DIR"), self.p("state"))
             .env(identity::env_var("SOCKET"), self.p("s.sock"))
             .env_remove(identity::env_var("PANE_ID"))
-            // never the person's own `~/.claude`: `update` looks for a skill there (REQ-1002)
+            // never the person's own `~/.claude`: `update` looks for a skill there (REQ-1010)
             .env("CLAUDE_CONFIG_DIR", self.p("claude-config"))
             .env("CARGO_INSTALL_ROOT", self.p("root"))
             .env("CARGO_NET_OFFLINE", "true")
@@ -187,7 +187,7 @@ fn update_installs_what_the_repository_has_and_deletes_its_directory() {
     assert_eq!(rig.left(), Vec::<String>::new());
 }
 
-/// REQ-1002: a person who has the first skill gets `skill install` run by the binary just installed
+/// REQ-1010: a person who has the first skill gets `skill install` run by the binary just installed
 /// (the fake one says its arguments); a person with none gets nothing.
 #[test]
 fn update_refreshes_the_skills_with_the_new_binary_only_when_the_first_is_installed() {
