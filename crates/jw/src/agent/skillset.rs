@@ -588,14 +588,14 @@ fn refusal(st: State, name: &str) -> Option<Fail> {
     }
 }
 
-/// Everything of `on` for a `github` entry up to the question: the refusals, the fetch (`announce`
-/// says what is being fetched, the CLI on stderr), the commit, the files and the warning. `cancel`:
+/// Everything of `on` for a `github` entry up to the question: the refusals, the fetch (`step` is told
+/// what is being fetched, the CLI says it on stderr), the commit, the files and the warning. `cancel`:
 /// the flag of a caller that owns the terminal, in place of signals.
 fn prepare_github(
     ctx: &Ctx,
     e: &Entry,
     cancel: Option<Arc<AtomicBool>>,
-    announce: &mut dyn FnMut(String),
+    step: &mut dyn FnMut(Event),
 ) -> Out<Prep> {
     let Source::Github { repo, path, branch } = &e.source else {
         unreachable!("a github entry")
@@ -609,9 +609,16 @@ fn prepare_github(
     }
     let (url, from_env) = github::url_of(ctx.github.as_deref(), repo);
     let branch_name = branch.as_deref().unwrap_or("HEAD");
-    announce(format!("fetching {url}, branch {branch_name}"));
+    step(Event::Fetching {
+        url: url.clone(),
+        branch: branch_name.to_owned(),
+    });
     let fetched = github::fetch(&url, from_env, branch.as_deref(), path, role, cancel)
         .map_err(Fail::Error)?;
+    step(Event::Fetched {
+        commit: fetched.commit.clone(),
+        files: fetched.files.len(),
+    });
     let old = locked(ctx, e, &dest).map(|l| l.commit.clone());
     if old.as_deref() == Some(fetched.commit.as_str())
         && github_state(ctx, e, None) == State::Installed
@@ -641,7 +648,7 @@ fn prepare_github(
 /// The rest of `on` after a yes: the destination is looked at again (the fetch took a while), the
 /// files are written, what an earlier install wrote and this one does not have is taken away if it
 /// is as it was, and the lock is written last. The line that says it (REQ-1022 to REQ-1024).
-fn apply_github(ctx: &mut Ctx, plan: &Prepared) -> Out<String> {
+fn apply_github(ctx: &mut Ctx, plan: &Prepared, step: &mut dyn FnMut(Event)) -> Out<String> {
     let e = &plan.entry;
     let Source::Github { repo, path, .. } = &e.source else {
         unreachable!("a github entry")
@@ -656,6 +663,9 @@ fn apply_github(ctx: &mut Ctx, plan: &Prepared) -> Out<String> {
         return fail("interrupted: nothing installed");
     }
     let targets = &plan.targets;
+    step(Event::Writing {
+        files: targets.len(),
+    });
     github::write_all(targets, (!role).then_some(dest.dir.as_path())).map_err(Fail::Error)?;
     let old = locked(ctx, e, &dest).cloned();
     let new: std::collections::BTreeMap<String, String> = targets
@@ -685,6 +695,7 @@ fn apply_github(ctx: &mut Ctx, plan: &Prepared) -> Out<String> {
             );
         }
     }
+    step(Event::Locking);
     ctx.lock.entries.insert(
         e.name.clone(),
         Locked {
@@ -712,7 +723,11 @@ fn apply_github(ctx: &mut Ctx, plan: &Prepared) -> Out<String> {
 }
 
 fn on_github(ctx: &mut Ctx, e: &Entry, yes: bool) -> Out {
-    let plan = match prepare_github(ctx, e, None, &mut |l| eprintln!("{l}"))? {
+    let plan = match prepare_github(ctx, e, None, &mut |event| {
+        if let Event::Fetching { url, branch } = event {
+            eprintln!("fetching {url}, branch {branch}");
+        }
+    })? {
         Prep::Unchanged(line) => {
             println!("{line}");
             return Ok(());
@@ -732,7 +747,7 @@ fn on_github(ctx: &mut Ctx, e: &Entry, yes: bool) -> Out {
         println!("not installed: you did not say yes");
         return Ok(());
     }
-    println!("{}", apply_github(ctx, &plan)?);
+    println!("{}", apply_github(ctx, &plan, &mut |_| {})?);
     Ok(())
 }
 
@@ -962,6 +977,26 @@ impl Ask {
     }
 }
 
+/// A step of the work, told to the caller as it happens (N186; REQ-1048): the CLI prints the first
+/// and ignores the rest, the screen draws each.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    Fetching {
+        url: String,
+        branch: String,
+    },
+    Fetched {
+        commit: String,
+        files: usize,
+    },
+    Writing {
+        files: usize,
+    },
+    Locking,
+    /// A command of a plugin, as `$ claude …`.
+    Running(String),
+}
+
 /// What `on` did or asks.
 pub(crate) enum Step {
     /// Done, with the lines the CLI would print.
@@ -970,11 +1005,17 @@ pub(crate) enum Step {
 }
 
 /// `skillset on <name>` up to the question: the entry is installed at once when it is jw's own, else
-/// what is to be asked comes back, fetched when it is a `github` one (`cancel` ends the fetch).
-pub(crate) fn on(place: &Place, name: &str, cancel: Arc<AtomicBool>) -> Result<Step, String> {
+/// what is to be asked comes back, fetched when it is a `github` one (`cancel` ends the fetch, `step`
+/// hears what it does).
+pub(crate) fn on(
+    place: &Place,
+    name: &str,
+    cancel: Arc<AtomicBool>,
+    step: &mut dyn FnMut(Event),
+) -> Result<Step, String> {
     let ctx = Ctx::load_at(place, true, &mut Vec::new()).map_err(text)?;
     let (entry, _) = find(&ctx.file, name).map_err(text)?;
-    let step = match (&entry.kind, &entry.source) {
+    let done = match (&entry.kind, &entry.source) {
         (Kind::Skill, Source::Embedded) => {
             let mut lines = Vec::new();
             on_embedded_skill(&ctx, &entry, &mut |l| lines.push(l)).map_err(text)?;
@@ -987,25 +1028,33 @@ pub(crate) fn on(place: &Place, name: &str, cancel: Arc<AtomicBool>) -> Result<S
                 Some(offer) => Step::Ask(Ask::Plugin(offer)),
             }
         }
-        _ => match prepare_github(&ctx, &entry, Some(cancel), &mut |_| {}).map_err(text)? {
+        _ => match prepare_github(&ctx, &entry, Some(cancel), step).map_err(text)? {
             Prep::Unchanged(line) => Step::Done(vec![line]),
             Prep::Ask(p) => Step::Ask(Ask::Github(p)),
         },
     };
-    Ok(step)
+    Ok(done)
 }
 
 /// The rest of `on` after the person's yes (REQ-1036, REQ-1038): the lines the CLI would print. The
 /// commands of a plugin run with their output captured.
-pub(crate) fn apply(place: &Place, ask: Ask) -> Result<Vec<String>, String> {
+pub(crate) fn apply(
+    place: &Place,
+    ask: Ask,
+    step: &mut dyn FnMut(Event),
+) -> Result<Vec<String>, String> {
     match ask {
         Ask::Github(p) => {
             let mut ctx = Ctx::load_at(place, true, &mut Vec::new()).map_err(text)?;
-            Ok(vec![apply_github(&mut ctx, &p).map_err(text)?])
+            Ok(vec![apply_github(&mut ctx, &p, step).map_err(text)?])
         }
         Ask::Plugin(o) => {
             let mut lines = Vec::new();
-            plugins::run(&place.claude_cmd, &o, true, &mut |l| lines.push(l)).map_err(text)?;
+            plugins::run(&place.claude_cmd, &o, true, &mut |l| {
+                step(Event::Running(l.clone()));
+                lines.push(l);
+            })
+            .map_err(text)?;
             lines.push(format!("plugins: {} is installed", o.plugin));
             Ok(lines)
         }
@@ -1253,7 +1302,7 @@ pub(crate) mod tests {
         }
 
         fn ask(&self, name: &str) -> Ask {
-            match on(&self.place, name, World::cancel()) {
+            match on(&self.place, name, World::cancel(), &mut |_| {}) {
                 Ok(Step::Ask(a)) => a,
                 Ok(Step::Done(l)) => panic!("done, not asked: {l:?}"),
                 Err(e) => panic!("{e}"),
@@ -1303,7 +1352,7 @@ pub(crate) mod tests {
     #[test]
     fn an_embedded_skill_goes_on_at_once_and_off_with_the_lines_of_the_cli() {
         let w = World::new();
-        let Ok(Step::Done(lines)) = on(&w.place, bin(), World::cancel()) else {
+        let Ok(Step::Done(lines)) = on(&w.place, bin(), World::cancel(), &mut |_| {}) else {
             panic!("an embedded skill is installed with no question")
         };
         let file = w
@@ -1314,7 +1363,7 @@ pub(crate) mod tests {
             .join("SKILL.md");
         assert_eq!(lines, [format!("installed {}", file.display())]);
         assert_eq!(w.state(bin(), false), "installed");
-        let Ok(Step::Done(again)) = on(&w.place, bin(), World::cancel()) else {
+        let Ok(Step::Done(again)) = on(&w.place, bin(), World::cancel(), &mut |_| {}) else {
             panic!()
         };
         assert_eq!(again, [format!("unchanged {}", file.display())]);
@@ -1324,7 +1373,7 @@ pub(crate) mod tests {
         );
         assert_eq!(w.state(bin(), false), "available");
         // A role is built in: nothing to do either way.
-        let Ok(Step::Done(role)) = on(&w.place, "brain", World::cancel()) else {
+        let Ok(Step::Done(role)) = on(&w.place, "brain", World::cancel(), &mut |_| {}) else {
             panic!()
         };
         assert!(role[0].starts_with("brain is built in"), "{role:?}");
@@ -1356,7 +1405,7 @@ pub(crate) mod tests {
         assert_eq!(from, None);
         assert_eq!(files, [(w.skill_file().display().to_string(), 26)]);
         assert!(scripts.is_empty());
-        let lines = apply(&w.place, ask).unwrap();
+        let lines = apply(&w.place, ask, &mut |_| {}).unwrap();
         assert_eq!(
             lines,
             [format!(
@@ -1368,7 +1417,7 @@ pub(crate) mod tests {
         assert!(w.skill_file().exists());
         assert_eq!(w.state("caveman", false), "installed");
         // The same commit again is not asked about.
-        let Ok(Step::Done(same)) = on(&w.place, "caveman", World::cancel()) else {
+        let Ok(Step::Done(same)) = on(&w.place, "caveman", World::cancel(), &mut |_| {}) else {
             panic!("the commit installed is not asked about")
         };
         assert_eq!(
@@ -1394,7 +1443,7 @@ pub(crate) mod tests {
             let Sheet::Github { commit, .. } = ask.sheet() else {
                 panic!()
             };
-            apply(&w.place, ask).unwrap();
+            apply(&w.place, ask, &mut |_| {}).unwrap();
             commit
         };
         std::fs::create_dir_all(w.repo().join("skills/caveman/scripts")).unwrap();
@@ -1423,7 +1472,7 @@ pub(crate) mod tests {
         assert_ne!(commit, first);
         assert_eq!(files.len(), 2);
         assert_eq!(scripts, ["scripts/stats.py"]);
-        apply(&w.place, ask).unwrap();
+        apply(&w.place, ask, &mut |_| {}).unwrap();
         assert_eq!(w.state("caveman", true), "installed");
     }
 
@@ -1435,14 +1484,18 @@ pub(crate) mod tests {
         std::os::unix::fs::symlink(w.dir.path().join("elsewhere"), &link).unwrap();
         assert_eq!(w.state("caveman", false), "other tool");
         assert_eq!(
-            on(&w.place, "caveman", World::cancel()).err().unwrap(),
+            on(&w.place, "caveman", World::cancel(), &mut |_| {})
+                .err()
+                .unwrap(),
             "caveman: installed by another tool, left alone"
         );
         std::fs::remove_file(&link).unwrap();
-        apply(&w.place, w.ask("caveman")).unwrap();
+        apply(&w.place, w.ask("caveman"), &mut |_| {}).unwrap();
         std::fs::write(w.skill_file(), "mine\n").unwrap();
         assert_eq!(w.state("caveman", false), "modified");
-        let refused = on(&w.place, "caveman", World::cancel()).err().unwrap();
+        let refused = on(&w.place, "caveman", World::cancel(), &mut |_| {})
+            .err()
+            .unwrap();
         assert!(refused.contains("was edited, left alone"), "{refused}");
         // `off` takes away only what was not edited and says so.
         let lines = off(&w.place, "caveman").unwrap();
@@ -1460,7 +1513,7 @@ pub(crate) mod tests {
         let cancel = World::cancel();
         cancel.store(true, Ordering::Relaxed);
         assert_eq!(
-            on(&w.place, "caveman", cancel).err().unwrap(),
+            on(&w.place, "caveman", cancel, &mut |_| {}).err().unwrap(),
             "interrupted"
         );
         assert!(!w.skill_file().exists());
@@ -1471,14 +1524,18 @@ pub(crate) mod tests {
     fn a_repository_that_does_not_exist_says_why_and_a_link_in_it_is_refused() {
         let w = World::new();
         std::fs::remove_dir_all(w.repo().join(".git")).unwrap();
-        let e = on(&w.place, "caveman", World::cancel()).err().unwrap();
+        let e = on(&w.place, "caveman", World::cancel(), &mut |_| {})
+            .err()
+            .unwrap();
         assert!(e.contains("git") && e.contains("failed"), "{e}");
         assert!(!e.contains('\n'), "one line");
         let w = World::new();
         std::os::unix::fs::symlink("/etc/hosts", w.repo().join("skills/caveman/hosts")).unwrap();
         git(&w.repo(), &["add", "."]);
         git(&w.repo(), &["commit", "-q", "-m", "link"]);
-        let e = on(&w.place, "caveman", World::cancel()).err().unwrap();
+        let e = on(&w.place, "caveman", World::cancel(), &mut |_| {})
+            .err()
+            .unwrap();
         assert!(e.ends_with("a link, refused"), "{e}");
     }
 
@@ -1508,7 +1565,7 @@ pub(crate) mod tests {
         );
         // Asking called `claude` only for the two lists.
         assert!(!w.log().contains("install"), "{}", w.log());
-        let lines = apply(&w.place, ask).unwrap();
+        let lines = apply(&w.place, ask, &mut |_| {}).unwrap();
         assert_eq!(
             lines.last().unwrap(),
             "plugins: ponytail@ponytail is installed"
@@ -1525,7 +1582,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(w.state("ponytail", false), "installed");
-        let Ok(Step::Done(done)) = on(&w.place, "ponytail", World::cancel()) else {
+        let Ok(Step::Done(done)) = on(&w.place, "ponytail", World::cancel(), &mut |_| {}) else {
             panic!()
         };
         assert_eq!(done, ["plugins: ponytail@ponytail is installed"]);
@@ -1543,10 +1600,54 @@ pub(crate) mod tests {
     fn a_plugin_command_that_fails_is_shown_with_what_claude_said() {
         let w = World::new();
         std::fs::write(w.dir.path().join("install.fails"), "").unwrap();
-        let e = apply(&w.place, w.ask("ponytail")).err().unwrap();
+        let e = apply(&w.place, w.ask("ponytail"), &mut |_| {})
+            .err()
+            .unwrap();
         assert!(
             e.contains("plugin install ponytail@ponytail failed") && e.ends_with(": nope"),
             "{e}"
+        );
+    }
+
+    #[test]
+    fn the_work_tells_each_step_as_it_goes_and_a_plugin_each_command() {
+        let w = World::new();
+        let mut seen = Vec::new();
+        let Ok(Step::Ask(ask)) = on(&w.place, "caveman", World::cancel(), &mut |e| seen.push(e))
+        else {
+            panic!("a github entry is asked about")
+        };
+        let commit = git(&w.repo(), &["rev-parse", "HEAD"]);
+        let [
+            Event::Fetching { url, branch },
+            Event::Fetched {
+                commit: got,
+                files: 1,
+            },
+        ] = &seen[..]
+        else {
+            panic!("{seen:?}")
+        };
+        assert!(url.ends_with("/gh/juliusbrussee/caveman"), "{url}");
+        assert_eq!((branch.as_str(), got), ("HEAD", &commit));
+        seen.clear();
+        apply(&w.place, ask, &mut |e| seen.push(e)).unwrap();
+        assert_eq!(seen, [Event::Writing { files: 1 }, Event::Locking]);
+        // A plugin says each `claude` command before it runs it.
+        seen.clear();
+        apply(&w.place, w.ask("ponytail"), &mut |e| seen.push(e)).unwrap();
+        let commands: Vec<_> = seen
+            .iter()
+            .map(|e| match e {
+                Event::Running(c) => c.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert!(
+            matches!(&commands[..], [a, b]
+                if a.starts_with("$ ") && a.ends_with("plugin marketplace add DietrichGebert/ponytail")
+                    && b.ends_with("plugin install ponytail@ponytail")),
+            "{commands:?}"
         );
     }
 

@@ -913,7 +913,7 @@ impl Worker {
                 // A flag for each download: one that was stopped does not stop the next.
                 self.cancel = Arc::new(AtomicBool::new(false));
                 let cancel = self.cancel.clone();
-                self.spawn(move |p| match skillset::on(p, &name, cancel) {
+                self.spawn(move |p| match skillset::on(p, &name, cancel, &mut |_| {}) {
                     Ok(Step::Done(lines)) => Done {
                         reply: Reply::Done(Ok(lines)),
                         ask: None,
@@ -935,7 +935,7 @@ impl Worker {
             Act::Apply => {
                 if let Some(ask) = self.pending.take() {
                     self.spawn(move |p| Done {
-                        reply: Reply::Done(skillset::apply(p, ask)),
+                        reply: Reply::Done(skillset::apply(p, ask, &mut |_| {})),
                         ask: None,
                     });
                 }
