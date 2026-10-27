@@ -81,7 +81,7 @@ impl Rig {
         let main = if broken {
             "fn main( {"
         } else {
-            "fn main() { println!(\"installed\"); }"
+            "fn main() { println!(\"installed {}\", std::env::args().skip(1).collect::<Vec<_>>().join(\" \")); }"
         };
         write(
             &repo.join(format!("crates/{name}/src/main.rs")),
@@ -121,6 +121,8 @@ impl Rig {
             .env(identity::env_var("STATE_DIR"), self.p("state"))
             .env(identity::env_var("SOCKET"), self.p("s.sock"))
             .env_remove(identity::env_var("PANE_ID"))
+            // never the person's own `~/.claude`: `update` looks for a skill there (REQ-1010)
+            .env("CLAUDE_CONFIG_DIR", self.p("claude-config"))
             .env("CARGO_INSTALL_ROOT", self.p("root"))
             .env("CARGO_NET_OFFLINE", "true")
             .env_remove("CARGO_TARGET_DIR")
@@ -183,6 +185,37 @@ fn update_installs_what_the_repository_has_and_deletes_its_directory() {
     );
     assert!(rig.installed());
     assert_eq!(rig.left(), Vec::<String>::new());
+}
+
+/// REQ-1010: a person who has the first skill gets `skill install` run by the binary just installed
+/// (the fake one says its arguments); a person with none gets nothing.
+#[test]
+fn update_refreshes_the_skills_with_the_new_binary_only_when_the_first_is_installed() {
+    let rig = Rig::new(false);
+    let name = &identity::get().name;
+    let out = rig.run(&["update"], "");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        !text(&out.stdout).contains("skill install"),
+        "{}",
+        text(&out.stdout)
+    );
+
+    write(
+        &rig.p("claude-config")
+            .join(format!("skills/{name}/SKILL.md")),
+        "mine\n",
+        0o644,
+    );
+    let out = rig.run(&["update"], "");
+    let stdout = text(&out.stdout);
+    assert!(out.status.success(), "{stdout}{}", text(&out.stderr));
+    assert!(stdout.contains("installed skill install\n"), "{stdout}");
+    // The file that is there is the person's: `update` never writes it itself.
+    let skill = rig
+        .p("claude-config")
+        .join(format!("skills/{name}/SKILL.md"));
+    assert_eq!(std::fs::read_to_string(skill).unwrap(), "mine\n");
 }
 
 #[test]

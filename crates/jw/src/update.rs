@@ -42,7 +42,7 @@ struct Opts {
 }
 
 /// A `<ref>` is a branch, a tag or a full hash, and is never an option of `git` (REQ-978).
-fn valid_ref(r: &str) -> bool {
+pub(crate) fn valid_ref(r: &str) -> bool {
     (1..=200).contains(&r.len())
         && r.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
@@ -235,6 +235,82 @@ impl Job {
     }
 }
 
+/// A repository fetched into a temporary directory that is deleted when this drops, a signal
+/// included (N184b, REQ-1022): the means of `update`, for the skillset.
+pub(crate) struct Checkout {
+    job: Job,
+}
+
+impl Checkout {
+    pub(crate) fn dir(&self) -> &Path {
+        self.job.dir()
+    }
+
+    /// A signal came since the fetch began: the handlers of `Job` replace the default action, so the
+    /// process does not die of it and whoever goes on must look (REQ-1022).
+    pub(crate) fn interrupted(&self) -> bool {
+        self.job.interrupted()
+    }
+}
+
+/// Fetch `url` at `git_ref` (its `HEAD` when none) and the commit that came; `allow_file` lets the
+/// `file` protocol through, for the tests of the commands. An interrupt is an error here.
+pub(crate) fn checkout(
+    url: &str,
+    git_ref: Option<&str>,
+    allow_file: bool,
+) -> Result<(Checkout, String), String> {
+    let job = Job::start(false)?;
+    let fetched = job.fetch(url, git_ref, allow_file);
+    if let Err(f) = fetched {
+        return Err(match f {
+            Fail::Interrupted => "interrupted".to_owned(),
+            Fail::Error(e) => e,
+        });
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(job.dir())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git rev-parse failed ({})", out.status));
+    }
+    let commit = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    Ok((Checkout { job }, commit))
+}
+
+/// The commit a branch (its `HEAD` when none) of `url` is at now, from `git ls-remote`: it fetches
+/// nothing and never asks for a password (N184b, REQ-1018).
+pub(crate) fn ls_remote(
+    url: &str,
+    branch: Option<&str>,
+    allow_file: bool,
+) -> Result<String, String> {
+    let refspec = branch.map_or_else(|| "HEAD".to_owned(), |b| format!("refs/heads/{b}"));
+    let out = Command::new("git")
+        .args(["ls-remote", "--", url, &refspec])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env(
+            "GIT_ALLOW_PROTOCOL",
+            if allow_file { "https:file" } else { "https" },
+        )
+        .env("GIT_HTTP_LOW_SPEED_LIMIT", "1000")
+        .env("GIT_HTTP_LOW_SPEED_TIME", "15")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git ls-remote {url} failed ({})", out.status));
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{url} has no {refspec}"))
+}
+
 /// `SIGINT` to the group, then `SIGKILL` if it is still there after the grace; waits for it
 /// either way, so nothing writes into the directory when it is deleted.
 fn end_group(child: &mut Child) {
@@ -339,6 +415,51 @@ fn build(job: &Job, o: &Opts, url: &str, from_env: bool) -> Out<String> {
     Ok(new)
 }
 
+/// The binary `cargo install` just wrote: `$CARGO_INSTALL_ROOT/bin`, else `$CARGO_HOME/bin`, else
+/// `~/.cargo/bin` (REQ-1010).
+fn installed_binary(
+    install_root: Option<PathBuf>,
+    cargo_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let root = install_root
+        .or(cargo_home)
+        .or_else(|| Some(home?.join(".cargo")))?;
+    Some(root.join("bin").join(&identity::get().name))
+}
+
+fn installed_binary_here() -> Option<PathBuf> {
+    let var = |v: &str| {
+        std::env::var_os(v)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    };
+    installed_binary(var("CARGO_INSTALL_ROOT"), var("CARGO_HOME"), var("HOME"))
+}
+
+/// A person who has the first skill gets the three refreshed by the binary just installed, whose texts
+/// are the new ones; with none installed nothing is (REQ-1010). It never fails the update.
+fn refresh_skills() {
+    if !crate::agent::skill_installed() {
+        return;
+    }
+    let name = &identity::get().name;
+    let Some(new) = installed_binary_here().filter(|b| b.is_file()) else {
+        println!(
+            "skills not refreshed: the installed {name} is not where cargo puts it: run {name} skill install"
+        );
+        return;
+    };
+    match Command::new(&new).args(["skill", "install"]).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => println!(
+            "skills not refreshed: {} skill install failed ({status})",
+            new.display()
+        ),
+        Err(e) => println!("skills not refreshed: {}: {e}", new.display()),
+    }
+}
+
 pub fn update(args: &[&str]) -> Res {
     let o = parse(args, &["--ref", "--cache", "--keep", "--restart"])?;
     let (url, from_env) = repo();
@@ -352,6 +473,7 @@ pub fn update(args: &[&str]) -> Res {
     };
     let name = &identity::get().name;
     println!("{name} {} → {new}", crate::version::VERSION);
+    refresh_skills();
     let Some(daemon) = crate::version::daemon() else {
         return Ok(ExitCode::SUCCESS);
     };
@@ -488,6 +610,17 @@ pub fn android(args: &[&str]) -> Res {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_installed_binary_is_where_cargo_puts_it() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        let bin = &identity::get().name;
+        let at = |root: &str| Some(PathBuf::from(format!("{root}/bin/{bin}")));
+        assert_eq!(installed_binary(p("/r"), p("/c"), p("/h")), at("/r"));
+        assert_eq!(installed_binary(None, p("/c"), p("/h")), at("/c"));
+        assert_eq!(installed_binary(None, None, p("/h")), at("/h/.cargo"));
+        assert_eq!(installed_binary(None, None, None), None);
+    }
 
     #[test]
     fn the_crate_of_the_binary_is_in_the_directory_the_identity_names() {

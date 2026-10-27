@@ -572,30 +572,47 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
     assert!(out.status.success());
     let path = config.join(format!("skills/{name}/SKILL.md"));
     let tasks = config.join(format!("skills/{name}-tasks/SKILL.md"));
-    // both skills are written (REQ-932)
+    // the three skills are written (REQ-932, REQ-1005), each with its mark (REQ-1007)
+    let roles = config.join(format!("skills/{}/SKILL.md", identity::get().agent_skill));
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         format!(
-            "installed {}\ninstalled {}\n",
+            "installed {}\ninstalled {}\ninstalled {}\n",
             path.display(),
-            tasks.display()
+            tasks.display(),
+            roles.display()
         )
     );
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text_out);
+    let first = std::fs::read_to_string(&path).unwrap();
+    assert!(first.starts_with(&text_out), "{first}");
+    let mark = &first[text_out.len()..];
+    assert!(
+        mark.starts_with(&format!("<!-- {name} {} ", env!("CARGO_PKG_VERSION")))
+            && mark.ends_with(" -->\n"),
+        "{mark:?}"
+    );
     let second = std::fs::read_to_string(&tasks).unwrap();
     assert!(
         second.starts_with(&format!("---\nname: {name}-tasks\n")),
         "{second}"
     );
     assert!(second.contains(&format!("{name} tasks loop on")) && !second.contains("{bin}"));
-    // Again: it is written over, whole.
-    assert!(
-        env.jw()
-            .args(["skill", "install"])
-            .env("CLAUDE_CONFIG_DIR", &config)
-            .status()
-            .unwrap()
-            .success()
+    // Again: what it wrote and nobody edited is the same, and is said so (REQ-1008).
+    let again = env
+        .jw()
+        .args(["skill", "install"])
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .output()
+        .unwrap();
+    assert!(again.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&again.stdout),
+        format!(
+            "unchanged {}\nunchanged {}\nunchanged {}\n",
+            path.display(),
+            tasks.display(),
+            roles.display()
+        )
     );
     assert_eq!(
         env.jw()
