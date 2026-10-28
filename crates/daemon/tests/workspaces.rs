@@ -1160,7 +1160,7 @@ fn status(dir: &Path) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// N188, REQ-1056, REQ-1059: a worktree with a task list in it goes without `--force`, and the line that
+/// N188, REQ-1061, REQ-1064: a worktree with a task list in it goes without `--force`, and the line that
 /// makes it so is the repository's, so another worktree's list is no change either.
 #[test]
 fn a_task_list_does_not_stop_its_worktree_from_going() {

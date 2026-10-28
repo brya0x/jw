@@ -395,7 +395,7 @@ fn ls_in(env: &Env, dir: &Path) -> Output {
     cmd.output().unwrap()
 }
 
-/// REQ-1056, REQ-1057, REQ-1059 (N188): finding a list keeps it out of git, once, and the list is as it was.
+/// REQ-1061, REQ-1062, REQ-1064 (N188): finding a list keeps it out of git, once, and the list is as it was.
 #[test]
 fn ls_keeps_the_list_out_of_git_once_and_leaves_it_alone() {
     let env = Env::new("tk-excl");
@@ -412,7 +412,7 @@ fn ls_keeps_the_list_out_of_git_once_and_leaves_it_alone() {
     assert!(file(&dir).starts_with(LIST), "the list is what it was");
 }
 
-/// REQ-1058: an `info/exclude` that cannot be written leaves the list working, with one word on stderr.
+/// REQ-1063: an `info/exclude` that cannot be written leaves the list working, with one word on stderr.
 #[test]
 fn an_exclude_file_that_cannot_be_written_says_so_and_the_list_works() {
     use std::os::unix::fs::PermissionsExt;
@@ -433,7 +433,7 @@ fn an_exclude_file_that_cannot_be_written_says_so_and_the_list_works() {
     assert!(err(&o).contains("not kept out of git"), "{}", err(&o));
 }
 
-/// REQ-1058: a folder that is in no repository does not say a word.
+/// REQ-1063: a folder that is in no repository does not say a word.
 #[test]
 fn a_folder_in_no_repository_is_not_a_failure_and_says_nothing() {
     let env = Env::new("tk-plain");

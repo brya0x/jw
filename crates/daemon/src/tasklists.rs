@@ -769,7 +769,7 @@ mod tests {
         tasks::parse(text)
     }
 
-    /// REQ-1056 (N188): the daemon's first look at a list keeps it out of git.
+    /// REQ-1061 (N188): the daemon's first look at a list keeps it out of git.
     #[test]
     fn the_look_at_a_list_keeps_it_out_of_git() {
         let dir = std::env::temp_dir().join(format!("jw-look-exclude-{}", std::process::id()));

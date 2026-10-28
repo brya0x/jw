@@ -653,7 +653,7 @@ pub fn write_keeping_mode(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
-/// Makes git ignore the list of the folder `dir` on this machine alone (N188, REQ-1056 to REQ-1058): the
+/// Makes git ignore the list of the folder `dir` on this machine alone (N188, REQ-1061 to REQ-1063): the
 /// lines of `identity::tasks_exclude` go in the repository's `info/exclude`, common to its worktrees and
 /// never versioned, so the list is no untracked file that `git worktree remove` refuses. Nothing is done
 /// with no list or no repository; a failure is said once and the list works as before.
@@ -670,7 +670,7 @@ pub fn keep_out_of_git(dir: &Path) {
 }
 
 fn exclude(dir: &Path) -> Result<(), String> {
-    // one at a time in this process; with two processes the line may be twice, which git reads as one (RISK-181)
+    // one at a time in this process; with two processes the line may be twice, which git reads as one (RISK-182)
     static ONE: Mutex<()> = Mutex::new(());
     let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     let file = match git::run(dir, &["rev-parse", "--git-path", "info/exclude"]) {
@@ -1131,7 +1131,7 @@ mod tests {
         git::run(dir, &["check-ignore", "-q", &list.to_string_lossy()]).is_ok()
     }
 
-    /// REQ-1056, REQ-1057: the lines go in, once, after what was there, with a line break when it had none.
+    /// REQ-1061, REQ-1062: the lines go in, once, after what was there, with a line break when it had none.
     #[test]
     fn the_lines_are_added_after_what_was_there_and_never_twice() {
         let dir = repo("add");
@@ -1151,7 +1151,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// REQ-1057: no file and no folder is made, and an empty file gets the lines alone.
+    /// REQ-1062: no file and no folder is made, and an empty file gets the lines alone.
     #[test]
     fn the_exclude_file_and_its_folder_are_made_when_they_are_not_there() {
         let dir = repo("make");
@@ -1164,7 +1164,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// REQ-1057: what the repository already ignores is not added, and the lists of the roles are not hidden.
+    /// REQ-1062: what the repository already ignores is not added, and the lists of the roles are not hidden.
     #[test]
     fn a_list_the_repository_already_ignores_adds_nothing_and_the_roles_are_not_hidden() {
         let dir = repo("known");
@@ -1188,7 +1188,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// REQ-1057: a link is written through and kept.
+    /// REQ-1062: a link is written through and kept.
     #[test]
     fn an_exclude_file_that_is_a_link_is_written_through_and_kept() {
         let dir = repo("link");
@@ -1207,7 +1207,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// REQ-1058: no list, no repository and a file that cannot be written leave everything as it was.
+    /// REQ-1063: no list, no repository and a file that cannot be written leave everything as it was.
     #[test]
     fn with_no_list_no_repository_or_no_way_to_write_nothing_changes() {
         let dir = repo("none");
@@ -1242,7 +1242,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// REQ-1059: a list added with `git add -f` stays tracked.
+    /// REQ-1064: a list added with `git add -f` stays tracked.
     #[test]
     fn a_list_added_to_git_by_the_person_stays_tracked() {
         let dir = repo("tracked");

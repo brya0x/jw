@@ -72,7 +72,7 @@ pub fn tasks_path(folder: &Path) -> PathBuf {
     folder.join(format!(".{}", get().name)).join("tasks.md")
 }
 
-/// What goes in a repository's `info/exclude` to keep the task lists out of git (N188, REQ-1057): a comment
+/// What goes in a repository's `info/exclude` to keep the task lists out of git (N188, REQ-1062): a comment
 /// that says who put it and the pattern, the list's file at any depth and not its directory, which also
 /// holds the repository's roles. The pattern is the last line.
 pub fn tasks_exclude() -> String {
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(path, PathBuf::from(format!("/w/.{}/tasks.md", get().name)));
     }
 
-    /// REQ-1057: the pattern is the list's file under any folder, and the comment names the product.
+    /// REQ-1062: the pattern is the list's file under any folder, and the comment names the product.
     #[test]
     fn the_task_list_exclusion_comes_from_the_identity() {
         let name = &get().name;
