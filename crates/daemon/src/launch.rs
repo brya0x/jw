@@ -77,18 +77,9 @@ pub fn script(
             .collect::<Vec<_>>()
             .join(" ")
     };
-    // fish ends the script when a program it ran dies of `^C`, and has no `trap`: the program runs under
-    // an `sh` that traps `INT` and ends with the program's status, which fish sees as an ordinary end.
-    let program = if is_fish(shell) {
-        let posix: Vec<String> = argv.iter().map(|w| quote("/bin/sh", w)).collect();
-        let inner = format!("trap : INT; {}; exit $?", posix.join(" "));
-        format!("'/bin/sh' '-c' {}", quote(shell, &inner))
-    } else {
-        line(argv)
-    };
     let words = match then {
-        Some(then) => format!("{program} && {}", line(then)),
-        None => program,
+        Some(then) => format!("{} && {}", line(argv), line(then)),
+        None => line(argv),
     };
     // The shell that takes over keeps the integration: its environment and its arguments.
     let env: Vec<String> = setup
@@ -116,8 +107,13 @@ pub fn script(
         None => Default::default(),
     };
     // `^C` reaches the shell as well as the program (an interactive `-c` has no job control in zsh) and
-    // would end the script and the pane: a trap, unlike an ignore, is not inherited by the program.
-    let trap = if is_fish(shell) { "" } else { "trap : INT; " };
+    // would end the script and the pane: a trap, unlike an ignore, is not inherited by the program. fish's
+    // own trap is a handler of the signal, which keeps it from cancelling the script.
+    let trap = if is_fish(shell) {
+        "function __jw_int --on-signal INT; end; "
+    } else {
+        "trap : INT; "
+    };
     format!(
         "{trap}{before}{words}; {after}exec {env_prefix}{} {arg_part}-i",
         quote(shell, shell)
@@ -373,7 +369,7 @@ mod tests {
         assert_eq!(
             fish,
             format!(
-                "{b} (printf %s 'pnpm it\\'s a b' | base64 | tr -d '\\n') (printf %s \"$PWD\" | base64 | tr -d '\\n'); '/bin/sh' '-c' 'trap : INT; \\'pnpm\\' \\'it\\'\\\\\\'\\'s a b\\'; exit $?'; printf '\\e]133;D;%d\\a' $status; {}",
+                "function __jw_int --on-signal INT; end; {b} (printf %s 'pnpm it\\'s a b' | base64 | tr -d '\\n') (printf %s \"$PWD\" | base64 | tr -d '\\n'); 'pnpm' 'it\\'s a b'; printf '\\e]133;D;%d\\a' $status; {}",
                 tail("/bin/fish")
             )
         );
