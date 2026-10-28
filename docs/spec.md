@@ -2305,7 +2305,7 @@ REQ-991 to REQ-998 by N183: `crates/contract` conformance (the schema accepts `c
 ## Parts
 | Part | What | REQs | Main files |
 |---|---|---|---|
-| N188 | the task list stays out of git, on this machine only: `identity::tasks_exclude`, `daemon::tasks::keep_out_of_git` (the line in the repository's `info/exclude`), called by `look`, `jw tasks` and `remove_workspace`; version 0.0.56 | 1056–1059 | `crates/identity/src/lib.rs`, `crates/daemon/src/tasks.rs`, `crates/daemon/src/tasklists.rs`, `crates/daemon/src/workspaces.rs`, `crates/jw/src/agent/tasks.rs`, `crates/jw/tests/tasks.rs` |
+| N188 ✓ `9a3ca02a` | the task list stays out of git, on this machine only: `identity::tasks_exclude`, `daemon::tasks::keep_out_of_git` (the line in the repository's `info/exclude`), called by `look`, `jw tasks` and `remove_workspace`; version 0.0.56 | 1056–1059 | `crates/identity/src/lib.rs`, `crates/daemon/src/tasks.rs`, `crates/daemon/src/tasklists.rs`, `crates/daemon/src/workspaces.rs`, `crates/jw/src/agent/tasks.rs`, `crates/jw/tests/tasks.rs` |
 | N186b ✓ `7b1471af` | the screen: the row and the line above the keys at work, the Spanish results, the finals (`other tool`, cancel, late answer, apply with nothing held), the thread's events and the late result kept, the row of `docs/test-path.md`, the tests | 1046–1055 | `crates/jw/src/tui/skillset.rs`, `docs/test-path.md` |
 | N186a ✓ `3fed979d` | the library's `Event` and the callback of `on` and `apply`; the CLI unchanged; version 0.0.55 | 1048 | `crates/jw/src/agent/skillset.rs` |
 | N186 ✓ `be52340e` | spec: the feedback of the skillset screen, from the approved prototype (no new drawing: its log and its toast are OPEN-102 and OPEN-103) | 1046–1055 | `docs/spec.md` |
