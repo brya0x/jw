@@ -1,13 +1,16 @@
 //! The task list of a workspace (N180; REQ-892 to REQ-906, REQ-954, REQ-956): a Markdown file read into
-//! tasks and edited one line at a time. Everything but the last two functions is text in, text out, so
+//! tasks and edited one line at a time. Everything but the functions of «the file» is text in, text out, so
 //! the daemon and the binary's file commands share it and a list can be edited with no daemon.
 
 use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
+
+use crate::git;
 
 /// The id the final task gets when it is written (REQ-905).
 pub const FINAL_ID: &str = "fin";
@@ -650,6 +653,58 @@ pub fn write_keeping_mode(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
+/// Makes git ignore the list of the folder `dir` on this machine alone (N188, REQ-1056 to REQ-1058): the
+/// lines of `identity::tasks_exclude` go in the repository's `info/exclude`, common to its worktrees and
+/// never versioned, so the list is no untracked file that `git worktree remove` refuses. Nothing is done
+/// with no list or no repository; a failure is said once and the list works as before.
+pub fn keep_out_of_git(dir: &Path) {
+    static SAID: AtomicBool = AtomicBool::new(false);
+    if !identity::tasks_path(dir).is_file() {
+        return;
+    }
+    if let Err(why) = exclude(dir)
+        && !SAID.swap(true, Ordering::Relaxed)
+    {
+        eprintln!("{}: not kept out of git: {why}", dir.display());
+    }
+}
+
+fn exclude(dir: &Path) -> Result<(), String> {
+    // one at a time in this process; with two processes the line may be twice, which git reads as one (RISK-181)
+    static ONE: Mutex<()> = Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let file = match git::run(dir, &["rev-parse", "--git-path", "info/exclude"]) {
+        Ok(file) => dir.join(file),
+        Err(why) if why.starts_with("cannot run git") => return Err(why),
+        Err(_) => return Ok(()), // no repository
+    };
+    let list = identity::tasks_path(Path::new(""));
+    if git::run(dir, &["check-ignore", "-q", &list.to_string_lossy()]).is_ok() {
+        return Ok(());
+    }
+    let io = |e: io::Error| format!("{}: {e}", file.display());
+    let before = match fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(io(e)),
+    };
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(io)?;
+    }
+    let lines = identity::tasks_exclude();
+    let text = if before.is_empty() || before.ends_with(b"\n") {
+        lines
+    } else {
+        format!("\n{lines}")
+    };
+    let mut out = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&file)
+        .map_err(io)?;
+    io::Write::write_all(&mut out, text.as_bytes()).map_err(io)
+}
+
 /// What the daemon looks at to know a list changed without reading it: its size and its time.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Sig {
@@ -685,6 +740,7 @@ pub fn complete_file(path: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn ids(l: &List) -> Vec<&str> {
         l.tasks.iter().map(|t| t.id.as_str()).collect()
@@ -1050,5 +1106,153 @@ mod tests {
         }
         let with_note = edit(text, "t1", Edit::Note("n (4 min); ok")).unwrap();
         assert_eq!(with_note.replace("  - n (4 min); ok\r\n", ""), text);
+    }
+
+    // ---- out of git (N188)
+
+    /// A repository with a list in it, in a folder of its own.
+    fn repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jw-exclude-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        git::run(&dir, &["init", "-q"]).unwrap();
+        let list = identity::tasks_path(&dir);
+        fs::create_dir_all(list.parent().unwrap()).unwrap();
+        fs::write(list, "- [ ] a x\n").unwrap();
+        dir
+    }
+
+    fn exclude_file(dir: &Path) -> PathBuf {
+        dir.join(".git/info/exclude")
+    }
+
+    fn ignored(dir: &Path) -> bool {
+        let list = identity::tasks_path(Path::new(""));
+        git::run(dir, &["check-ignore", "-q", &list.to_string_lossy()]).is_ok()
+    }
+
+    /// REQ-1056, REQ-1057: the lines go in, once, after what was there, with a line break when it had none.
+    #[test]
+    fn the_lines_are_added_after_what_was_there_and_never_twice() {
+        let dir = repo("add");
+        let file = exclude_file(&dir);
+        let mut before = fs::read_to_string(&file).unwrap_or_default();
+        before.push_str("# mine\n*.log");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, &before).unwrap();
+        assert!(!ignored(&dir));
+        keep_out_of_git(&dir);
+        keep_out_of_git(&dir);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            format!("{before}\n{}", identity::tasks_exclude())
+        );
+        assert!(ignored(&dir));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// REQ-1057: no file and no folder is made, and an empty file gets the lines alone.
+    #[test]
+    fn the_exclude_file_and_its_folder_are_made_when_they_are_not_there() {
+        let dir = repo("make");
+        fs::remove_dir_all(dir.join(".git/info")).unwrap();
+        keep_out_of_git(&dir);
+        assert_eq!(
+            fs::read_to_string(exclude_file(&dir)).unwrap(),
+            identity::tasks_exclude()
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// REQ-1057: what the repository already ignores is not added, and the lists of the roles are not hidden.
+    #[test]
+    fn a_list_the_repository_already_ignores_adds_nothing_and_the_roles_are_not_hidden() {
+        let dir = repo("known");
+        let folder = identity::tasks_path(Path::new(""));
+        let folder = folder.parent().unwrap().display();
+        fs::write(dir.join(".gitignore"), format!("{folder}/\n")).unwrap();
+        let file = exclude_file(&dir);
+        let before = fs::read_to_string(&file).ok();
+        keep_out_of_git(&dir);
+        assert_eq!(fs::read_to_string(&file).ok(), before);
+        fs::remove_dir_all(&dir).unwrap();
+
+        let dir = repo("roles");
+        keep_out_of_git(&dir);
+        let roles = identity::roles_dir(&dir).join("brain.md");
+        fs::create_dir_all(roles.parent().unwrap()).unwrap();
+        fs::write(&roles, "x").unwrap();
+        let status = git::run(&dir, &["status", "--porcelain", "-uall"]).unwrap();
+        assert!(status.contains("brain.md"), "{status}");
+        assert!(!status.contains("tasks"), "{status}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// REQ-1057: a link is written through and kept.
+    #[test]
+    fn an_exclude_file_that_is_a_link_is_written_through_and_kept() {
+        let dir = repo("link");
+        let target = dir.join("elsewhere");
+        fs::write(&target, "# mine\n").unwrap();
+        let file = exclude_file(&dir);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let _ = fs::remove_file(&file);
+        std::os::unix::fs::symlink(&target, &file).unwrap();
+        keep_out_of_git(&dir);
+        assert!(fs::symlink_metadata(&file).unwrap().is_symlink());
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            format!("# mine\n{}", identity::tasks_exclude())
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// REQ-1058: no list, no repository and a file that cannot be written leave everything as it was.
+    #[test]
+    fn with_no_list_no_repository_or_no_way_to_write_nothing_changes() {
+        let dir = repo("none");
+        let list = identity::tasks_path(&dir);
+        fs::remove_file(&list).unwrap();
+        keep_out_of_git(&dir);
+        assert!(!exclude_file(&dir).exists() || !ignored(&dir));
+        fs::write(&list, "- [ ] a x\n").unwrap();
+
+        let plain = std::env::temp_dir().join(format!("jw-exclude-plain-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&plain);
+        let plain_list = identity::tasks_path(&plain);
+        fs::create_dir_all(plain_list.parent().unwrap()).unwrap();
+        fs::write(&plain_list, "- [ ] a x\n").unwrap();
+        assert_eq!(exclude(&plain), Ok(()), "no repository is not a failure");
+        assert!(!plain.join(".git").exists());
+        fs::remove_dir_all(&plain).unwrap();
+
+        let file = exclude_file(&dir);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "# mine\n").unwrap();
+        let mut mode = fs::metadata(&file).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o444);
+        fs::set_permissions(&file, mode).unwrap();
+        // a process that may write anyway (root) is not the case this is about
+        if fs::OpenOptions::new().append(true).open(&file).is_err() {
+            assert!(exclude(&dir).is_err());
+            keep_out_of_git(&dir);
+        }
+        assert_eq!(fs::read_to_string(&file).unwrap(), "# mine\n");
+        assert_eq!(fs::read_to_string(&list).unwrap(), "- [ ] a x\n");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// REQ-1059: a list added with `git add -f` stays tracked.
+    #[test]
+    fn a_list_added_to_git_by_the_person_stays_tracked() {
+        let dir = repo("tracked");
+        let list = identity::tasks_path(Path::new(""))
+            .to_string_lossy()
+            .into_owned();
+        keep_out_of_git(&dir);
+        git::run(&dir, &["add", "-f", &list]).unwrap();
+        keep_out_of_git(&dir);
+        assert_eq!(git::run(&dir, &["ls-files"]).unwrap(), list);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

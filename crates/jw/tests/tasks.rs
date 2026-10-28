@@ -357,3 +357,88 @@ fn with_no_daemon_the_stop_hook_says_nothing_and_does_not_fail() {
     assert_eq!(o.status.code(), Some(0));
     assert_eq!((out(&o), err(&o)), (String::new(), String::new()));
 }
+
+/// A real repository, with the list in it and the git of the person left out of the test.
+fn real_repo(env: &Env, name: &str) -> PathBuf {
+    let dir = env.dir.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    for args in [&["init", "-q"][..], &["config", "user.name", "t"]] {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    }
+    let path = identity::tasks_path(&dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, LIST).unwrap();
+    dir
+}
+
+fn git_says(dir: &Path, args: &[&str]) -> String {
+    let o = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn ls_in(env: &Env, dir: &Path) -> Output {
+    let mut cmd = env.jw();
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .args(["tasks", "ls"])
+        .current_dir(dir);
+    cmd.output().unwrap()
+}
+
+/// REQ-1056, REQ-1057, REQ-1059 (N188): finding a list keeps it out of git, once, and the list is as it was.
+#[test]
+fn ls_keeps_the_list_out_of_git_once_and_leaves_it_alone() {
+    let env = Env::new("tk-excl");
+    let dir = real_repo(&env, "app");
+    assert!(git_says(&dir, &["status", "--porcelain"]).contains("??"));
+    for _ in 0..2 {
+        let o = ls_in(&env, &dir);
+        assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+        assert_eq!(err(&o), "");
+    }
+    assert_eq!(git_says(&dir, &["status", "--porcelain"]), "");
+    let exclude = std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.matches(&identity::tasks_exclude()).count(), 1);
+    assert!(file(&dir).starts_with(LIST), "the list is what it was");
+}
+
+/// REQ-1058: an `info/exclude` that cannot be written leaves the list working, with one word on stderr.
+#[test]
+fn an_exclude_file_that_cannot_be_written_says_so_and_the_list_works() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new("tk-ro");
+    let dir = real_repo(&env, "app");
+    let exclude = dir.join(".git/info/exclude");
+    std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o444)).unwrap();
+    if std::fs::OpenOptions::new()
+        .append(true)
+        .open(&exclude)
+        .is_ok()
+    {
+        return; // a user who may write anyway (root) is not the case
+    }
+    let o = ls_in(&env, &dir);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert!(out(&o).contains("t2"), "{}", out(&o));
+    assert!(err(&o).contains("not kept out of git"), "{}", err(&o));
+}
+
+/// REQ-1058: a folder that is in no repository does not say a word.
+#[test]
+fn a_folder_in_no_repository_is_not_a_failure_and_says_nothing() {
+    let env = Env::new("tk-plain");
+    let dir = repo(&env, "plain", Some(LIST));
+    let o = ls_in(&env, &dir);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(err(&o), "");
+}

@@ -273,6 +273,8 @@ pub fn remove_workspace(
     let spawned = std::thread::Builder::new()
         .name("remove-worktree".into())
         .spawn(move || {
+            // a list no look has seen yet would be an untracked file and git would refuse (REQ-1056)
+            crate::tasks::keep_out_of_git(Path::new(&path));
             let mut args = vec!["worktree", "remove"];
             if force {
                 args.push("--force");

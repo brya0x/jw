@@ -35,6 +35,7 @@ fn find(a: &Args) -> Out<PathBuf> {
     for dir in here.ancestors() {
         let path = identity::tasks_path(dir);
         if path.is_file() {
+            tasks::keep_out_of_git(dir);
             return Ok(path);
         }
         if dir.join(".git").exists() {

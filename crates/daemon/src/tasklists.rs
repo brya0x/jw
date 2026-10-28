@@ -74,6 +74,7 @@ pub fn look(dir: &Path, known: Option<tasks::Sig>) -> Look {
     if !list.is_list() {
         return Look::Gone;
     }
+    tasks::keep_out_of_git(dir);
     let auto = whole.and_then(|_| list.tasks.last().map(|t| t.id.clone()));
     Look::New(Cached {
         sig,
@@ -766,6 +767,22 @@ mod tests {
 
     fn list(text: &str) -> tasks::List {
         tasks::parse(text)
+    }
+
+    /// REQ-1056 (N188): the daemon's first look at a list keeps it out of git.
+    #[test]
+    fn the_look_at_a_list_keeps_it_out_of_git() {
+        let dir = std::env::temp_dir().join(format!("jw-look-exclude-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::git::run(&dir, &["init", "-q"]).unwrap();
+        let path = identity::tasks_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "- [ ] a x\n").unwrap();
+        assert!(matches!(look(&dir, None), Look::New(_)));
+        let exclude = std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap();
+        assert!(exclude.ends_with(&identity::tasks_exclude()), "{exclude}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn stop(kind: StopKind, starts: &str, d: Decision) {

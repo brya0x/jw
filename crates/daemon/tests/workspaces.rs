@@ -1148,3 +1148,72 @@ fn an_existing_worktree_opens_as_a_workspace_with_no_panel_and_the_list_then_say
     );
     d.stop();
 }
+
+/// What `git status` says of a worktree, with the untracked files one by one.
+fn status(dir: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["status", "--porcelain", "-uall"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// N188, REQ-1056, REQ-1059: a worktree with a task list in it goes without `--force`, and the line that
+/// makes it so is the repository's, so another worktree's list is no change either.
+#[test]
+fn a_task_list_does_not_stop_its_worktree_from_going() {
+    let sb = Sandbox::new();
+    let _d = sb.start();
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let mut make = |branch: &str| {
+        id_of(
+            c.cmd(Cmd::CreateWorktree {
+                repo: text(&app),
+                branch: branch.into(),
+                base: None,
+                folder: None,
+            })
+            .unwrap()
+            .unwrap(),
+        )
+    };
+    let (one, two) = (make("b1"), make("b2"));
+    let dirs = |b: &str| app.parent().unwrap().join("app-wt").join(b);
+    let list = |dir: &Path| {
+        let path = identity::tasks_path(dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "- [ ] a x\n").unwrap();
+    };
+    list(&dirs("b1"));
+    assert!(
+        status(&dirs("b1")).contains("tasks"),
+        "the list is untracked"
+    );
+
+    let mut seen = sb.client();
+    session(&mut seen);
+    let job = job_of(
+        c.cmd(Cmd::RemoveWorkspace {
+            workspace: one,
+            remove_worktree: true,
+            force: false,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let jobs = wait_jobs(&mut seen, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] != "running")
+    });
+    assert_eq!(jobs[0]["state"], "done", "{}", jobs[0]["detail"]);
+    assert!(!dirs("b1").exists());
+
+    list(&dirs("b2"));
+    assert_eq!(status(&dirs("b2")), "", "the other worktree and ...");
+    assert_eq!(status(&app), "", "... the repository are clean");
+    let _ = two;
+}
