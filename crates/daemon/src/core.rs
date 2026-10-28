@@ -736,14 +736,41 @@ impl Core {
     pub fn end_removal(&mut self, workspace: &str, job: &str, result: Result<(), String>) {
         self.removing.remove(workspace);
         if result.is_ok() {
-            if let (Some(state), Some(dir)) = (&self.state_dir, self.workspace_dir(workspace)) {
-                crate::tasks::forget(state, &dir);
-            }
-            self.model.workspaces.retain(|w| w.id != workspace);
-            self.forget_artifacts(workspace);
+            self.drop_workspace(workspace);
         }
         self.finish_job(job, result);
         self.refresh();
+    }
+
+    /// The entry of the workspace goes off the session, with what hangs from it; the caller
+    /// publishes.
+    pub fn drop_workspace(&mut self, workspace: &str) {
+        if let (Some(state), Some(dir)) = (&self.state_dir, self.workspace_dir(workspace)) {
+            crate::tasks::forget(state, &dir);
+        }
+        self.model.workspaces.retain(|w| w.id != workspace);
+        self.forget_artifacts(workspace);
+    }
+
+    /// The processes the daemon started for the panes of `workspace`: their shells and the engines
+    /// that run (REQ-1066).
+    pub fn removal_roots(&self, workspace: &str) -> Vec<u32> {
+        let panes = self
+            .model
+            .workspaces
+            .iter()
+            .filter(|w| w.id == workspace)
+            .flat_map(|w| w.panes.iter());
+        let mut roots = Vec::new();
+        for p in panes {
+            roots.extend(self.terms.get(&p.id).and_then(|t| t.shell_pid()));
+            roots.extend(
+                self.convs
+                    .get(&p.id)
+                    .and_then(|c| c.engine.as_ref()?.running_pid()),
+            );
+        }
+        roots
     }
 
     /// Forget a job that ended (REQ-653).

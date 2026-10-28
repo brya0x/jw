@@ -273,17 +273,7 @@ pub fn remove_workspace(
     let spawned = std::thread::Builder::new()
         .name("remove-worktree".into())
         .spawn(move || {
-            // a list a look did not move yet is an untracked file in the worktree, and git would refuse (REQ-1063)
-            let state = removal.shared.lock().state_dir.clone();
-            if let Some(state) = state {
-                let _ = crate::tasks::locate(&state, Path::new(&path));
-            }
-            let mut args = vec!["worktree", "remove"];
-            if force {
-                args.push("--force");
-            }
-            args.push(&path);
-            let result = git::run(Path::new(&project), &args).map(|_| ());
+            let result = remove_steps(&removal.shared, &removal.workspace, &project, &path, force);
             removal.end(result);
         });
     if let Err(e) = spawned {
@@ -291,6 +281,124 @@ pub fn remove_workspace(
         return Err(err(ErrorCode::Io, e.to_string()));
     }
     Ok(Some(serde_json::json!({ "job": job })))
+}
+
+/// The steps of REQ-1065 for a worktree, on the thread of the job: when one fails the message says
+/// what was done and what was not (REQ-1068), and a retry goes on from where the folder is (REQ-1069).
+fn remove_steps(
+    shared: &Shared,
+    workspace: &Id,
+    project: &str,
+    path: &str,
+    force: bool,
+) -> Result<(), String> {
+    let (top, dir) = (Path::new(project), Path::new(path));
+    // a list a look did not move yet is an untracked file in the worktree, and git would refuse (REQ-1063)
+    let state = shared.lock().state_dir.clone();
+    if let Some(state) = state {
+        let _ = crate::tasks::locate(&state, dir);
+    }
+    let mut done: Vec<String> = Vec::new();
+    let said = |done: &[String], why: String, left: &str| {
+        let did = if done.is_empty() {
+            "nada".to_owned()
+        } else {
+            done.join(", ")
+        };
+        format!("{why} (hecho: {did}; sin hacer: {left})")
+    };
+    let known = git::knows(top, dir).map_err(|e| said(&done, e, "todo"))?;
+    // A folder that is gone has no changes to refuse and nothing to say is on disk (REQ-1073).
+    let exists = std::fs::symlink_metadata(dir).is_ok();
+    if known && !force && exists {
+        let changes =
+            git::run(dir, &["status", "--porcelain"]).map_err(|e| said(&done, e, "todo"))?;
+        if !changes.is_empty() {
+            return Err("el worktree tiene cambios y no hay --force (nada se tocó: ni los procesos, ni git, ni la carpeta)".into());
+        }
+    }
+    if !known && !force && exists {
+        return Err(format!(
+            "huérfano: git ya no conoce {path} (nada se tocó: ni los procesos, ni la carpeta, ni la entrada); la carpeta sigue en disco: quítalo con force, o cierra el workspace sin quitar el worktree"
+        ));
+    }
+    let roots = shared.lock().removal_roots(workspace);
+    let ended =
+        crate::reap::end(&roots).map_err(|e| said(&done, e, "git, la carpeta y la entrada"))?;
+    done.push(format!(
+        "procesos: {} terminados, {} con SIGKILL",
+        ended.reached, ended.killed
+    ));
+    if known {
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(path);
+        match git::run(top, &args) {
+            Ok(_) => return Ok(()),
+            // Git forgot the worktree and failed on the last folder: what is left is what the
+            // processes wrote, and the job finishes it (REQ-1071).
+            Err(e) => match git::knows(top, dir) {
+                Ok(false) => done.push(format!("git: lo olvidó pero falló ({e})")),
+                _ => return Err(said(&done, e, "la carpeta y la entrada")),
+            },
+        }
+    }
+    if std::fs::symlink_metadata(dir).is_err() {
+        return Ok(());
+    }
+    let allowed = crate::start::load(shared, top)
+        .map_err(|e| e.message)
+        .and_then(|p| deletable(dir, &p.root, top, home().as_deref()));
+    match allowed {
+        Ok(real) => std::fs::remove_dir_all(&real).map_err(|e| {
+            said(
+                &done,
+                format!("no se pudo borrar {path}: {e}"),
+                "la carpeta y la entrada",
+            )
+        }),
+        Err(why) => {
+            shared.lock().drop_workspace(workspace);
+            Err(format!(
+                "la carpeta {path} sigue en disco ({why}); la entrada de {} se quitó (hecho: {})",
+                identity::get().name,
+                done.join(", ")
+            ))
+        }
+    }
+}
+
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").and_then(|h| Path::new(&h).canonicalize().ok())
+}
+
+/// The folder of an orphan, canonical, when it may be deleted (REQ-1072): not a link, strictly
+/// inside the folder where the repository's worktrees go, which is not `/` nor home, not home
+/// itself, with a name, and not holding the repository.
+fn deletable(dir: &Path, root: &Path, top: &Path, home: Option<&Path>) -> Result<PathBuf, String> {
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("no es una carpeta, o es un enlace".into());
+    }
+    let real = dir.canonicalize().map_err(|e| e.to_string())?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("la carpeta de worktrees {}: {e}", root.display()))?;
+    if root == Path::new("/") || Some(root.as_path()) == home {
+        return Err(format!("la carpeta de worktrees es {}", root.display()));
+    }
+    if real == root || !real.starts_with(&root) {
+        return Err(format!("no está dentro de {}", root.display()));
+    }
+    if Some(real.as_path()) == home || real.file_name().is_none() {
+        return Err("es el home o no tiene nombre".into());
+    }
+    if top.canonicalize().is_ok_and(|t| t.starts_with(&real)) {
+        return Err("contiene el repositorio".into());
+    }
+    Ok(real)
 }
 
 /// The end of a removal: whatever happens to the thread, the job ends and the workspace is
@@ -320,5 +428,45 @@ impl Drop for Removal {
                 Err("se interrumpió antes de terminar".into()),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("jw-del-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn only_a_folder_strictly_inside_the_worktrees_folder_may_be_deleted() {
+        let base = temp("guard");
+        let (root, top) = (base.join("wt"), base.join("repo"));
+        let (inside, outside) = (root.join("feat"), base.join("other"));
+        for d in [&inside, &outside, &top] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        assert_eq!(deletable(&inside, &root, &top, None).unwrap(), inside);
+        for (dir, root) in [(&root, &root), (&outside, &root), (&top, &root)] {
+            assert!(deletable(dir, root, &top, None).is_err(), "{dir:?}");
+        }
+        // The worktrees folder is `/` or home; a folder that holds the repository.
+        assert!(deletable(&inside, Path::new("/"), &top, None).is_err());
+        assert!(deletable(&inside, &root, &top, Some(&root)).is_err());
+        assert!(deletable(&base, &base, &inside, Some(&base)).is_err());
+        let holder = root.join("holds");
+        std::fs::create_dir_all(holder.join("repo")).unwrap();
+        assert!(deletable(&holder, &root, &holder.join("repo"), None).is_err());
+        // A link, even to a folder inside the right one.
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&inside, &link).unwrap();
+        assert!(deletable(&link, &root, &top, None).is_err());
+        // A path that is gone.
+        assert!(deletable(&root.join("gone"), &root, &top, None).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

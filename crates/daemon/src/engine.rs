@@ -99,6 +99,11 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Its process number while it lives (REQ-1066).
+    pub fn running_pid(&self) -> Option<u32> {
+        (!self.exited.load(Ordering::Relaxed)).then_some(self.pid)
+    }
+
     fn write(&self, v: &Value) {
         let _ = self.tx.send(Out::Line(v.to_string()));
     }
@@ -168,7 +173,7 @@ pub fn reap_leftovers(dir: &Path) {
 /// Whether `pgid` may be ended by `kill -- -pgid`: not 0 (the caller's own group), not 1 (init's),
 /// not the daemon's own group, and not a number that a signed pid cannot hold, since `-pgid` would
 /// name another group or every process.
-fn may_end(pgid: u32, own: u32) -> bool {
+pub(crate) fn may_end(pgid: u32, own: u32) -> bool {
     pgid > 1 && pgid <= i32::MAX as u32 && pgid != own
 }
 

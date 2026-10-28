@@ -53,9 +53,17 @@ fn ahead(dir: &Path) -> Result<(bool, u64), ErrorBody> {
     Ok((upstream.is_some(), count.parse().unwrap_or(0)))
 }
 
-/// `check_workspace`: the commits of the worktree's branch that no remote has (REQ-283).
+/// `check_workspace`: the commits of the worktree's branch that no remote has (REQ-283), and
+/// `orphan: true` for a worktree that git no longer knows (REQ-1074).
 pub fn check(shared: &Shared, workspace: &str) -> Done {
     let (path, _) = worktree_of(shared, workspace)?;
+    // A worktree that git no longer lists has nothing to count, and is not a `git_failed` (REQ-1074).
+    let project = shared.lock().workspace(workspace)?.project.clone();
+    if let Some(project) = project
+        && git::knows(Path::new(&project), Path::new(&path)) == Ok(false)
+    {
+        return Ok(Some(json!({ "ahead": 0, "orphan": true })));
+    }
     let (_, ahead) = ahead(Path::new(&path))?;
     Ok(Some(json!({ "ahead": ahead })))
 }

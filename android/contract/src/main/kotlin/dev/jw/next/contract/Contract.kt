@@ -156,7 +156,7 @@ sealed interface Cmd {
         val force: Boolean = false,
     ) : Cmd
 
-    /** Count the commits of a worktree's branch that no remote has; the result is `{ahead}`. */
+    /** Count the commits of a worktree's branch that no remote has; the result is `{ahead}`, and `{ahead: 0, orphan: true}` for a worktree that git no longer lists. */
     @Serializable @SerialName("check_workspace")
     data class CheckWorkspace(val workspace: Id) : Cmd
 
