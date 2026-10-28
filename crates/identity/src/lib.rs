@@ -86,7 +86,7 @@ pub fn tasks_path(state: &Path, folder: &Path) -> PathBuf {
                     rest.push(last);
                     base = parent;
                 }
-                _ => break folder.to_path_buf(),
+                _ => break base.to_path_buf(),
             },
         }
     };
@@ -192,6 +192,11 @@ mod tests {
         assert_eq!(
             tasks_path(state, Path::new("/no/such/dir/app")),
             PathBuf::from("/s/tasks/app-abceb34ba314045d.md")
+        );
+        // a relative path that is nowhere keeps all of its names, once
+        assert_eq!(
+            tasks_path(state, Path::new("rel-gone-xyz/x")),
+            PathBuf::from("/s/tasks/x-4ddb06c915fbc265.md")
         );
         let a = tasks_path(state, Path::new("/one/app"));
         let b = tasks_path(state, Path::new("/two/app"));

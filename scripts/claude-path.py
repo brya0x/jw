@@ -341,7 +341,9 @@ def s_loop():
     # binary is on its PATH, and the permissions it asks for are answered yes: this is a throwaway repository.
     ENV["PATH"] = os.path.dirname(JW) + os.pathsep + ENV["PATH"]
     # the list is a file of the state directory (N188): the binary says which, for this repository and this state
-    listfile = subprocess.run([JW, "tasks", "path"], env=ENV, cwd=REPO, capture_output=True, text=True).stdout.strip()
+    # not the pane's own workspace, if this runs in a pane of a session
+    here = {k: v for k, v in ENV.items() if not k.endswith("_WORKSPACE_DIR")}
+    listfile = subprocess.run([JW, "tasks", "path"], env=here, cwd=REPO, capture_output=True, text=True).stdout.strip()
     os.makedirs(os.path.dirname(listfile), exist_ok=True)
     open(listfile, "w").write(
         "- [ ] t1 crea el archivo uno.txt con el texto uno\n- [ ] t2 crea el archivo dos.txt con el texto dos (after: t1)\n"
