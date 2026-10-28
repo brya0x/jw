@@ -17,7 +17,7 @@ fn repo(env: &Env, name: &str, list: Option<&str>) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".git"), "gitdir: /elsewhere\n").unwrap();
     if let Some(text) = list {
-        let path = identity::tasks_path(&dir);
+        let path = list_file(env, &dir);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
@@ -38,8 +38,13 @@ fn err(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-fn file(dir: &Path) -> String {
-    std::fs::read_to_string(identity::tasks_path(dir)).unwrap()
+/// The list of a folder, in the state directory of the test (REQ-1061).
+fn list_file(env: &Env, dir: &Path) -> PathBuf {
+    identity::tasks_path(&env.dir.join("state"), dir)
+}
+
+fn file(env: &Env, dir: &Path) -> String {
+    std::fs::read_to_string(list_file(env, dir)).unwrap()
 }
 
 #[test]
@@ -67,14 +72,14 @@ fn ls_lists_the_tasks_by_level_and_adds_the_final_one_once() {
     );
     assert!(text.trim_end().ends_with("1/4 done"), "{text}");
     // REQ-905: the final task was written, once
-    let written = file(&dir);
+    let written = file(&env, &dir);
     assert!(
         written.starts_with(LIST) && written.contains("- [ ] fin tests:"),
         "{written}"
     );
     let again = run(&env, &sub, &["ls"]);
     assert_eq!(out(&again), text);
-    assert_eq!(file(&dir), written, "a second ls changes nothing");
+    assert_eq!(file(&env, &dir), written, "a second ls changes nothing");
 }
 
 #[test]
@@ -108,11 +113,7 @@ fn the_list_is_looked_for_up_to_the_root_of_the_repository_and_no_further() {
     let o = run(
         &env,
         &inner,
-        &[
-            "ls",
-            "--file",
-            identity::tasks_path(&outer).to_str().unwrap(),
-        ],
+        &["ls", "--file", list_file(&env, &outer).to_str().unwrap()],
     );
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     // a folder with no list and no repository above it
@@ -128,13 +129,13 @@ fn next_prints_the_first_ready_task_and_exits_3_with_nothing_on_stdout_when_none
     let o = run(&env, &dir, &["next"]);
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(out(&o), "t2 endpoints\n");
-    assert_eq!(file(&dir), LIST, "next writes nothing");
+    assert_eq!(file(&env, &dir), LIST, "next writes nothing");
     // with every task done the final one, which is not in the file yet, is the next
-    std::fs::write(identity::tasks_path(&dir), "- [x] a one\n- [x] b two\n").unwrap();
+    std::fs::write(list_file(&env, &dir), "- [x] a one\n- [x] b two\n").unwrap();
     let o = run(&env, &dir, &["next"]);
     assert!(out(&o).starts_with("fin tests:"), "{}", out(&o));
     std::fs::write(
-        identity::tasks_path(&dir),
+        list_file(&env, &dir),
         "- [x] a one\n- [x] fin all of it (after: *)\n",
     )
     .unwrap();
@@ -151,7 +152,7 @@ fn done_block_reopen_and_note_change_only_their_lines() {
     let o = run(&env, &dir, &["done", "t2"]);
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert_eq!(out(&o), "t2 done\n");
-    assert_eq!(file(&dir), LIST.replace("- [ ] t2", "- [x] t2"));
+    assert_eq!(file(&env, &dir), LIST.replace("- [ ] t2", "- [x] t2"));
     // the reason is every word that follows, and a `;` or a parenthesis in it is made safe
     let o = run(
         &env,
@@ -160,19 +161,19 @@ fn done_block_reopen_and_note_change_only_their_lines() {
     );
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert!(
-        file(&dir).contains("- [!] t3 docs (after: t2; blocked: needs the key, ask [now])"),
+        file(&env, &dir).contains("- [!] t3 docs (after: t2; blocked: needs the key, ask [now])"),
         "{}",
-        file(&dir)
+        file(&env, &dir)
     );
     let o = run(&env, &dir, &["reopen", "t3"]);
     assert_eq!(out(&o), "t3 reopened\n");
-    assert_eq!(file(&dir), LIST.replace("- [ ] t2", "- [x] t2"));
+    assert_eq!(file(&env, &dir), LIST.replace("- [ ] t2", "- [x] t2"));
     let o = run(&env, &dir, &["note", "t1", "CI #58 green", "(4 min)"]);
     assert_eq!(out(&o), "t1 noted\n");
     assert!(
-        file(&dir).contains("- [x] t1 schema\n  - CI #58 green (4 min)\n"),
+        file(&env, &dir).contains("- [x] t1 schema\n  - CI #58 green (4 min)\n"),
         "{}",
-        file(&dir)
+        file(&env, &dir)
     );
 }
 
@@ -205,7 +206,7 @@ fn a_task_that_is_not_there_a_duplicate_and_a_use_that_is_wrong_are_said_and_cha
         assert_eq!(o.status.code(), Some(2), "{args:?}: {}", err(&o));
         assert!(err(&o).contains("usage:"), "{args:?}");
     }
-    assert_eq!(file(&dir), text);
+    assert_eq!(file(&env, &dir), text);
 }
 
 // ---- the loop through the binary (N180d): `jw tasks loop …` and `jw hook stop`, against a private daemon
@@ -358,87 +359,71 @@ fn with_no_daemon_the_stop_hook_says_nothing_and_does_not_fail() {
     assert_eq!((out(&o), err(&o)), (String::new(), String::new()));
 }
 
-/// A real repository, with the list in it and the git of the person left out of the test.
-fn real_repo(env: &Env, name: &str) -> PathBuf {
-    let dir = env.dir.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    for args in [&["init", "-q"][..], &["config", "user.name", "t"]] {
-        let ok = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(ok.success());
+/// REQ-937, REQ-1061, REQ-1062: `path` prints the file of the workspace with or without a list, from any folder
+/// of it and from the pane's own variable, and writes nothing in the project.
+#[test]
+fn path_prints_the_file_of_the_workspace_and_writes_nothing_in_the_project() {
+    let env = Env::new("tk-path");
+    let dir = repo(&env, "app", None);
+    let deep = dir.join("src/deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    let want = format!("{}\n", list_file(&env, &dir).display());
+    for from in [&dir, &deep] {
+        let o = run(&env, from, &["path"]);
+        assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+        assert_eq!(out(&o), want);
     }
-    let path = identity::tasks_path(&dir);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, LIST).unwrap();
-    dir
-}
-
-fn git_says(dir: &Path, args: &[&str]) -> String {
-    let o = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
+    let other = repo(&env, "other", None);
+    let o = env
+        .jw()
+        .args(["tasks", "path"])
+        .env(identity::env_var("WORKSPACE_DIR"), &other)
+        .current_dir(&deep)
         .output()
         .unwrap();
-    String::from_utf8_lossy(&o.stdout).into_owned()
+    assert_eq!(out(&o), format!("{}\n", list_file(&env, &other).display()));
+    assert_ne!(list_file(&env, &dir), list_file(&env, &other));
+    assert!(!list_file(&env, &dir).exists());
+    let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+    names.retain(|e| e.file_name() != ".git" && e.file_name() != "src");
+    assert!(names.is_empty(), "{names:?}");
+    // `path` takes no words
+    assert_eq!(run(&env, &dir, &["path", "x"]).status.code(), Some(2));
 }
 
-fn ls_in(env: &Env, dir: &Path) -> Output {
-    let mut cmd = env.jw();
-    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .args(["tasks", "ls"])
-        .current_dir(dir);
-    cmd.output().unwrap()
-}
-
-/// REQ-1061, REQ-1062, REQ-1064 (N188): finding a list keeps it out of git, once, and the list is as it was.
+/// REQ-1063: a command that finds the list N180 kept in the folder moves it, and only it.
 #[test]
-fn ls_keeps_the_list_out_of_git_once_and_leaves_it_alone() {
-    let env = Env::new("tk-excl");
-    let dir = real_repo(&env, "app");
-    assert!(git_says(&dir, &["status", "--porcelain"]).contains("??"));
-    for _ in 0..2 {
-        let o = ls_in(&env, &dir);
-        assert_eq!(o.status.code(), Some(0), "{}", err(&o));
-        assert_eq!(err(&o), "");
-    }
-    assert_eq!(git_says(&dir, &["status", "--porcelain"]), "");
-    let exclude = std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap();
-    assert_eq!(exclude.matches(&identity::tasks_exclude()).count(), 1);
-    assert!(file(&dir).starts_with(LIST), "the list is what it was");
-}
-
-/// REQ-1063: an `info/exclude` that cannot be written leaves the list working, with one word on stderr.
-#[test]
-fn an_exclude_file_that_cannot_be_written_says_so_and_the_list_works() {
-    use std::os::unix::fs::PermissionsExt;
-    let env = Env::new("tk-ro");
-    let dir = real_repo(&env, "app");
-    let exclude = dir.join(".git/info/exclude");
-    std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o444)).unwrap();
-    if std::fs::OpenOptions::new()
-        .append(true)
-        .open(&exclude)
-        .is_ok()
-    {
-        return; // a user who may write anyway (root) is not the case
-    }
-    let o = ls_in(&env, &dir);
+fn a_list_kept_in_the_folder_is_moved_by_the_commands_and_the_roles_stay() {
+    let env = Env::new("tk-move");
+    let dir = repo(&env, "app", None);
+    let old = identity::legacy_tasks_path(&dir);
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, LIST).unwrap();
+    let roles = identity::roles_dir(&dir);
+    std::fs::create_dir_all(&roles).unwrap();
+    let o = run(&env, &dir, &["next"]);
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
-    assert!(out(&o).contains("t2"), "{}", out(&o));
-    assert!(err(&o).contains("not kept out of git"), "{}", err(&o));
+    assert_eq!(file(&env, &dir), LIST);
+    assert!(!old.exists() && roles.exists(), "only the list went");
+    // both files: the new one, and a line that says the old one is left
+    std::fs::write(&old, "- [ ] z old\n").unwrap();
+    let o = run(&env, &dir, &["next"]);
+    assert_eq!(out(&o), "t2 endpoints\n");
+    assert!(err(&o).contains("is left as it is"), "{}", err(&o));
+    assert_eq!(std::fs::read_to_string(&old).unwrap(), "- [ ] z old\n");
 }
 
-/// REQ-1063: a folder that is in no repository does not say a word.
+/// REQ-1063: a state directory that cannot be used is a failure that names the file, and nothing is lost.
 #[test]
-fn a_folder_in_no_repository_is_not_a_failure_and_says_nothing() {
-    let env = Env::new("tk-plain");
-    let dir = repo(&env, "plain", Some(LIST));
-    let o = ls_in(&env, &dir);
-    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
-    assert_eq!(err(&o), "");
+fn a_state_directory_that_cannot_be_used_fails_clearly_and_keeps_the_old_list() {
+    let env = Env::new("tk-nostate");
+    let dir = repo(&env, "app", None);
+    let old = identity::legacy_tasks_path(&dir);
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, LIST).unwrap();
+    std::fs::write(env.dir.join("state"), "not a directory").unwrap();
+    let o = run(&env, &dir, &["ls"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).contains("cannot move the task list"), "{}", err(&o));
+    assert_eq!(std::fs::read_to_string(&old).unwrap(), LIST);
 }

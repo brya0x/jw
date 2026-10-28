@@ -8,7 +8,7 @@
     "rev": 1,
     "attention": [],
     "workspace": "00000000-0000-4000-8000-0000000000b2",
-    "path": "/home/u/code/app-wt/api-v2/.jw/tasks.md",
+    "path": "/home/u/.local/state/jw/tasks/api-v2-9a1c5e07b3d24f68.md",
     "tasks": [
       { "id": "t1", "title": "schema", "after": [], "status": "done", "state": "done", "level": 1 },
       { "id": "t2", "title": "models", "after": ["t1"], "status": "done", "state": "done", "level": 2 },

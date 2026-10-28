@@ -28,6 +28,8 @@ impl Env {
             .env(identity::env_var("SOCKET"), self.dir.join("s.sock"))
             // The daemon of a test never runs the person's `claude update` (REQ-847).
             .env(identity::env_var("CLAUDE_UPDATE"), "0")
+            // a test run from a pane of a session is no workspace of it
+            .env_remove(identity::env_var("WORKSPACE_DIR"))
             .env("SHELL", "/bin/sh")
             // never the person's own `~/.claude`: a skill is looked for and written here (N180e)
             .env("CLAUDE_CONFIG_DIR", self.dir.join("claude-config"))

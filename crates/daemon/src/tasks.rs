@@ -5,12 +5,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::Path;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
-
-use crate::git;
 
 /// The id the final task gets when it is written (REQ-905).
 pub const FINAL_ID: &str = "fin";
@@ -653,56 +650,85 @@ pub fn write_keeping_mode(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
-/// Makes git ignore the list of the folder `dir` on this machine alone (N188, REQ-1061 to REQ-1063): the
-/// lines of `identity::tasks_exclude` go in the repository's `info/exclude`, common to its worktrees and
-/// never versioned, so the list is no untracked file that `git worktree remove` refuses. Nothing is done
-/// with no list or no repository; a failure is said once and the list works as before.
-pub fn keep_out_of_git(dir: &Path) {
+/// The file of the list of the folder `dir` (REQ-1061), after the list N180 kept in the folder is moved to it
+/// (REQ-1063): copied through a temporary file with the old one's mode and a link that fails when the new file
+/// is there, read back and compared, and only then is the old file deleted, and its folder when it is empty
+/// (`remove_dir`: what else is in it is not ours). With both files, the new one is the list and the old one is
+/// left, said once. Another process moving it first is not a failure. The old file stays when anything fails.
+pub fn locate(state: &Path, dir: &Path) -> Result<PathBuf, String> {
     static SAID: AtomicBool = AtomicBool::new(false);
-    if !identity::tasks_path(dir).is_file() {
-        return;
+    let path = identity::tasks_path(state, dir);
+    let old = identity::legacy_tasks_path(dir);
+    if !old.is_file() {
+        return Ok(path);
     }
-    if let Err(why) = exclude(dir)
-        && !SAID.swap(true, Ordering::Relaxed)
-    {
-        eprintln!("{}: not kept out of git: {why}", dir.display());
+    if path.exists() {
+        if !SAID.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "the task list of {} is in {} and in {}: the first is used and the second is left as it is",
+                dir.display(),
+                path.display(),
+                old.display()
+            );
+        }
+        return Ok(path);
     }
+    move_list(&old, &path).map_err(|e| {
+        format!(
+            "cannot move the task list {} to {}: {e}",
+            old.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
 }
 
-fn exclude(dir: &Path) -> Result<(), String> {
-    // one at a time in this process; with two processes the line may be twice, which git reads as one (RISK-182)
-    static ONE: Mutex<()> = Mutex::new(());
-    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let file = match git::run(dir, &["rev-parse", "--git-path", "info/exclude"]) {
-        Ok(file) => dir.join(file),
-        Err(why) if why.starts_with("cannot run git") => return Err(why),
-        Err(_) => return Ok(()), // no repository
+fn move_list(old: &Path, new: &Path) -> io::Result<()> {
+    static MOVES: AtomicU64 = AtomicU64::new(0);
+    let text = match fs::read(old) {
+        Ok(text) => text,
+        // another process moved it already
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
     };
-    let list = identity::tasks_path(Path::new(""));
-    if git::run(dir, &["check-ignore", "-q", &list.to_string_lossy()]).is_ok() {
-        return Ok(());
+    let folder = new.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(folder)?;
+    let tmp = folder.join(format!(
+        ".moving.{}.{}.tmp",
+        std::process::id(),
+        MOVES.fetch_add(1, Ordering::Relaxed)
+    ));
+    let linked = fs::write(&tmp, &text)
+        .and_then(|()| fs::set_permissions(&tmp, fs::metadata(old)?.permissions()))
+        .and_then(|()| fs::hard_link(&tmp, new));
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => {}
+        // another process moved it first: the new file is there, and the old one may be gone already
+        Err(_) if new.exists() => return Ok(()),
+        Err(e) => return Err(e),
     }
-    let io = |e: io::Error| format!("{}: {e}", file.display());
-    let before = match fs::read(&file) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(io(e)),
-    };
-    if let Some(parent) = file.parent() {
-        fs::create_dir_all(parent).map_err(io)?;
+    if fs::read(new)? != text {
+        return Err(io::Error::other("the copy is not the old file"));
     }
-    let lines = identity::tasks_exclude();
-    let text = if before.is_empty() || before.ends_with(b"\n") {
-        lines
-    } else {
-        format!("\n{lines}")
-    };
-    let mut out = fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(&file)
-        .map_err(io)?;
-    io::Write::write_all(&mut out, text.as_bytes()).map_err(io)
+    match fs::remove_file(old) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    if let Some(folder) = old.parent() {
+        let _ = fs::remove_dir(folder);
+    }
+    Ok(())
+}
+
+/// Deletes the list file of the folder `dir` of a workspace that is gone (REQ-1064): that file only, and only
+/// when it is in the lists' directory.
+pub fn forget(state: &Path, dir: &Path) {
+    let path = identity::tasks_path(state, dir);
+    if path.parent() == Some(identity::tasks_dir(state).as_path()) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 /// What the daemon looks at to know a list changed without reading it: its size and its time.
@@ -740,7 +766,6 @@ pub fn complete_file(path: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn ids(l: &List) -> Vec<&str> {
         l.tasks.iter().map(|t| t.id.as_str()).collect()
@@ -1108,151 +1133,146 @@ mod tests {
         assert_eq!(with_note.replace("  - n (4 min); ok\r\n", ""), text);
     }
 
-    // ---- out of git (N188)
+    // ---- where the list lives (N188)
 
-    /// A repository with a list in it, in a folder of its own.
-    fn repo(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jw-exclude-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+    /// A state directory and a workspace folder of a test, both fresh.
+    fn places(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("jw-locate-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (state, dir) = (root.join("state"), root.join("app"));
         fs::create_dir_all(&dir).unwrap();
-        git::run(&dir, &["init", "-q"]).unwrap();
-        let list = identity::tasks_path(&dir);
-        fs::create_dir_all(list.parent().unwrap()).unwrap();
-        fs::write(list, "- [ ] a x\n").unwrap();
-        dir
+        (state, dir)
     }
 
-    fn exclude_file(dir: &Path) -> PathBuf {
-        dir.join(".git/info/exclude")
+    fn old_list(dir: &Path, text: &str) -> PathBuf {
+        let old = identity::legacy_tasks_path(dir);
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(&old, text).unwrap();
+        old
     }
 
-    fn ignored(dir: &Path) -> bool {
-        let list = identity::tasks_path(Path::new(""));
-        git::run(dir, &["check-ignore", "-q", &list.to_string_lossy()]).is_ok()
-    }
-
-    /// REQ-1061, REQ-1062: the lines go in, once, after what was there, with a line break when it had none.
+    /// REQ-1061: with no old file there is nothing to do, and no file or folder is made.
     #[test]
-    fn the_lines_are_added_after_what_was_there_and_never_twice() {
-        let dir = repo("add");
-        let file = exclude_file(&dir);
-        let mut before = fs::read_to_string(&file).unwrap_or_default();
-        before.push_str("# mine\n*.log");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(&file, &before).unwrap();
-        assert!(!ignored(&dir));
-        keep_out_of_git(&dir);
-        keep_out_of_git(&dir);
+    fn with_no_old_file_the_path_is_given_and_nothing_is_made() {
+        let (state, dir) = places("none");
+        let path = locate(&state, &dir).unwrap();
+        assert_eq!(path, identity::tasks_path(&state, &dir));
+        assert!(!state.exists() && !path.exists());
         assert_eq!(
-            fs::read_to_string(&file).unwrap(),
-            format!("{before}\n{}", identity::tasks_exclude())
+            fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the project is as it was"
         );
-        assert!(ignored(&dir));
-        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
     }
 
-    /// REQ-1062: no file and no folder is made, and an empty file gets the lines alone.
+    /// REQ-1063: the list moves, with its mode, and the old file and its folder go.
     #[test]
-    fn the_exclude_file_and_its_folder_are_made_when_they_are_not_there() {
-        let dir = repo("make");
-        fs::remove_dir_all(dir.join(".git/info")).unwrap();
-        keep_out_of_git(&dir);
+    fn an_old_list_moves_to_the_state_directory_and_its_folder_goes_when_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = places("move");
+        let old = old_list(&dir, "- [ ] a x\r\n");
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o640)).unwrap();
+        let path = locate(&state, &dir).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "- [ ] a x\r\n");
         assert_eq!(
-            fs::read_to_string(exclude_file(&dir)).unwrap(),
-            identity::tasks_exclude()
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
         );
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// REQ-1062: what the repository already ignores is not added, and the lists of the roles are not hidden.
-    #[test]
-    fn a_list_the_repository_already_ignores_adds_nothing_and_the_roles_are_not_hidden() {
-        let dir = repo("known");
-        let folder = identity::tasks_path(Path::new(""));
-        let folder = folder.parent().unwrap().display();
-        fs::write(dir.join(".gitignore"), format!("{folder}/\n")).unwrap();
-        let file = exclude_file(&dir);
-        let before = fs::read_to_string(&file).ok();
-        keep_out_of_git(&dir);
-        assert_eq!(fs::read_to_string(&file).ok(), before);
-        fs::remove_dir_all(&dir).unwrap();
-
-        let dir = repo("roles");
-        keep_out_of_git(&dir);
-        let roles = identity::roles_dir(&dir).join("brain.md");
-        fs::create_dir_all(roles.parent().unwrap()).unwrap();
-        fs::write(&roles, "x").unwrap();
-        let status = git::run(&dir, &["status", "--porcelain", "-uall"]).unwrap();
-        assert!(status.contains("brain.md"), "{status}");
-        assert!(!status.contains("tasks"), "{status}");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// REQ-1062: a link is written through and kept.
-    #[test]
-    fn an_exclude_file_that_is_a_link_is_written_through_and_kept() {
-        let dir = repo("link");
-        let target = dir.join("elsewhere");
-        fs::write(&target, "# mine\n").unwrap();
-        let file = exclude_file(&dir);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let _ = fs::remove_file(&file);
-        std::os::unix::fs::symlink(&target, &file).unwrap();
-        keep_out_of_git(&dir);
-        assert!(fs::symlink_metadata(&file).unwrap().is_symlink());
+        assert!(!old.exists() && !old.parent().unwrap().exists());
         assert_eq!(
-            fs::read_to_string(&target).unwrap(),
-            format!("# mine\n{}", identity::tasks_exclude())
+            fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1,
+            "no temporary is left"
         );
-        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(locate(&state, &dir).unwrap(), path, "and again: the same");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
     }
 
-    /// REQ-1063: no list, no repository and a file that cannot be written leave everything as it was.
+    /// REQ-1063: an empty old file moves as it is, and what else is in the old folder stays.
     #[test]
-    fn with_no_list_no_repository_or_no_way_to_write_nothing_changes() {
-        let dir = repo("none");
-        let list = identity::tasks_path(&dir);
-        fs::remove_file(&list).unwrap();
-        keep_out_of_git(&dir);
-        assert!(!exclude_file(&dir).exists() || !ignored(&dir));
-        fs::write(&list, "- [ ] a x\n").unwrap();
+    fn an_empty_list_moves_and_the_roles_in_the_old_folder_stay() {
+        let (state, dir) = places("empty");
+        let old = old_list(&dir, "");
+        let roles = identity::roles_dir(&dir);
+        fs::create_dir_all(&roles).unwrap();
+        fs::write(roles.join("brain.md"), "mine").unwrap();
+        let path = locate(&state, &dir).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"");
+        assert!(!old.exists());
+        assert_eq!(fs::read_to_string(roles.join("brain.md")).unwrap(), "mine");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
 
-        let plain = std::env::temp_dir().join(format!("jw-exclude-plain-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&plain);
-        let plain_list = identity::tasks_path(&plain);
-        fs::create_dir_all(plain_list.parent().unwrap()).unwrap();
-        fs::write(&plain_list, "- [ ] a x\n").unwrap();
-        assert_eq!(exclude(&plain), Ok(()), "no repository is not a failure");
-        assert!(!plain.join(".git").exists());
-        fs::remove_dir_all(&plain).unwrap();
+    /// REQ-1063: with both files the new one is used and the old one is not touched.
+    #[test]
+    fn with_both_files_the_new_one_wins_and_the_old_one_is_left() {
+        let (state, dir) = places("both");
+        let old = old_list(&dir, "- [ ] old x\n");
+        let new = identity::tasks_path(&state, &dir);
+        fs::create_dir_all(new.parent().unwrap()).unwrap();
+        fs::write(&new, "- [ ] new x\n").unwrap();
+        assert_eq!(locate(&state, &dir).unwrap(), new);
+        assert_eq!(fs::read_to_string(&new).unwrap(), "- [ ] new x\n");
+        assert_eq!(fs::read_to_string(&old).unwrap(), "- [ ] old x\n");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
 
-        let file = exclude_file(&dir);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(&file, "# mine\n").unwrap();
-        let mut mode = fs::metadata(&file).unwrap().permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o444);
-        fs::set_permissions(&file, mode).unwrap();
-        // a process that may write anyway (root) is not the case this is about
-        if fs::OpenOptions::new().append(true).open(&file).is_err() {
-            assert!(exclude(&dir).is_err());
-            keep_out_of_git(&dir);
+    /// REQ-1063: a state directory that cannot be written is a clear failure and the old list is as it was.
+    #[test]
+    fn a_state_directory_that_cannot_be_written_fails_and_loses_nothing() {
+        let (state, dir) = places("nowrite");
+        let old = old_list(&dir, "- [ ] a x\n");
+        fs::write(&state, "a file where the directory should be").unwrap();
+        let why = locate(&state, &dir).unwrap_err();
+        assert!(
+            why.contains("cannot move the task list") && why.contains("tasks"),
+            "{why}"
+        );
+        assert_eq!(fs::read_to_string(&old).unwrap(), "- [ ] a x\n");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1063, RISK-182: several processes (here threads) moving one list make one file, whole, and none fails.
+    #[test]
+    fn many_moves_at_once_make_one_whole_list_and_none_fails() {
+        let (state, dir) = places("race");
+        let text = "- [ ] a x\n".repeat(2000);
+        old_list(&dir, &text);
+        let moves: Vec<_> = (0..8)
+            .map(|_| {
+                let (state, dir) = (state.clone(), dir.clone());
+                std::thread::spawn(move || locate(&state, &dir))
+            })
+            .collect();
+        for m in moves {
+            assert!(m.join().unwrap().is_ok());
         }
-        assert_eq!(fs::read_to_string(&file).unwrap(), "# mine\n");
-        assert_eq!(fs::read_to_string(&list).unwrap(), "- [ ] a x\n");
-        fs::remove_dir_all(&dir).unwrap();
+        let path = identity::tasks_path(&state, &dir);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        assert!(!identity::legacy_tasks_path(&dir).exists());
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
     }
 
-    /// REQ-1064: a list added with `git add -f` stays tracked.
+    /// REQ-1064: `forget` deletes the file of that folder and no other.
     #[test]
-    fn a_list_added_to_git_by_the_person_stays_tracked() {
-        let dir = repo("tracked");
-        let list = identity::tasks_path(Path::new(""))
-            .to_string_lossy()
-            .into_owned();
-        keep_out_of_git(&dir);
-        git::run(&dir, &["add", "-f", &list]).unwrap();
-        keep_out_of_git(&dir);
-        assert_eq!(git::run(&dir, &["ls-files"]).unwrap(), list);
+    fn forget_deletes_the_list_of_that_folder_and_no_other() {
+        let (state, dir) = places("forget");
+        let other = dir.parent().unwrap().join("other");
+        fs::create_dir_all(&other).unwrap();
+        for d in [&dir, &other] {
+            let p = identity::tasks_path(&state, d);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "- [ ] a x\n").unwrap();
+        }
+        let outside = state.join("keep.md");
+        fs::write(&outside, "x").unwrap();
         fs::remove_dir_all(&dir).unwrap();
+        forget(&state, &dir);
+        assert!(!identity::tasks_path(&state, &dir).exists());
+        assert!(identity::tasks_path(&state, &other).exists() && outside.exists());
+        forget(&state, &dir);
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
     }
 }

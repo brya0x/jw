@@ -18,6 +18,7 @@ pub(super) fn run(args: &[&str]) -> Out {
         ["block", rest @ ..] => change(rest, "block"),
         ["reopen", rest @ ..] => change(rest, "reopen"),
         ["note", rest @ ..] => change(rest, "note"),
+        ["path", rest @ ..] => path(rest),
         ["loop", "on", rest @ ..] => loop_on(rest),
         ["loop", "off", rest @ ..] => loop_off(rest),
         ["loop", "status", rest @ ..] => loop_status(rest),
@@ -25,24 +26,46 @@ pub(super) fn run(args: &[&str]) -> Out {
     }
 }
 
-/// The list from the current folder up to the folder that has a `.git`, a file in a worktree and a
-/// folder in a clone (REQ-937), or the file `--file` names.
-fn find(a: &Args) -> Out<PathBuf> {
+/// The folder of the workspace this runs in (REQ-937): the pane's own, else the first folder from the current one
+/// up that has a `.git`, a file in a worktree and a folder in a clone, else the current one.
+fn workspace_dir() -> Out<PathBuf> {
+    if let Some(dir) =
+        std::env::var_os(identity::env_var("WORKSPACE_DIR")).filter(|d| !d.is_empty())
+    {
+        return Ok(PathBuf::from(dir));
+    }
+    let here = std::env::current_dir().map_err(|e| Fail::Error(e.to_string()))?;
+    let root = here.ancestors().find(|d| d.join(".git").exists());
+    Ok(root.unwrap_or(&here).to_path_buf())
+}
+
+/// The workspace's list file, the one N180 kept in the folder moved (REQ-1061, REQ-1063), or the file `--file`
+/// names. It may not be there.
+fn locate(a: &Args) -> Out<PathBuf> {
     if let Some(file) = a.value("file") {
         return Ok(PathBuf::from(file));
     }
-    let here = std::env::current_dir().map_err(|e| Fail::Error(e.to_string()))?;
-    for dir in here.ancestors() {
-        let path = identity::tasks_path(dir);
-        if path.is_file() {
-            tasks::keep_out_of_git(dir);
-            return Ok(path);
-        }
-        if dir.join(".git").exists() {
-            break;
-        }
+    tasks::locate(&identity::state_dir(), &workspace_dir()?).map_err(Fail::Error)
+}
+
+fn find(a: &Args) -> Out<PathBuf> {
+    let path = locate(a)?;
+    if path.is_file() {
+        return Ok(path);
     }
-    fail("no task list from here up to the root of the repository (--file names one)")
+    fail(format!(
+        "no task list for this workspace: {} is not there (`{} tasks path` prints it, --file names another)",
+        path.display(),
+        bin()
+    ))
+}
+
+/// Where the list of this workspace is, or would be, and nothing else (REQ-1062).
+fn path(args: &[&str]) -> Out {
+    let a = Args::parse(args, &["file"], &[])?;
+    a.words::<0>()?;
+    println!("{}", locate(&a)?.display());
+    Ok(())
 }
 
 fn read(path: &Path) -> Out<String> {
@@ -278,6 +301,6 @@ fn loop_status(args: &[&str]) -> Out {
 pub(super) fn usage() -> String {
     let b = bin();
     format!(
-        "usage: {b} tasks ls [--json] [--file <path>]\n       {b} tasks next [--file <path>]\n       {b} tasks done <id>\n       {b} tasks block <id> <reason>\n       {b} tasks reopen <id>\n       {b} tasks note <id> <text>\n       {b} tasks loop on [--max N] [--in <workspace>]\n       {b} tasks loop off [--in <workspace>]\n       {b} tasks loop status [--in <workspace>]"
+        "usage: {b} tasks ls [--json] [--file <path>]\n       {b} tasks next [--file <path>]\n       {b} tasks done <id>\n       {b} tasks block <id> <reason>\n       {b} tasks reopen <id>\n       {b} tasks note <id> <text>\n       {b} tasks path\n       {b} tasks loop on [--max N] [--in <workspace>]\n       {b} tasks loop off [--in <workspace>]\n       {b} tasks loop status [--in <workspace>]"
     )
 }
