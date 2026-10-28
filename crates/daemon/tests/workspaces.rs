@@ -1148,3 +1148,136 @@ fn an_existing_worktree_opens_as_a_workspace_with_no_panel_and_the_list_then_say
     );
     d.stop();
 }
+
+/// What `git status` says of a worktree, with the untracked files one by one.
+fn status(dir: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["status", "--porcelain", "-uall"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// N188, REQ-1063, REQ-1064: the list a worktree had in its folder is moved out of it, so the worktree goes
+/// with no `--force`, and its list goes with it and no other.
+#[test]
+fn a_task_list_does_not_stop_its_worktree_from_going_and_goes_with_it() {
+    let sb = Sandbox::new();
+    let _d = sb.start();
+    let state = sb.config().state_dir;
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let mut make = |branch: &str| {
+        id_of(
+            c.cmd(Cmd::CreateWorktree {
+                repo: text(&app),
+                branch: branch.into(),
+                base: None,
+                folder: None,
+            })
+            .unwrap()
+            .unwrap(),
+        )
+    };
+    let (one, two) = (make("b1"), make("b2"));
+    let dirs = |b: &str| app.parent().unwrap().join("app-wt").join(b);
+    // the lists as N180 kept them, in the folders; a `roles` folder beside one of them is the person's
+    for b in ["b1", "b2"] {
+        let old = identity::legacy_tasks_path(&dirs(b));
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(old, format!("- [ ] a {b}\n")).unwrap();
+    }
+    assert!(
+        status(&dirs("b1")).contains("??"),
+        "the list is untracked in the folder"
+    );
+    // asking for the node looks at the list, which is moved (REQ-1063)
+    for ws in [&one, &two] {
+        c.cmd(Cmd::OpenTasks {
+            workspace: ws.clone(),
+        })
+        .unwrap()
+        .unwrap();
+    }
+    assert_eq!(
+        status(&dirs("b1")),
+        "",
+        "nothing of the list is in the worktree"
+    );
+    assert!(
+        !identity::legacy_tasks_path(&dirs("b1"))
+            .parent()
+            .unwrap()
+            .exists()
+    );
+    let (list1, list2) = (
+        identity::tasks_path(&state, &dirs("b1")),
+        identity::tasks_path(&state, &dirs("b2")),
+    );
+    assert_eq!(std::fs::read_to_string(&list1).unwrap(), "- [ ] a b1\n");
+
+    let mut seen = sb.client();
+    session(&mut seen);
+    let job = job_of(
+        c.cmd(Cmd::RemoveWorkspace {
+            workspace: one,
+            remove_worktree: true,
+            force: false,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let jobs = wait_jobs(&mut seen, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] != "running")
+    });
+    assert_eq!(jobs[0]["state"], "done", "{}", jobs[0]["detail"]);
+    assert!(!dirs("b1").exists());
+    assert!(!list1.exists(), "its list went with it");
+    assert!(list2.exists(), "and the other worktree's did not");
+    let _ = two;
+}
+
+/// N188, REQ-1063: a list nobody has looked at yet is moved by the removal itself, so it does not stop it.
+#[test]
+fn a_list_still_in_the_folder_when_the_worktree_is_removed_does_not_stop_it() {
+    let sb = Sandbox::new();
+    let _d = sb.start();
+    let state = sb.config().state_dir;
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let one = id_of(
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: "b1".into(),
+            base: None,
+            folder: None,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let dir = app.parent().unwrap().join("app-wt/b1");
+    let old = identity::legacy_tasks_path(&dir);
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "- [ ] a x\n").unwrap();
+    let job = job_of(
+        c.cmd(Cmd::RemoveWorkspace {
+            workspace: one,
+            remove_worktree: true,
+            force: false,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let jobs = wait_jobs(&mut c, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] != "running")
+    });
+    assert_eq!(jobs[0]["state"], "done", "{}", jobs[0]["detail"]);
+    assert!(!dir.exists());
+    assert!(!identity::tasks_path(&state, &dir).exists());
+}

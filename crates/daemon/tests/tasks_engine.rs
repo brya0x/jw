@@ -129,7 +129,7 @@ impl Rig {
                 .any(|w| w["id"] == at.as_str() && w["pane_count"] == 1)
         });
         let path = self.summary(&ws)["path"].as_str().unwrap().to_owned();
-        let file = identity::tasks_path(Path::new(&path));
+        let file = identity::tasks_path(&self.sb.config().state_dir, Path::new(&path));
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, list).unwrap();
         self.client.open(&ws).unwrap();

@@ -1,12 +1,12 @@
 //! The task list of a workspace (N180; REQ-892 to REQ-906, REQ-954, REQ-956): a Markdown file read into
-//! tasks and edited one line at a time. Everything but the last two functions is text in, text out, so
+//! tasks and edited one line at a time. Everything but the functions of «the file» is text in, text out, so
 //! the daemon and the binary's file commands share it and a list can be edited with no daemon.
 
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 /// The id the final task gets when it is written (REQ-905).
@@ -650,6 +650,87 @@ pub fn write_keeping_mode(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
+/// The file of the list of the folder `dir` (REQ-1061), after the list N180 kept in the folder is moved to it
+/// (REQ-1063): copied through a temporary file with the old one's mode and a link that fails when the new file
+/// is there, read back and compared, and only then is the old file deleted, and its folder when it is empty
+/// (`remove_dir`: what else is in it is not ours). With both files, the new one is the list and the old one is
+/// left, said once. Another process moving it first is not a failure. The old file stays when anything fails.
+pub fn locate(state: &Path, dir: &Path) -> Result<PathBuf, String> {
+    static SAID: AtomicBool = AtomicBool::new(false);
+    let path = identity::tasks_path(state, dir);
+    let old = identity::legacy_tasks_path(dir);
+    if !old.is_file() {
+        return Ok(path);
+    }
+    if path.exists() {
+        if !SAID.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "the task list of {} is in {} and in {}: the first is used and the second is left as it is",
+                dir.display(),
+                path.display(),
+                old.display()
+            );
+        }
+        return Ok(path);
+    }
+    move_list(&old, &path).map_err(|e| {
+        format!(
+            "cannot move the task list {} to {}: {e}",
+            old.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+fn move_list(old: &Path, new: &Path) -> io::Result<()> {
+    static MOVES: AtomicU64 = AtomicU64::new(0);
+    let text = match fs::read(old) {
+        Ok(text) => text,
+        // another process moved it already
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let folder = new.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(folder)?;
+    let tmp = folder.join(format!(
+        ".moving.{}.{}.tmp",
+        std::process::id(),
+        MOVES.fetch_add(1, Ordering::Relaxed)
+    ));
+    let linked = fs::write(&tmp, &text)
+        .and_then(|()| fs::set_permissions(&tmp, fs::metadata(old)?.permissions()))
+        .and_then(|()| fs::hard_link(&tmp, new));
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => {}
+        // another process moved it first: the new file is there, and the old one may be gone already
+        Err(_) if new.exists() => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    if fs::read(new)? != text {
+        return Err(io::Error::other("the copy is not the old file"));
+    }
+    match fs::remove_file(old) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    if let Some(folder) = old.parent() {
+        let _ = fs::remove_dir(folder);
+    }
+    Ok(())
+}
+
+/// Deletes the list file of the folder `dir` of a workspace that is gone (REQ-1064): that file only, and only
+/// when it is in the lists' directory.
+pub fn forget(state: &Path, dir: &Path) {
+    let path = identity::tasks_path(state, dir);
+    if path.parent() == Some(identity::tasks_dir(state).as_path()) {
+        let _ = fs::remove_file(path);
+    }
+}
+
 /// What the daemon looks at to know a list changed without reading it: its size and its time.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Sig {
@@ -1050,5 +1131,148 @@ mod tests {
         }
         let with_note = edit(text, "t1", Edit::Note("n (4 min); ok")).unwrap();
         assert_eq!(with_note.replace("  - n (4 min); ok\r\n", ""), text);
+    }
+
+    // ---- where the list lives (N188)
+
+    /// A state directory and a workspace folder of a test, both fresh.
+    fn places(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("jw-locate-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (state, dir) = (root.join("state"), root.join("app"));
+        fs::create_dir_all(&dir).unwrap();
+        (state, dir)
+    }
+
+    fn old_list(dir: &Path, text: &str) -> PathBuf {
+        let old = identity::legacy_tasks_path(dir);
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(&old, text).unwrap();
+        old
+    }
+
+    /// REQ-1061: with no old file there is nothing to do, and no file or folder is made.
+    #[test]
+    fn with_no_old_file_the_path_is_given_and_nothing_is_made() {
+        let (state, dir) = places("none");
+        let path = locate(&state, &dir).unwrap();
+        assert_eq!(path, identity::tasks_path(&state, &dir));
+        assert!(!state.exists() && !path.exists());
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the project is as it was"
+        );
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1063: the list moves, with its mode, and the old file and its folder go.
+    #[test]
+    fn an_old_list_moves_to_the_state_directory_and_its_folder_goes_when_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = places("move");
+        let old = old_list(&dir, "- [ ] a x\r\n");
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o640)).unwrap();
+        let path = locate(&state, &dir).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "- [ ] a x\r\n");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert!(!old.exists() && !old.parent().unwrap().exists());
+        assert_eq!(
+            fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1,
+            "no temporary is left"
+        );
+        assert_eq!(locate(&state, &dir).unwrap(), path, "and again: the same");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1063: an empty old file moves as it is, and what else is in the old folder stays.
+    #[test]
+    fn an_empty_list_moves_and_the_roles_in_the_old_folder_stay() {
+        let (state, dir) = places("empty");
+        let old = old_list(&dir, "");
+        let roles = identity::roles_dir(&dir);
+        fs::create_dir_all(&roles).unwrap();
+        fs::write(roles.join("brain.md"), "mine").unwrap();
+        let path = locate(&state, &dir).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"");
+        assert!(!old.exists());
+        assert_eq!(fs::read_to_string(roles.join("brain.md")).unwrap(), "mine");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1063: with both files the new one is used and the old one is not touched.
+    #[test]
+    fn with_both_files_the_new_one_wins_and_the_old_one_is_left() {
+        let (state, dir) = places("both");
+        let old = old_list(&dir, "- [ ] old x\n");
+        let new = identity::tasks_path(&state, &dir);
+        fs::create_dir_all(new.parent().unwrap()).unwrap();
+        fs::write(&new, "- [ ] new x\n").unwrap();
+        assert_eq!(locate(&state, &dir).unwrap(), new);
+        assert_eq!(fs::read_to_string(&new).unwrap(), "- [ ] new x\n");
+        assert_eq!(fs::read_to_string(&old).unwrap(), "- [ ] old x\n");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1063: a state directory that cannot be written is a clear failure and the old list is as it was.
+    #[test]
+    fn a_state_directory_that_cannot_be_written_fails_and_loses_nothing() {
+        let (state, dir) = places("nowrite");
+        let old = old_list(&dir, "- [ ] a x\n");
+        fs::write(&state, "a file where the directory should be").unwrap();
+        let why = locate(&state, &dir).unwrap_err();
+        assert!(
+            why.contains("cannot move the task list") && why.contains("tasks"),
+            "{why}"
+        );
+        assert_eq!(fs::read_to_string(&old).unwrap(), "- [ ] a x\n");
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1063, RISK-182: several processes (here threads) moving one list make one file, whole, and none fails.
+    #[test]
+    fn many_moves_at_once_make_one_whole_list_and_none_fails() {
+        let (state, dir) = places("race");
+        let text = "- [ ] a x\n".repeat(2000);
+        old_list(&dir, &text);
+        let moves: Vec<_> = (0..8)
+            .map(|_| {
+                let (state, dir) = (state.clone(), dir.clone());
+                std::thread::spawn(move || locate(&state, &dir))
+            })
+            .collect();
+        for m in moves {
+            assert!(m.join().unwrap().is_ok());
+        }
+        let path = identity::tasks_path(&state, &dir);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        assert!(!identity::legacy_tasks_path(&dir).exists());
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-1064: `forget` deletes the file of that folder and no other.
+    #[test]
+    fn forget_deletes_the_list_of_that_folder_and_no_other() {
+        let (state, dir) = places("forget");
+        let other = dir.parent().unwrap().join("other");
+        fs::create_dir_all(&other).unwrap();
+        for d in [&dir, &other] {
+            let p = identity::tasks_path(&state, d);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "- [ ] a x\n").unwrap();
+        }
+        let outside = state.join("keep.md");
+        fs::write(&outside, "x").unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        forget(&state, &dir);
+        assert!(!identity::tasks_path(&state, &dir).exists());
+        assert!(identity::tasks_path(&state, &other).exists() && outside.exists());
+        forget(&state, &dir);
+        fs::remove_dir_all(state.parent().unwrap()).unwrap();
     }
 }

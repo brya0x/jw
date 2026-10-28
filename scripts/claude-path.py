@@ -340,9 +340,12 @@ def s_loop():
     # Two small tasks and the final one (which `tasks_loop_on` writes). The agent runs `jw tasks done`, so the
     # binary is on its PATH, and the permissions it asks for are answered yes: this is a throwaway repository.
     ENV["PATH"] = os.path.dirname(JW) + os.pathsep + ENV["PATH"]
-    folder = os.path.join(REPO, ".jw")
-    os.makedirs(folder, exist_ok=True)
-    open(os.path.join(folder, "tasks.md"), "w").write(
+    # the list is a file of the state directory (N188): the binary says which, for this repository and this state
+    # not the pane's own workspace, if this runs in a pane of a session
+    here = {k: v for k, v in ENV.items() if not k.endswith("_WORKSPACE_DIR")}
+    listfile = subprocess.run([JW, "tasks", "path"], env=here, cwd=REPO, capture_output=True, text=True).stdout.strip()
+    os.makedirs(os.path.dirname(listfile), exist_ok=True)
+    open(listfile, "w").write(
         "- [ ] t1 crea el archivo uno.txt con el texto uno\n- [ ] t2 crea el archivo dos.txt con el texto dos (after: t1)\n"
     )
     c = Conv(["--permission-mode", "acceptEdits"])
@@ -367,7 +370,7 @@ def s_loop():
     notes = [i["text"] for i in items(n, "note") if i["text"].startswith("Task loop")]
     check("loop", "the conversation says each lap in a note", len(notes) >= 1, str(notes))
     seen("loop", "turns (results) for the whole loop", str(len(items(n, "result"))))
-    seen("loop", "the list at the end", open(os.path.join(folder, "tasks.md")).read().replace("\n", " | ")[:300])
+    seen("loop", "the list at the end", open(listfile).read().replace("\n", " | ")[:300])
     c.close()
 
 

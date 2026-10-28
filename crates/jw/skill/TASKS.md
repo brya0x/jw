@@ -5,8 +5,9 @@ description: Use right after you have made a plan, whenever you run inside {bin}
 
 # {bin} tasks: work a plan to the end
 
-You run inside a pane of a {bin} session. The task list of this workspace is a Markdown file,
-`{tasks_file}`, in the folder you work in (a worktree has its own). A task is a line
+You run inside a pane of a {bin} session. The task list of this workspace is a Markdown file
+that `{bin} tasks path` prints: {bin} keeps it in its own directory, not in the project, one for each
+workspace (a worktree has its own). A task is a line
 `- [ ] t1 title (after: t0)`: `[x]` is done, `[!]` is blocked, and without `after:` the order of the
 file is the order of work. The last task, `fin`, always exists: it waits for all the others and is
 where the tests and their evidence go.
@@ -16,7 +17,7 @@ person's wording and order and start it; if it is a goal (one sentence), look at
 the list, show it, and wait for the person's OK before the loop. With no text, the list is the plan
 you just made.
 
-1. Write the plan as `{tasks_file}`: one line per task, ids `t1`, `t2`, ... and `after:` only where one
+1. Write the plan in the file `{bin} tasks path` prints: one line per task, ids `t1`, `t2`, ... and `after:` only where one
    task needs another. If the file already has tasks, never replace it: add the new ones at the end,
    never remove or untick a line that is done, and never rewrite the list while a loop is on
    (`{bin} tasks loop status` says).

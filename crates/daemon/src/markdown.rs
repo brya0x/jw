@@ -21,11 +21,18 @@ const MAX_PLAN: usize = 64 * 1024;
 
 /// `read_markdown`: the blocks of a Markdown file of the workspace (REQ-465, REQ-466).
 pub fn read(shared: &Shared, workspace: &str, path: &str) -> Done {
-    let root = shared
-        .lock()
-        .workspace_dir(workspace)
-        .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
-    let file = file_in(&root, path)?;
+    let (root, list) = {
+        let core = shared.lock();
+        let root = core
+            .workspace_dir(workspace)
+            .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
+        let list = core
+            .state_dir
+            .as_deref()
+            .map(|state| identity::tasks_path(state, &root));
+        (root, list)
+    };
+    let file = file_in(&root, list.as_deref(), path)?;
     let text = fs::read_to_string(&file).map_err(|e| match e.kind() {
         std::io::ErrorKind::InvalidData => err(
             ErrorCode::BadRequest,
@@ -67,10 +74,13 @@ fn reply(doc: MarkdownDoc) -> Done {
     ))
 }
 
-/// The file `path` names, which must be a Markdown file inside `root` once links are followed,
-/// small enough to be read.
-fn file_in(root: &Path, path: &str) -> Result<PathBuf, ErrorBody> {
-    let file = files::inside(root, path)?;
+/// The file `path` names, which must be a Markdown file inside `root` once links are followed, or the
+/// workspace's own task list, which is not in the folder (REQ-1061), small enough to be read.
+fn file_in(root: &Path, list: Option<&Path>, path: &str) -> Result<PathBuf, ErrorBody> {
+    let file = match list.filter(|l| Path::new(path) == *l) {
+        Some(list) => list.to_path_buf(),
+        None => files::inside(root, path)?,
+    };
     let markdown = file
         .extension()
         .and_then(|e| e.to_str())
