@@ -222,7 +222,7 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         force: bool,
     },
-    /// Count the commits of a worktree's branch that no remote has. The result is `{ahead}`.
+    /// Count the commits of a worktree's branch that no remote has. The result is `{ahead}`, and `{ahead: 0, orphan: true}` for a worktree that git no longer lists.
     CheckWorkspace {
         workspace: Id,
     },

@@ -32,6 +32,7 @@ mod procs;
 mod project;
 mod provision;
 mod pty;
+mod reap;
 mod rename;
 mod replies;
 mod review;

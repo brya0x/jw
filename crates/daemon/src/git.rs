@@ -28,6 +28,18 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Whether git lists a worktree at `path` for the repository `project` (REQ-1070): paths are
+/// compared canonical, the folder's own when it is gone. An error is git's.
+pub fn knows(project: &Path, path: &Path) -> Result<bool, String> {
+    let out = run(project, &["worktree", "list", "--porcelain"])?;
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_owned());
+    let want = real(path);
+    Ok(out
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .any(|l| real(Path::new(l)) == want))
+}
+
 /// `run`, stopped when `cancel` is set (REQ-604): for what takes as long as the network does.
 pub fn run_cancel(
     dir: &Path,

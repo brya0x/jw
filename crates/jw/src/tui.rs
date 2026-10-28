@@ -3773,6 +3773,21 @@ impl View {
         if let Some(n) = checked.ahead {
             self.check_unpushed(n);
         }
+        if checked.orphan {
+            // Git cannot list what the folder holds: the question that asks for the name stands
+            // for the changes it cannot read (REQ-1075).
+            if let Some(Manage::Checking(t)) = &self.manage {
+                self.manage = Some(Manage::Dirty {
+                    target: t.clone(),
+                    files: vec![
+                        "huérfano: git ya no conoce esta carpeta; puede tener trabajo que git no ve"
+                            .to_owned(),
+                    ],
+                    typed: String::new(),
+                });
+            }
+            return;
+        }
         match checked.node {
             Ok(node) => self.check_made(&node),
             Err(why) if self.manage.as_ref().is_some_and(Manage::is_check) => {
@@ -8296,6 +8311,8 @@ enum Worked {
 struct Checked {
     ahead: Option<u64>,
     node: Result<String, String>,
+    /// Git no longer knows the worktree (REQ-1075): there are no changes to read.
+    orphan: bool,
 }
 
 /// Ask the daemon to close a workspace, or to remove its worktree (which it does as a job), in a
@@ -8335,6 +8352,7 @@ fn spawn_check(socket: std::path::PathBuf, workspace: String, tx: std::sync::mps
             Err(e) => Checked {
                 ahead: None,
                 node: Err(e.to_string()),
+                orphan: false,
             },
         };
         let _ = tx.send(Worked::Checked(checked));
@@ -8346,15 +8364,25 @@ fn spawn_check(socket: std::path::PathBuf, workspace: String, tx: std::sync::mps
 /// somebody watches it, so it is read now: the answer decides what is offered.
 fn check_changes(client: &mut Client, workspace: String) -> Checked {
     // What is not pushed is only said, never needed: without it the question just says less.
-    let ahead = match client.cmd_within(
+    let (ahead, orphan) = match client.cmd_within(
         Cmd::CheckWorkspace {
             workspace: workspace.clone(),
         },
         ASK_WAIT,
     ) {
-        Ok(Ok(Some(r))) => Some(r["ahead"].as_u64().unwrap_or(0)),
-        _ => None,
+        Ok(Ok(Some(r))) => (
+            Some(r["ahead"].as_u64().unwrap_or(0)),
+            r["orphan"].as_bool().unwrap_or(false),
+        ),
+        _ => (None, false),
     };
+    if orphan {
+        return Checked {
+            ahead: None,
+            node: Err(String::new()),
+            orphan,
+        };
+    }
     let cmd = Cmd::OpenDiff {
         workspace,
         scope: DiffScope::Uncommitted,
@@ -8374,7 +8402,11 @@ fn check_changes(client: &mut Client, workspace: String) -> Checked {
             Err(e) => Err(e.to_string()),
         }
     });
-    Checked { ahead, node }
+    Checked {
+        ahead,
+        node,
+        orphan,
+    }
 }
 
 /// A workspace the daemon made for the client: give it a shell, and open it when it appears.
@@ -12836,6 +12868,7 @@ mod tests {
         v.checked(Checked {
             ahead: Some(2),
             node: Err("git no contesta".into()),
+            orphan: false,
         });
         let t = v.plain(120, 30);
         assert!(t.contains("No se pudo mirar los cambios"), "{t}");
@@ -12852,8 +12885,47 @@ mod tests {
         v.checked(Checked {
             ahead: Some(2),
             node: Err("late".into()),
+            orphan: false,
         });
         assert!(v.manage.is_none(), "nobody asks any more");
+    }
+
+    /// REQ-1075: a worktree that git no longer knows asks for the branch's name, with its one
+    /// line in the place of the files, and the name sends the removal by force.
+    #[test]
+    fn an_orphan_asks_for_the_name_and_removes_by_force() {
+        let mut v = idle_view();
+        close_workspace(&mut v);
+        let ws = v.selected_id().unwrap();
+        assert_eq!(tap(&mut v, 'd'), After::Check(ws.clone()));
+        v.checked(Checked {
+            ahead: None,
+            node: Err(String::new()),
+            orphan: true,
+        });
+        let t = v.plain(120, 30);
+        assert!(t.contains("huérfano: git ya no conoce"), "{t}");
+        assert!(!t.contains("No se pudo mirar"), "{t}");
+        let Some(Manage::Dirty { target, .. }) = &v.manage else {
+            panic!("{:?}", v.manage)
+        };
+        let name = target.confirm().to_owned();
+        for c in name.chars() {
+            tap(&mut v, c);
+        }
+        let after = v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(
+                &after,
+                After::RemoveWorkspace {
+                    force: true,
+                    remove_worktree: true,
+                    ..
+                }
+            ),
+            "{:?}",
+            matches!(after, After::Continue)
+        );
     }
 
     /// REQ-658 against a real daemon in a private directory (never the person's): what the worker
