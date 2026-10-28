@@ -46,16 +46,18 @@ pub fn new_pane(
     beside: Option<Id>,
     dir: Option<SplitDir>,
 ) -> Done {
-    new_pane_then(shared, workspace, program, None, beside, dir)
+    new_pane_then(shared, workspace, program, None, true, beside, dir)
 }
 
 /// `new_pane`, where `then` is started when `program` ends well (a worktree's setup, and then
-/// `claude`, in one panel: REQ-507).
+/// `claude`, in one panel: REQ-507). `marked` lets the program be a block of the pane (REQ-1056);
+/// a program the daemon starts on its own account, with marks of its own, is not.
 pub fn new_pane_then(
     shared: &Shared,
     workspace: &Id,
     program: Option<Vec<String>>,
     then: Option<Vec<String>>,
+    marked: bool,
     beside: Option<Id>,
     dir: Option<SplitDir>,
 ) -> Done {
@@ -106,6 +108,7 @@ pub fn new_pane_then(
         pty::Program {
             argv: launched.as_deref(),
             then: then_launched.as_deref(),
+            marked,
         },
         &env,
         &setup,
@@ -348,6 +351,7 @@ pub fn restore(shared: &Shared) {
             pty::Program {
                 argv: launched.as_deref(),
                 then: None,
+                marked: false,
             },
             &pane_env,
             &setup,

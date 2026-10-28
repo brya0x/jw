@@ -4,9 +4,11 @@
 //! `$SHELL -i -c '<program>; exec $SHELL -i'`. Nothing races the prompt (no keystrokes to
 //! lose to a slow rc file, no echo to confuse the screen), the shell still reads its rc
 //! files (`-i`), and when the program ends the same process becomes an ordinary shell, so
-//! the pane never dies with it. Nothing marks the program as a command (the integration's hooks
-//! belong to the prompt), so until the shell that takes over shows its first prompt the pane is its
-//! screen and not a list of blocks (REQ-844).
+//! the pane never dies with it. The integration's hooks belong to the prompt, so they never see the
+//! program: the script prints the marks of a command around it itself (REQ-1056), and the pane
+//! is blocks from the program's first byte. A program that takes the screen, an agent and a
+//! shell with no integration get no marks: until the shell that takes over shows its first
+//! prompt the pane is its screen and not a list of blocks (REQ-844).
 
 use std::path::{Path, PathBuf};
 
@@ -19,24 +21,55 @@ const SESSION_FLAGS: [&str; 3] = ["--session-id", "--resume", "-r"];
 /// Flags that already choose which conversation to use.
 const CHOOSING_FLAGS: [&str; 5] = ["--session-id", "--resume", "-r", "--continue", "-c"];
 
+fn is_fish(shell: &str) -> bool {
+    shell.rsplit('/').next() == Some("fish")
+}
+
 /// Quote one word for `shell`: fish escapes inside single quotes, the POSIX shells close and
 /// reopen them.
 pub fn quote(shell: &str, word: &str) -> String {
-    if shell.rsplit('/').next() == Some("fish") {
+    if is_fish(shell) {
         format!("'{}'", word.replace('\\', "\\\\").replace('\'', "\\'"))
     } else {
         format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
+fn takes_screen(argv: &[String]) -> bool {
+    crate::procs::takes_screen(argv) || agent_name(argv).is_some()
+}
+
+/// The marks of a command the integration's own scripts print (`shell/*`): its text and folder
+/// before it, its status after it. fish says `$status` and writes a substitution `(…)`.
+fn marks(shell: &str, argv: &[String]) -> (String, &'static str) {
+    let fish = is_fish(shell);
+    let b64 = |word: String| {
+        let encode = format!("printf %s {word} | base64 | tr -d '\\n'");
+        if fish {
+            format!("({encode})")
+        } else {
+            format!("\"$({encode})\"")
+        }
+    };
+    let before = format!(
+        "printf '\\e]633;E;%s\\a\\e]633;P;Cwd=%s\\a\\e]133;C\\a' {} {}; ",
+        b64(quote(shell, &argv.join(" "))),
+        b64("\"$PWD\"".to_owned())
+    );
+    (before, if fish { "$status" } else { "$?" })
+}
+
 /// The `-c` script that runs `argv` — and, when it ends well, `then` — and then turns the shell
 /// back into an ordinary one. `then` is typed in the interactive shell, so `claude` is the
-/// function that opens a conversation (REQ-371) and not the original.
+/// function that opens a conversation (REQ-371) and not the original. `marked` asks for the
+/// program to be reported as a command (REQ-1056), which is done only where nothing else
+/// draws it (REQ-1058).
 pub fn script(
     shell: &str,
     argv: &[String],
     then: Option<&[String]>,
     setup: &crate::integration::Setup,
+    marked: bool,
 ) -> String {
     let line = |a: &[String]| -> String {
         a.iter()
@@ -65,8 +98,19 @@ pub fn script(
     } else {
         format!("{} ", args.join(" "))
     };
+    let reported = marked
+        && setup.integrated()
+        && !takes_screen(argv)
+        && then.is_none_or(|t| !takes_screen(t));
+    let (before, after) = match reported.then(|| marks(shell, argv)) {
+        Some((before, status)) => (before, format!("printf '\\e]133;D;%d\\a' {status}; ")),
+        None => Default::default(),
+    };
+    // `^C` reaches the shell as well as the program (an interactive `-c` has no job control in zsh) and
+    // would end the script and the pane: a trap, unlike an ignore, is not inherited by the program.
+    let trap = if is_fish(shell) { "" } else { "trap : INT; " };
     format!(
-        "{words}; exec {env_prefix}{} {arg_part}-i",
+        "{trap}{before}{words}; {after}exec {env_prefix}{} {arg_part}-i",
         quote(shell, shell)
     )
 }
@@ -259,26 +303,102 @@ mod tests {
             &["nvim".into(), "a b.rs".into()],
             None,
             &Default::default(),
+            true,
         );
-        assert_eq!(s, "'nvim' 'a b.rs'; exec '/bin/zsh' -i");
+        assert_eq!(s, "trap : INT; 'nvim' 'a b.rs'; exec '/bin/zsh' -i");
         // what follows runs only when the first ended well (REQ-507); the shell stays either way
         let chained = script(
             "/bin/zsh",
             &["sh".into(), "-c".into(), "make".into()],
             Some(&["claude".into(), "--session-id".into(), "x".into()]),
             &Default::default(),
+            true,
         );
         assert_eq!(
             chained,
-            "'sh' '-c' 'make' && 'claude' '--session-id' 'x'; exec '/bin/zsh' -i"
+            "trap : INT; 'sh' '-c' 'make' && 'claude' '--session-id' 'x'; exec '/bin/zsh' -i"
         );
         let with = crate::integration::Setup {
             args: vec!["--rcfile".into(), "/s/rc.sh".into()],
             env: vec![("K".into(), "v w".into())],
         };
         assert_eq!(
-            script("/bin/bash", &["ls".into()], None, &with),
-            "'ls'; exec env 'K=v w' '/bin/bash' '--rcfile' '/s/rc.sh' -i"
+            script("/bin/bash", &["ls".into()], None, &with, false),
+            "trap : INT; 'ls'; exec env 'K=v w' '/bin/bash' '--rcfile' '/s/rc.sh' -i"
+        );
+    }
+
+    fn integrated(shell: &str) -> crate::integration::Setup {
+        crate::integration::setup(shell, Path::new("/s"), &|_| Some("/h".into()))
+    }
+
+    /// REQ-1056 and REQ-1060: the marks of a command around the program, with its words quoted for the shell.
+    #[test]
+    fn the_script_reports_the_program_as_a_command_for_zsh_bash_and_fish() {
+        let argv = ["pnpm".to_owned(), "it's a b".to_owned()];
+        let tail = |shell: &str| match shell {
+            "/bin/zsh" => "exec env 'ZDOTDIR=/s/zsh' 'JW_USER_ZDOTDIR=/h' '/bin/zsh' -i",
+            "/bin/bash" => "exec '/bin/bash' '--rcfile' '/s/bash/rc.sh' -i",
+            _ => "exec '/bin/fish' '--init-command' 'source /s/fish/jw.fish' -i",
+        };
+        let b = "printf '\\e]633;E;%s\\a\\e]633;P;Cwd=%s\\a\\e]133;C\\a'";
+        let words = "'pnpm' 'it'\\''s a b'";
+        let zsh = script("/bin/zsh", &argv, None, &integrated("/bin/zsh"), true);
+        assert_eq!(
+            zsh,
+            format!(
+                "trap : INT; {b} \"$(printf %s 'pnpm it'\\''s a b' | base64 | tr -d '\\n')\" \"$(printf %s \"$PWD\" | base64 | tr -d '\\n')\"; {words}; printf '\\e]133;D;%d\\a' $?; {}",
+                tail("/bin/zsh")
+            )
+        );
+        let bash = script("/bin/bash", &argv, None, &integrated("/bin/bash"), true);
+        assert!(
+            bash.starts_with(&format!("trap : INT; {b} \"$(printf %s 'pnpm it'")),
+            "{bash}"
+        );
+        assert!(
+            bash.ends_with(&format!("$?; {}", tail("/bin/bash"))),
+            "{bash}"
+        );
+        let fish = script("/bin/fish", &argv, None, &integrated("/bin/fish"), true);
+        assert_eq!(
+            fish,
+            format!(
+                "{b} (printf %s 'pnpm it\\'s a b' | base64 | tr -d '\\n') (printf %s \"$PWD\" | base64 | tr -d '\\n'); 'pnpm' 'it\\'s a b'; printf '\\e]133;D;%d\\a' $status; {}",
+                tail("/bin/fish")
+            )
+        );
+    }
+
+    /// REQ-1058: no mark where the pane is drawn by something else, or asked not to be.
+    #[test]
+    fn nothing_is_reported_of_a_screen_an_agent_a_setup_or_a_shell_with_no_integration() {
+        let zsh = integrated("/bin/zsh");
+        let marked =
+            |argv: &[&str], then: Option<&[&str]>, setup: &crate::integration::Setup, ask| {
+                let argv: Vec<String> = argv.iter().map(|w| (*w).to_owned()).collect();
+                let then: Option<Vec<String>> =
+                    then.map(|t| t.iter().map(|w| (*w).to_owned()).collect());
+                script("/bin/zsh", &argv, then.as_deref(), setup, ask).contains("133;C")
+            };
+        assert!(marked(&["pnpm", "dev"], None, &zsh, true));
+        assert!(
+            !marked(&["pnpm", "dev"], None, &zsh, false),
+            "not asked for"
+        );
+        assert!(
+            !marked(&["nvim", "a.rs"], None, &zsh, true),
+            "takes the screen"
+        );
+        assert!(!marked(&["claude"], None, &zsh, true), "an agent");
+        assert!(!marked(&["codex"], None, &zsh, true), "an agent");
+        assert!(
+            !marked(&["sh", "-c", "make"], Some(&["claude"]), &zsh, true),
+            "a setup before an agent"
+        );
+        assert!(
+            !marked(&["pnpm", "dev"], None, &Default::default(), true),
+            "a shell with no integration"
         );
     }
 

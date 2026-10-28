@@ -344,7 +344,8 @@ impl BlockStore {
 
     /// The shell was started with the integration and no program: its blocks exist (empty) from
     /// the start, so a client draws blocks before the first prompt. A program started with `-c`
-    /// leaves the store as it is until the shell's first mark (REQ-844).
+    /// leaves the store as it is until its first mark: the `C` of the script that reports it
+    /// (REQ-1056) or the shell's first prompt (REQ-844).
     pub fn integrate(&mut self) {
         self.integrated = true;
     }
@@ -566,6 +567,48 @@ mod tests {
         s.data(b"x\n");
         s.mark(Mark::Done(Some(0)));
         assert_eq!(s.view().unwrap().2.len(), 1, "blocks work as in any shell");
+    }
+
+    /// REQ-1056 and REQ-1057: what the `-c` script prints around a program (`launch::script`) opens a
+    /// block with no prompt before it, its output is the block's while it runs, and `D` closes it
+    /// with the status; the prompt of the shell that takes over adds no block.
+    #[test]
+    fn the_marks_of_the_script_make_the_program_a_running_block_that_ends_with_its_status() {
+        // "pnpm dev" and "/w" in base64.
+        let mut scanner = Scanner::default();
+        let mut s = BlockStore::new(40);
+        let mut feed = |s: &mut BlockStore, bytes: &[u8]| {
+            for piece in scanner.feed(bytes) {
+                match piece {
+                    Piece::Data(d) => s.data(&d),
+                    Piece::Mark(m) => s.mark(m),
+                }
+            }
+        };
+        assert!(
+            s.view().is_none(),
+            "nothing before the program says it runs"
+        );
+        feed(
+            &mut s,
+            b"\x1b]633;E;cG5wbSBkZXY=\x07\x1b]633;P;Cwd=L3c=\x07\x1b]133;C\x07ready\r\n",
+        );
+        let (_, mode, blocks) = s.view().unwrap();
+        assert_eq!(mode, BlocksMode::Blocks);
+        let [b] = &blocks[..] else {
+            panic!("{blocks:?}")
+        };
+        assert_eq!(
+            (b.cmd.as_str(), b.cwd.as_str(), b.running),
+            ("pnpm dev", "/w", true)
+        );
+        assert_eq!(b.out[0][0].t, "ready", "its output while it runs");
+        feed(&mut s, b"\x1b]133;D;130\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        let (_, _, blocks) = s.view().unwrap();
+        let [b] = &blocks[..] else {
+            panic!("{blocks:?}")
+        };
+        assert_eq!((b.running, b.code), (false, Some(130)));
     }
 
     fn pieces(chunks: &[&[u8]]) -> Vec<Piece> {
