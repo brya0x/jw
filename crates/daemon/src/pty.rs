@@ -62,6 +62,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Program<'a> {
     pub argv: Option<&'a [String]>,
     pub then: Option<&'a [String]>,
+    /// The program is reported to the pane's blocks as a command (REQ-1056).
+    pub marked: bool,
 }
 
 /// Start `shell` in `cwd`, running `program` inside it when given (see `launch`). Its
@@ -90,7 +92,7 @@ pub fn spawn(
         cmd.args([
             "-i",
             "-c",
-            &crate::launch::script(shell, argv, program.then, integration),
+            &crate::launch::script(shell, argv, program.then, integration, program.marked),
         ]);
     }
     cmd.cwd(cwd);
@@ -115,9 +117,9 @@ pub fn spawn(
         killer: Mutex::new(child.clone_killer()),
         shell_pid: child.process_id(),
     });
-    // A program started with `-c` has no prompt to mark it, so the blocks would be an empty list
-    // while it runs: the first mark of the shell that takes over integrates the store instead (REQ-844).
-    if started.is_none() && (!integration.args.is_empty() || !integration.env.is_empty()) {
+    // A program started with `-c` has no prompt to mark it, so the store waits for the first mark: the
+    // script's own `C` when it reports the program (REQ-1056), else the shell's first prompt (REQ-844).
+    if started.is_none() && integration.integrated() {
         lock(&term.blocks).integrate();
     }
 

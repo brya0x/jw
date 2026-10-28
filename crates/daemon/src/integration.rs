@@ -21,6 +21,13 @@ pub struct Setup {
     pub env: Vec<(String, String)>,
 }
 
+impl Setup {
+    /// Whether the shell reports its prompts and commands (a shell run unchanged marks nothing).
+    pub fn integrated(&self) -> bool {
+        !self.args.is_empty() || !self.env.is_empty()
+    }
+}
+
 /// Write the scripts under `dir` (the daemon's state directory).
 pub fn install(dir: &Path) -> io::Result<()> {
     for (rel, text) in [

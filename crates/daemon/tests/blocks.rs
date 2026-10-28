@@ -637,11 +637,16 @@ fn a_shell_without_the_integration_has_no_blocks() {
 /// stay out of it; `None` where neither bash nor zsh is installed.
 fn pane_with_program(program: &[&str]) -> Option<(Sandbox, Daemon, Client, String)> {
     let shell = find("bash").or_else(|| find("zsh"))?;
+    Some(pane_in(&shell, program))
+}
+
+/// A pane that starts `program` in `shell`, in a daemon of its own, with its node open.
+fn pane_in(shell: &str, program: &[&str]) -> (Sandbox, Daemon, Client, String) {
     let sb = Sandbox::new();
     let home = sb.dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let mut config = sb.config();
-    config.shell = Some(shell);
+    config.shell = Some(shell.to_owned());
     config.env = vec![
         ("HOME".into(), home.to_string_lossy().into()),
         ("ZDOTDIR".into(), home.to_string_lossy().into()),
@@ -675,7 +680,7 @@ fn pane_with_program(program: &[&str]) -> Option<(Sandbox, Daemon, Client, Strin
         .unwrap()
         .to_owned();
     c.open(&pane).unwrap();
-    Some((sb, d, c, pane))
+    (sb, d, c, pane)
 }
 
 #[test]
@@ -696,42 +701,278 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
     d.stop();
 }
 
-/// REQ-844: a program started with `-c` marks nothing, so while it runs the pane is its screen (no
-/// blocks node, which would be an empty list); the shell that takes over brings the blocks.
+/// A stand-in program in a folder of its own, found by its name: it prints a line and waits.
+fn stand_in(name: &str, secs: u32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("jw-n187-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(name);
+    std::fs::write(
+        &file,
+        format!("#!/bin/sh\necho on-the-screen\nsleep {secs}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    file
+}
+
+/// REQ-844 and REQ-1058: a program that draws its own screen (`nvim`) and an agent (`claude`) are
+/// reported by nobody while they run, so the pane is its screen (no blocks node, which would be an
+/// empty list); the shell that takes over brings the blocks.
 #[test]
-fn a_pane_started_with_a_program_is_its_screen_until_the_shell_reaches_its_prompt() {
-    let Some((_sb, d, mut c, pane)) =
-        pane_with_program(&["sh", "-c", "echo on-the-screen; sleep 4"])
-    else {
-        return;
-    };
-    let on_screen = |c: &Client| {
-        c.nodes.get(&pane).is_some_and(|n| {
-            n["screen"]["lines"].as_array().is_some_and(|l| {
-                l.iter()
-                    .any(|l| l.as_str().unwrap().contains("on-the-screen"))
+fn a_pane_started_with_a_program_that_takes_the_screen_is_its_screen_until_the_prompt() {
+    for name in ["nvim", "claude"] {
+        let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+            return;
+        };
+        let file = stand_in(name, 4);
+        let (_sb, d, mut c, pane) = pane_in(&shell, &[&file.to_string_lossy()]);
+        let on_screen = |c: &Client| {
+            c.nodes.get(&pane).is_some_and(|n| {
+                n["screen"]["lines"].as_array().is_some_and(|l| {
+                    l.iter()
+                        .any(|l| l.as_str().unwrap().contains("on-the-screen"))
+                })
             })
-        })
-    };
+        };
+        assert!(
+            c.wait_until(Duration::from_secs(10), on_screen).unwrap(),
+            "{name}: {:?}",
+            c.nodes.get(&pane)
+        );
+        assert!(
+            c.nodes[&pane].get("blocks").is_none(),
+            "{name} runs: the pane is its screen, not a list of blocks"
+        );
+        assert!(
+            c.wait_until(Duration::from_secs(15), |c| c
+                .nodes
+                .get(&pane)
+                .is_some_and(|n| n.get("blocks").is_some()))
+                .unwrap(),
+            "{name} ended and the shell that took over did not bring the blocks: {:?}",
+            c.nodes.get(&pane)
+        );
+        d.stop();
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+}
+
+/// The blocks node of a pane, opened, once it exists.
+fn blocks_of(c: &mut Client, pane: &str) -> String {
     assert!(
-        c.wait_until(Duration::from_secs(10), on_screen).unwrap(),
-        "{:?}",
-        c.nodes.get(&pane)
-    );
-    assert!(
-        c.nodes[&pane].get("blocks").is_none(),
-        "the program runs: the pane is its screen, not an empty list of blocks"
-    );
-    assert!(
-        c.wait_until(Duration::from_secs(15), |c| c
+        c.wait_until(Duration::from_secs(10), |c| c
             .nodes
-            .get(&pane)
+            .get(pane)
             .is_some_and(|n| n.get("blocks").is_some()))
             .unwrap(),
-        "the program ended and the shell that took over did not bring the blocks: {:?}",
-        c.nodes.get(&pane)
+        "the pane has no blocks node: {:?}",
+        c.nodes.get(pane)
     );
-    d.stop();
+    let id = c.nodes[pane]["blocks"].as_str().unwrap().to_owned();
+    c.open(&id).unwrap();
+    assert!(
+        c.wait_until(Duration::from_secs(10), |c| c.nodes.contains_key(&id))
+            .unwrap()
+    );
+    id
+}
+
+/// REQ-1056, REQ-1057 and REQ-1060, in each shell installed: the program is a block of the pane
+/// from the start, running, in mode `blocks`, with its output; it ends with its status and the shell
+/// that takes over runs the next command as a second block (never a copy of the first).
+#[test]
+fn a_program_that_does_not_take_the_screen_is_a_running_block_from_the_start() {
+    for shell in ["zsh", "bash", "fish"].into_iter().filter_map(find) {
+        let (_sb, d, mut c, pane) =
+            pane_in(&shell, &["sh", "-c", "echo on-the-block; sleep 3; exit 3"]);
+        let id = blocks_of(&mut c, &pane);
+        let running = |c: &Client| {
+            c.nodes[&id]["blocks"].as_array().is_some_and(|b| {
+                b.last().is_some_and(|l| {
+                    l["running"] == true && Rig::text(l).iter().any(|t| t == "on-the-block")
+                })
+            })
+        };
+        assert!(
+            c.wait_until(Duration::from_secs(10), running).unwrap(),
+            "{shell}: {}",
+            c.nodes[&id]
+        );
+        assert_eq!(c.nodes[&id]["mode"], "blocks", "{shell}");
+        let first = c.nodes[&id]["blocks"][0].clone();
+        assert!(
+            first["cmd"].as_str().unwrap().contains("on-the-block"),
+            "{shell}: {first}"
+        );
+        assert!(
+            !first["cwd"].as_str().unwrap().is_empty(),
+            "{shell}: its folder"
+        );
+        assert!(
+            c.wait_until(
+                Duration::from_secs(15),
+                |c| c.nodes[&id]["blocks"][0]["running"] == false
+            )
+            .unwrap(),
+            "{shell}: {}",
+            c.nodes[&id]
+        );
+        assert_eq!(c.nodes[&id]["blocks"][0]["code"], 3, "{shell}");
+        assert_eq!(
+            c.nodes[&id]["blocks"].as_array().unwrap().len(),
+            1,
+            "{shell}: the prompt of the shell that took over adds no block"
+        );
+        assert!(
+            c.wait_until(Duration::from_secs(20), |c| c
+                .nodes
+                .get(&pane)
+                .is_some_and(|n| n.get("input").is_some()))
+                .unwrap(),
+            "{shell}: the shell did not take over"
+        );
+        c.cmd(Cmd::Write {
+            pane: pane.clone(),
+            data: "echo after\r".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(
+            c.wait_until(Duration::from_secs(10), |c| c.nodes[&id]["blocks"]
+                .as_array()
+                .is_some_and(|b| b.len() == 2 && b[1]["running"] == false))
+                .unwrap(),
+            "{shell}: {}",
+            c.nodes[&id]
+        );
+        d.stop();
+    }
+}
+
+/// REQ-1057 (d): a program that ends at once, with an error, is one closed block with its status
+/// (its start, its output and its end may come in one read) and the shell takes over with no second block.
+#[test]
+fn a_program_that_ends_at_once_leaves_one_closed_block_with_its_status() {
+    for shell in ["zsh", "bash", "fish"].into_iter().filter_map(find) {
+        let (_sb, d, mut c, pane) = pane_in(&shell, &["sh", "-c", "echo x; exit 3"]);
+        let id = blocks_of(&mut c, &pane);
+        assert!(
+            c.wait_until(
+                Duration::from_secs(10),
+                |c| c.nodes[&id]["blocks"][0]["running"] == false
+            )
+            .unwrap(),
+            "{shell}: {}",
+            c.nodes[&id]
+        );
+        let block = c.nodes[&id]["blocks"][0].clone();
+        assert_eq!(block["code"], 3, "{shell}: {block}");
+        assert_eq!(Rig::text(&block), ["x"], "{shell}");
+        assert!(
+            c.wait_until(Duration::from_secs(20), |c| c
+                .nodes
+                .get(&pane)
+                .is_some_and(|n| n.get("input").is_some()))
+                .unwrap(),
+            "{shell}: the shell did not take over"
+        );
+        assert_eq!(
+            c.nodes[&id]["blocks"].as_array().unwrap().len(),
+            1,
+            "{shell}: one block, and none for the prompt"
+        );
+        d.stop();
+    }
+}
+
+/// REQ-1057: a program that takes the screen, which no mark reports, does not take the pane with it
+/// on `^C` either (the `trap` is for every program): the shell takes over and brings the blocks.
+#[test]
+fn control_c_ends_a_program_that_takes_the_screen_and_the_pane_stays() {
+    for shell in ["zsh", "bash", "fish"].into_iter().filter_map(find) {
+        let file = stand_in("nvim", 60);
+        let (_sb, d, mut c, pane) = pane_in(&shell, &[&file.to_string_lossy()]);
+        assert!(
+            c.wait_until(Duration::from_secs(10), |c| c.nodes.get(&pane).is_some_and(
+                |n| {
+                    n["screen"]["lines"].as_array().is_some_and(|l| {
+                        l.iter()
+                            .any(|l| l.as_str().unwrap().contains("on-the-screen"))
+                    })
+                }
+            ))
+            .unwrap(),
+            "{shell}: {:?}",
+            c.nodes.get(&pane)
+        );
+        c.cmd(Cmd::Write {
+            pane: pane.clone(),
+            data: "\x03".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(
+            c.wait_until(Duration::from_secs(20), |c| c
+                .nodes
+                .get(&pane)
+                .is_some_and(|n| n.get("blocks").is_some()))
+                .unwrap(),
+            "{shell}: the pane did not survive ^C: {:?}",
+            c.nodes.get(&pane)
+        );
+        d.stop();
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+}
+
+/// REQ-1057: `^C` reaches the program, which dies; `D` closes the block with a status that is not
+/// success, and the shell goes on.
+#[test]
+fn control_c_ends_the_block_of_a_program_and_the_shell_takes_over() {
+    for shell in ["zsh", "bash", "fish"].into_iter().filter_map(find) {
+        let (_sb, d, mut c, pane) = pane_in(&shell, &["sh", "-c", "echo up; sleep 60"]);
+        let id = blocks_of(&mut c, &pane);
+        assert!(
+            c.wait_until(Duration::from_secs(10), |c| c.nodes[&id]["blocks"]
+                .as_array()
+                .is_some_and(|b| b.last().is_some_and(
+                    |l| l["running"] == true && Rig::text(l).iter().any(|t| t == "up")
+                )))
+            .unwrap(),
+            "{shell}: {}",
+            c.nodes[&id]
+        );
+        c.cmd(Cmd::Write {
+            pane: pane.clone(),
+            data: "\x03".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(
+            c.wait_until(
+                Duration::from_secs(10),
+                |c| c.nodes[&id]["blocks"][0]["running"] == false
+            )
+            .unwrap(),
+            "{shell}: {}",
+            c.nodes[&id]
+        );
+        let code = c.nodes[&id]["blocks"][0]["code"].clone();
+        assert_eq!(
+            code, 130,
+            "{shell}: ^C is the status of a program killed by SIGINT"
+        );
+        assert!(
+            c.wait_until(Duration::from_secs(20), |c| c
+                .nodes
+                .get(&pane)
+                .is_some_and(|n| n.get("input").is_some()))
+                .unwrap(),
+            "{shell}: the shell did not take over"
+        );
+        d.stop();
+    }
 }
 
 /// REQ-250 and REQ-251: the mode follows the command the shell reports, not the 0.7 s look at

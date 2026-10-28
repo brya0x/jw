@@ -86,7 +86,7 @@ fn spawn(
     program: Option<Vec<String>>,
     then: Option<Vec<String>>,
 ) -> Result<Id, ErrorBody> {
-    let reply = panes::new_pane_then(shared, workspace, program, then, None, None)?;
+    let reply = panes::new_pane_then(shared, workspace, program, then, false, None, None)?;
     reply
         .as_ref()
         .and_then(|r| r["pane"].as_str())
