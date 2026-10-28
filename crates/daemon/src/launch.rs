@@ -77,9 +77,19 @@ pub fn script(
             .collect::<Vec<_>>()
             .join(" ")
     };
+    // fish has no `trap` that keeps a program's `^C` from ending the script: with job control (below) the
+    // program no longer shares the terminal's group with fish, and under an `sh` that traps `INT` it
+    // ends with its status instead of dying of the signal, which fish would take as its own `^C`.
+    let program = if is_fish(shell) {
+        let posix: Vec<String> = argv.iter().map(|w| quote("/bin/sh", w)).collect();
+        let inner = format!("trap : INT; {}; exit $?", posix.join(" "));
+        format!("'/bin/sh' '-c' {}", quote(shell, &inner))
+    } else {
+        line(argv)
+    };
     let words = match then {
-        Some(then) => format!("{} && {}", line(argv), line(then)),
-        None => line(argv),
+        Some(then) => format!("{program} && {}", line(then)),
+        None => program,
     };
     // The shell that takes over keeps the integration: its environment and its arguments.
     let env: Vec<String> = setup
@@ -107,10 +117,10 @@ pub fn script(
         None => Default::default(),
     };
     // `^C` reaches the shell as well as the program (an interactive `-c` has no job control in zsh) and
-    // would end the script and the pane: a trap, unlike an ignore, is not inherited by the program. fish's
-    // own trap is a handler of the signal, which keeps it from cancelling the script.
+    // would end the script and the pane: a trap, unlike an ignore, is not inherited by the program. fish
+    // gets job control instead of a trap (REQ-1057).
     let trap = if is_fish(shell) {
-        "function __jw_int --on-signal INT; end; "
+        "status job-control full; "
     } else {
         "trap : INT; "
     };
@@ -369,7 +379,7 @@ mod tests {
         assert_eq!(
             fish,
             format!(
-                "function __jw_int --on-signal INT; end; {b} (printf %s 'pnpm it\\'s a b' | base64 | tr -d '\\n') (printf %s \"$PWD\" | base64 | tr -d '\\n'); 'pnpm' 'it\\'s a b'; printf '\\e]133;D;%d\\a' $status; {}",
+                "status job-control full; {b} (printf %s 'pnpm it\\'s a b' | base64 | tr -d '\\n') (printf %s \"$PWD\" | base64 | tr -d '\\n'); '/bin/sh' '-c' 'trap : INT; \\'pnpm\\' \\'it\\'\\\\\\'\\'s a b\\'; exit $?'; printf '\\e]133;D;%d\\a' $status; {}",
                 tail("/bin/fish")
             )
         );
