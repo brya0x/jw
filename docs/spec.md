@@ -2303,8 +2303,8 @@ REQ-991 to REQ-998 by N183: `crates/contract` conformance (the schema accepts `c
 ## Parts
 | Part | What | REQs | Main files |
 |---|---|---|---|
-| N187a | the `-c` script reports the program as a command (`C`, `D`, `E`, the folder), the gate of what takes the screen, `marked` from `new_pane` only, `trap : INT` for zsh and bash (the pane died on `^C` in zsh), the tests, `jw read --blocks` measured; version 0.0.56 | 844, 845, 1056–1060 | `crates/daemon/src/{launch,pty,panes,start,integration,blocks}.rs`, `crates/daemon/tests/blocks.rs` |
-| N187 | spec: a pane started with a program is a block from the start (no new drawing) | 844, 1056–1060 | `docs/spec.md` |
+| N187a ✓ `0b7b8444` | the `-c` script reports the program as a command (`C`, `D`, `E`, the folder), the gate of what takes the screen, `marked` from `new_pane` only, `trap : INT` for zsh and bash (the pane died on `^C` in zsh), the tests, `jw read --blocks` measured; version 0.0.56 | 844, 845, 1056–1060 | `crates/daemon/src/{launch,pty,panes,start,integration,blocks}.rs`, `crates/daemon/tests/blocks.rs` |
+| N187 ✓ `c6eacabc` | spec: a pane started with a program is a block from the start (no new drawing) | 844, 1056–1060 | `docs/spec.md` |
 | N186b ✓ `7b1471af` | the screen: the row and the line above the keys at work, the Spanish results, the finals (`other tool`, cancel, late answer, apply with nothing held), the thread's events and the late result kept, the row of `docs/test-path.md`, the tests | 1046–1055 | `crates/jw/src/tui/skillset.rs`, `docs/test-path.md` |
 | N186a ✓ `3fed979d` | the library's `Event` and the callback of `on` and `apply`; the CLI unchanged; version 0.0.55 | 1048 | `crates/jw/src/agent/skillset.rs` |
 | N186 ✓ `be52340e` | spec: the feedback of the skillset screen, from the approved prototype (no new drawing: its log and its toast are OPEN-102 and OPEN-103) | 1046–1055 | `docs/spec.md` |
