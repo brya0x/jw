@@ -114,6 +114,12 @@ fn signal(name: &str, pids: impl IntoIterator<Item = u32>) {
         .status();
 }
 
+/// `SIGHUP` too, because an interactive shell ignores `SIGTERM` and would always cost the wait.
+fn ask_to_end(pids: Vec<u32>) {
+    signal("TERM", pids.iter().copied());
+    signal("HUP", pids);
+}
+
 /// What was ended: how many processes were reached and how many of them needed `SIGKILL`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Ended {
@@ -126,15 +132,12 @@ pub struct Ended {
 /// which processes.
 pub fn end(roots: &[u32]) -> Result<Ended, String> {
     let me = std::process::id();
-    let own_group = |procs: &[Proc]| {
-        procs
-            .iter()
-            .find(|p| p.pid == me)
-            .map(|p| (me, p.pgid))
-            .ok_or_else(|| "no se pudo leer los procesos: falta el del daemon".to_owned())
-    };
     let procs = snapshot()?;
-    let own = own_group(&procs)?;
+    let own = procs
+        .iter()
+        .find(|p| p.pid == me)
+        .map(|p| (me, p.pgid))
+        .ok_or("no se pudo leer los procesos: falta el del daemon")?;
     let mut known = targets(&procs, roots, own);
     if known.is_empty() {
         return Ok(Ended {
@@ -142,8 +145,7 @@ pub fn end(roots: &[u32]) -> Result<Ended, String> {
             killed: 0,
         });
     }
-    signal("TERM", known.iter().map(|(p, _)| *p));
-    signal("HUP", known.iter().map(|(p, _)| *p));
+    ask_to_end(known.iter().map(|(p, _)| *p).collect());
     // A number is alive only with the group it had: a reused one is not the process it was.
     let alive = |known: &BTreeSet<(u32, u32)>, procs: &[Proc]| -> Vec<u32> {
         let now: HashSet<(u32, u32)> = procs
@@ -170,8 +172,7 @@ pub fn end(roots: &[u32]) -> Result<Ended, String> {
             .map(|t| t.0)
             .collect();
         if !fresh.is_empty() {
-            signal("TERM", fresh.iter().copied());
-            signal("HUP", fresh);
+            ask_to_end(fresh);
         }
         let left = alive(&known, &procs);
         if left.is_empty() {

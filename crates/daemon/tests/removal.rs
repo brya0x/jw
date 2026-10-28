@@ -302,7 +302,10 @@ fn an_orphan_outside_the_worktrees_folder_loses_its_entry_and_keeps_its_folder()
     assert_eq!(job["state"], "failed", "{job}");
     let why = job["detail"].as_str().unwrap();
     assert!(why.contains("sigue en disco"), "{why}");
-    assert!(why.contains("la entrada de jw se quitó"), "{why}");
+    assert!(
+        why.contains(&format!("la entrada de {} se quitó", identity::get().name)),
+        "{why}"
+    );
     assert!(w.dir.exists(), "nothing was deleted");
     w.entry_goes(&mut c);
     d.stop();

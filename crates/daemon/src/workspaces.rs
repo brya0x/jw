@@ -357,7 +357,8 @@ fn remove_steps(
         Err(why) => {
             shared.lock().drop_workspace(workspace);
             Err(format!(
-                "la carpeta {path} sigue en disco ({why}); la entrada de jw se quitó (hecho: {})",
+                "la carpeta {path} sigue en disco ({why}); la entrada de {} se quitó (hecho: {})",
+                identity::get().name,
                 done.join(", ")
             ))
         }
