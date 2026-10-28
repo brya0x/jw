@@ -293,6 +293,11 @@ fn remove_steps(
     force: bool,
 ) -> Result<(), String> {
     let (top, dir) = (Path::new(project), Path::new(path));
+    // a list a look did not move yet is an untracked file in the worktree, and git would refuse (REQ-1063)
+    let state = shared.lock().state_dir.clone();
+    if let Some(state) = state {
+        let _ = crate::tasks::locate(&state, dir);
+    }
     let mut done: Vec<String> = Vec::new();
     let said = |done: &[String], why: String, left: &str| {
         let did = if done.is_empty() {

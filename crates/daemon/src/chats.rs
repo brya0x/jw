@@ -226,6 +226,7 @@ fn remove(shared: &Shared, id: &str) -> Result<(), ErrorBody> {
         std::fs::remove_dir_all(&dir)
             .map_err(|e| err(ErrorCode::Io, format!("{}: {e}", dir.display())))?;
     }
+    crate::tasks::forget(&state_dir(shared)?, &dir);
     forget(shared, id);
     Ok(())
 }

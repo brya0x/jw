@@ -32,6 +32,8 @@ pub struct Cached {
     pub list: tasks::List,
     pub auto: Option<String>,
     looked: Instant,
+    /// The file the list was read from (REQ-1061), as the node says it.
+    path: PathBuf,
 }
 
 /// A `tasks` node a client asked for.
@@ -43,6 +45,7 @@ pub struct NodeEntry {
 /// A list to look at again, off the lock.
 pub struct Job {
     pub workspace: Id,
+    pub state: Option<PathBuf>,
     pub dir: PathBuf,
     known: Option<tasks::Sig>,
 }
@@ -58,15 +61,14 @@ pub enum Look {
 
 /// Looks at the list of the folder `dir`: its size and time first, and the file only when they
 /// are not what `known` says.
-pub fn look(dir: &Path, known: Option<tasks::Sig>) -> Look {
-    let path = identity::tasks_path(dir);
-    let Some(sig) = tasks::signature(&path) else {
+pub fn look(path: &Path, known: Option<tasks::Sig>) -> Look {
+    let Some(sig) = tasks::signature(path) else {
         return Look::Gone;
     };
     if known == Some(sig) {
         return Look::Same;
     }
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return Look::Gone;
     };
     let whole = tasks::complete(&text);
@@ -80,7 +82,23 @@ pub fn look(dir: &Path, known: Option<tasks::Sig>) -> Look {
         list,
         auto,
         looked: Instant::now(),
+        path: path.to_path_buf(),
     })
+}
+
+/// The file of the list of the folder `dir`, the one N180 kept in the folder moved (REQ-1063); a failure is
+/// said once for the process and is no file.
+pub fn list_path(state: &Path, dir: &Path) -> Option<PathBuf> {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    match tasks::locate(state, dir) {
+        Ok(path) => Some(path),
+        Err(why) => {
+            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("{why}");
+            }
+            None
+        }
+    }
 }
 
 fn phase(t: &tasks::Task) -> TaskPhase {
@@ -274,7 +292,6 @@ impl Core {
     /// The `tasks` node document of an entry, built from what was last read (no I/O).
     pub(crate) fn tasks_node(&self, id: &Id, e: &NodeEntry, head: Head) -> Option<Tasks> {
         let c = self.task_lists.get(&e.workspace)?;
-        let dir = self.workspace_dir(&e.workspace)?;
         let lp = self.loops.get(&e.workspace);
         // the agent waits for the person while it has a permission, a question or a plan raised
         let waiting = lp.is_some_and(|l| {
@@ -291,7 +308,7 @@ impl Core {
                 ..head
             },
             &e.workspace,
-            &identity::tasks_path(&dir),
+            &c.path,
             c,
             lp,
             waiting,
@@ -481,6 +498,7 @@ impl Core {
             .filter_map(|workspace| {
                 let known = self.task_lists.get(&workspace).map(|c| c.sig);
                 Some(Job {
+                    state: self.state_dir.clone(),
                     dir: self.workspace_dir(&workspace)?,
                     workspace,
                     known,
@@ -494,37 +512,45 @@ impl Core {
 pub fn poll(shared: &Shared) {
     let jobs = shared.lock().task_jobs();
     for job in jobs {
-        let found = look(&job.dir, job.known);
+        let found = match job.state.and_then(|s| list_path(&s, &job.dir)) {
+            Some(path) => look(&path, job.known),
+            None => Look::Gone,
+        };
         shared.lock().tasks_seen(&job.workspace, found);
     }
 }
 
-fn dir_of(shared: &Shared, workspace: &Id) -> Result<PathBuf, ErrorBody> {
-    shared
-        .lock()
-        .workspace_dir(workspace)
-        .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))
+/// The file of the workspace's list (REQ-1061), moved from the folder if it was there (REQ-1063).
+fn list_of(shared: &Shared, workspace: &Id) -> Result<PathBuf, ErrorBody> {
+    let (state, dir) = {
+        let core = shared.lock();
+        let dir = core
+            .workspace_dir(workspace)
+            .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
+        (core.state_dir.clone(), dir)
+    };
+    let state = state.ok_or_else(|| err(ErrorCode::Io, "the daemon has no state directory"))?;
+    tasks::locate(&state, &dir).map_err(|why| err(ErrorCode::Io, why))
 }
 
 /// `open_tasks`: the node of the workspace's list, made if it is not there (REQ-907).
 pub fn open_tasks(shared: &Shared, workspace: &Id) -> Done {
-    let dir = dir_of(shared, workspace)?;
-    let found = look(&dir, None);
+    let path = list_of(shared, workspace)?;
+    let found = look(&path, None);
     let mut core = shared.lock();
     core.tasks_seen(workspace, found);
     match core.find_or_add_tasks(workspace) {
         Some(node) => Ok(Some(json!({ "node": node }))),
         None => Err(err(
             ErrorCode::NotFound,
-            format!("no task list in {}", identity::tasks_path(&dir).display()),
+            format!("no task list in {}", path.display()),
         )),
     }
 }
 
 /// `tasks_edit`: the same change `jw tasks` makes (REQ-912, REQ-913), and the clients are told at once.
 pub fn edit(shared: &Shared, workspace: &Id, op: TaskOp, id: &str, text: Option<&str>) -> Done {
-    let dir = dir_of(shared, workspace)?;
-    let path = identity::tasks_path(&dir);
+    let path = list_of(shared, workspace)?;
     let change = match op {
         TaskOp::Done => Edit::Done,
         TaskOp::Reopen => Edit::Reopen,
@@ -532,7 +558,7 @@ pub fn edit(shared: &Shared, workspace: &Id, op: TaskOp, id: &str, text: Option<
         TaskOp::Note => Edit::Note(text.unwrap_or("")),
     };
     let done = tasks::apply(&path, id, change);
-    let found = look(&dir, None);
+    let found = look(&path, None);
     shared.lock().tasks_seen(workspace, found);
     match done {
         Ok(()) => Ok(None),
@@ -613,8 +639,7 @@ pub fn loop_on(shared: &Shared, workspace: &Id, max: Option<u32>, pane: Option<&
     if !(1..=99).contains(&max) {
         return Err(err(ErrorCode::BadRequest, "the laps are 1 to 99"));
     }
-    let dir = dir_of(shared, workspace)?;
-    let path = identity::tasks_path(&dir);
+    let path = list_of(shared, workspace)?;
     let no_list = || {
         err(
             ErrorCode::NotFound,
@@ -633,7 +658,7 @@ pub fn loop_on(shared: &Shared, workspace: &Id, max: Option<u32>, pane: Option<&
     if !list.is_list() {
         return Err(no_list());
     }
-    let found = look(&dir, None);
+    let found = look(&path, None);
     let agent = agent_pane(&shared.lock(), workspace, pane)?;
     let id = match decide(&list, 0, max, None, 0) {
         Decision::Hand(id) => id,
@@ -695,7 +720,7 @@ pub fn loop_off(shared: &Shared, workspace: &Id) -> Done {
 /// The end of an agent's turn, for the pane of a loop that is on (REQ-919 to REQ-926): `None` when
 /// there is no such loop, and the ordinary attention follows. The file is read with the lock released.
 pub fn on_stop(shared: &Shared, pane: &Id) -> Option<Done> {
-    let (workspace, dir) = {
+    let (workspace, dir, state) = {
         let core = shared.lock();
         let w = core
             .model
@@ -703,9 +728,9 @@ pub fn on_stop(shared: &Shared, pane: &Id) -> Option<Done> {
             .iter()
             .find(|w| w.panes.iter().any(|p| p.id == *pane))?;
         core.loops.get(&w.id).filter(|l| l.on && l.pane == *pane)?;
-        (w.id.clone(), PathBuf::from(&w.path))
+        (w.id.clone(), PathBuf::from(&w.path), core.state_dir.clone())
     };
-    let path = identity::tasks_path(&dir);
+    let path = state.and_then(|s| list_path(&s, &dir)).unwrap_or_default();
     let list = std::fs::read_to_string(&path)
         .map(|t| tasks::parse(&t))
         .unwrap_or_default();

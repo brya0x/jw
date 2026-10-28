@@ -19,7 +19,7 @@ fn folder(sb: &Sandbox, name: &str, list: Option<&str>) -> PathBuf {
     let dir = std::fs::canonicalize(&sb.dir).unwrap().join(name);
     std::fs::create_dir_all(&dir).unwrap();
     if let Some(text) = list {
-        let path = identity::tasks_path(&dir);
+        let path = identity::tasks_path(&sb.config().state_dir, &dir);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
@@ -169,11 +169,13 @@ fn a_list_is_in_the_row_with_its_final_task_counted_and_in_the_node() {
     );
     assert_eq!(
         c.nodes[&node]["path"].as_str().unwrap(),
-        identity::tasks_path(&dir).to_str().unwrap()
+        identity::tasks_path(&sb.config().state_dir, &dir)
+            .to_str()
+            .unwrap()
     );
     // looking at a list never writes the final task into the file
     assert_eq!(
-        std::fs::read_to_string(identity::tasks_path(&dir)).unwrap(),
+        std::fs::read_to_string(identity::tasks_path(&sb.config().state_dir, &dir)).unwrap(),
         LIST
     );
 }
@@ -203,7 +205,7 @@ fn a_change_of_the_file_by_hand_reaches_the_open_node_and_the_row() {
     let dir = folder(&sb, "app", Some(LIST));
     let ws = open_folder(&mut c, &dir);
     let node = node_of(&mut c, &ws);
-    let path = identity::tasks_path(&dir);
+    let path = identity::tasks_path(&sb.config().state_dir, &dir);
     std::fs::write(
         &path,
         LIST.replace("- [ ] t2", "- [x] t2")
@@ -235,7 +237,7 @@ fn tasks_edit_changes_the_file_and_the_node_at_once() {
     let dir = folder(&sb, "app", Some(LIST));
     let ws = open_folder(&mut c, &dir);
     let node = node_of(&mut c, &ws);
-    let path = identity::tasks_path(&dir);
+    let path = identity::tasks_path(&sb.config().state_dir, &dir);
     edit(&mut c, &ws, TaskOp::Done, "t2", None).unwrap();
     assert!(
         std::fs::read_to_string(&path)
@@ -289,7 +291,8 @@ fn tasks_edit_answers_with_the_codes_the_spec_gives() {
         Some("- [ ] a one\n- [ ] a two\n- [ ] b three\n"),
     );
     let ws = open_folder(&mut c, &dir);
-    let before = std::fs::read_to_string(identity::tasks_path(&dir)).unwrap();
+    let before =
+        std::fs::read_to_string(identity::tasks_path(&sb.config().state_dir, &dir)).unwrap();
     assert_eq!(
         edit(&mut c, &ws, TaskOp::Done, "zz", None),
         Err(ErrorCode::NotFound)
@@ -315,7 +318,7 @@ fn tasks_edit_answers_with_the_codes_the_spec_gives() {
         Err(ErrorCode::NotFound)
     );
     assert_eq!(
-        std::fs::read_to_string(identity::tasks_path(&dir)).unwrap(),
+        std::fs::read_to_string(identity::tasks_path(&sb.config().state_dir, &dir)).unwrap(),
         before
     );
 }
@@ -342,7 +345,7 @@ fn a_list_an_agent_writes_later_shows_when_its_pane_moves() {
         .unwrap()
         .to_owned();
     assert!(summary(&mut c, &ws).get("tasks").is_none());
-    let path = identity::tasks_path(&dir);
+    let path = identity::tasks_path(&sb.config().state_dir, &dir);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, LIST).unwrap();
     c.cmd(Cmd::AgentEvent {
@@ -473,7 +476,7 @@ fn a_loop_hands_out_a_task_at_each_stop_until_the_last_is_done() {
     );
     // the final task was written to the file
     assert!(
-        std::fs::read_to_string(identity::tasks_path(&r.dir))
+        std::fs::read_to_string(identity::tasks_path(&r.sb.config().state_dir, &r.dir))
             .unwrap()
             .contains("- [ ] fin tests:")
     );
@@ -665,7 +668,7 @@ fn turning_the_loop_on_says_why_it_cannot() {
     assert_eq!(loop_on(&mut r.c, &ws, None, None), Err(ErrorCode::Conflict));
     // nothing ready, a task blocked, everything done
     std::fs::write(
-        identity::tasks_path(&r.dir),
+        identity::tasks_path(&r.sb.config().state_dir, &r.dir),
         "- [ ] a x (after: b)\n- [ ] b y (after: a)\n",
     )
     .unwrap();
@@ -673,13 +676,17 @@ fn turning_the_loop_on_says_why_it_cannot() {
         loop_on(&mut r.c, &ws, None, Some(&pane)),
         Err(ErrorCode::Conflict)
     );
-    std::fs::write(identity::tasks_path(&r.dir), "- [!] a x (blocked: why)\n").unwrap();
+    std::fs::write(
+        identity::tasks_path(&r.sb.config().state_dir, &r.dir),
+        "- [!] a x (blocked: why)\n",
+    )
+    .unwrap();
     assert_eq!(
         loop_on(&mut r.c, &ws, None, Some(&pane)),
         Err(ErrorCode::Conflict)
     );
     std::fs::write(
-        identity::tasks_path(&r.dir),
+        identity::tasks_path(&r.sb.config().state_dir, &r.dir),
         "- [x] a x\n- [x] fin all (after: *)\n",
     )
     .unwrap();
@@ -698,4 +705,33 @@ fn turning_the_loop_on_says_why_it_cannot() {
     let a = node_of(&mut r.c, &ws);
     let b = node_of(&mut r.c, &ws);
     assert_eq!(a, b);
+}
+
+/// REQ-1061: the list is a file of the state directory, outside the folder, and the viewer reads that file of
+/// its own workspace (the `e` of the tasks view) and no other file outside the folder.
+#[test]
+fn the_list_is_outside_the_folder_and_the_viewer_reads_it() {
+    let sb = Sandbox::new();
+    let _d = sb.start();
+    let mut c = sb.client();
+    open_session(&mut c);
+    let dir = folder(&sb, "app", Some(LIST));
+    let ws = open_folder(&mut c, &dir);
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        0,
+        "nothing in the folder"
+    );
+    let file = identity::tasks_path(&sb.config().state_dir, &dir);
+    let read = |c: &mut Client, path: &Path| {
+        c.cmd(Cmd::ReadMarkdown {
+            workspace: ws.clone(),
+            path: path.to_string_lossy().into(),
+        })
+        .unwrap()
+    };
+    assert!(read(&mut c, &file).is_ok(), "the list of the workspace");
+    let other = sb.dir.join("state/tasks/other.md");
+    std::fs::write(&other, "# not the list of this workspace\n").unwrap();
+    assert!(read(&mut c, &other).is_err(), "a file outside the folder");
 }

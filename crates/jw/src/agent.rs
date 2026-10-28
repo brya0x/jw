@@ -1293,16 +1293,12 @@ fn skill_text() -> String {
         .replace("{pane_env}", &identity::env_var("PANE_ID"))
 }
 
-/// The skill of the task lists (N180e, REQ-933): the binary's name, the pane variable and the list's
-/// file as the product's identity says them.
+/// The skill of the task lists (N180e, REQ-933): the binary's name and the pane variable. The list's file is
+/// asked of `tasks path` (REQ-1062), since it is one for each workspace.
 fn tasks_skill_text() -> String {
     TASKS_SKILL
         .replace("{bin}", bin())
         .replace("{pane_env}", &identity::env_var("PANE_ID"))
-        .replace(
-            "{tasks_file}",
-            &identity::tasks_path(Path::new("")).to_string_lossy(),
-        )
 }
 
 /// The name of the skill of the roles: the identity's `agent_skill` (REQ-1005).
@@ -1709,23 +1705,16 @@ mod tests {
     fn the_tasks_skill_says_the_steps_with_the_words_of_the_commands() {
         let text = tasks_skill_text();
         let b = bin();
-        assert!(
-            !text.contains('{')
-                || !text.contains("{bin}")
-                    && !text.contains("{pane_env}")
-                    && !text.contains("{tasks_file}")
-        );
+        assert!(!text.contains('{') || !text.contains("{bin}") && !text.contains("{pane_env}"));
         assert!(
             text.starts_with(&format!("---\nname: {b}-tasks\n")),
             "{text}"
         );
         assert!(text.contains(&identity::env_var("PANE_ID")));
-        // the file is named by the identity and not spelled in the skill
-        let file = identity::tasks_path(Path::new(""))
-            .to_string_lossy()
-            .into_owned();
+        // the file is asked of the command (REQ-1062) and not spelled in the skill
         assert!(
-            text.contains(&format!("`{file}`")) && !TASKS_SKILL.contains(&file),
+            text.contains(&format!("`{b} tasks path`"))
+                && !text.contains(&*identity::legacy_tasks_path(Path::new("")).to_string_lossy()),
             "{text}"
         );
         for word in [

@@ -745,6 +745,9 @@ impl Core {
     /// The entry of the workspace goes off the session, with what hangs from it; the caller
     /// publishes.
     pub fn drop_workspace(&mut self, workspace: &str) {
+        if let (Some(state), Some(dir)) = (&self.state_dir, self.workspace_dir(workspace)) {
+            crate::tasks::forget(state, &dir);
+        }
         self.model.workspaces.retain(|w| w.id != workspace);
         self.forget_artifacts(workspace);
     }
@@ -1778,10 +1781,10 @@ mod tests {
         assert!(core.task_jobs().is_empty(), "and only once");
         // a workspace that has a list is looked at again only when it is due or asked for
         let dir = std::env::temp_dir().join(format!("jw-core-tasks-{}", std::process::id()));
-        let path = identity::tasks_path(&dir);
+        let path = identity::tasks_path(&dir, &dir);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "- [ ] a x\n").unwrap();
-        let found = crate::tasklists::look(&dir, None);
+        let found = crate::tasklists::look(&path, None);
         assert!(matches!(found, crate::tasklists::Look::New(_)));
         core.tasks_seen(&ws, found);
         assert_eq!(

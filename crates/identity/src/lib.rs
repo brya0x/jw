@@ -66,9 +66,59 @@ pub fn chats_dir(state: &Path) -> PathBuf {
     state.join("chats")
 }
 
-/// A workspace's task list: `<folder>/.<name>/tasks.md` (N180, REQ-892). The directory is the product's
-/// name with a dot, so nothing else spells it.
-pub fn tasks_path(folder: &Path) -> PathBuf {
+/// Where the task lists are: `<state>/tasks` (N188, REQ-1061).
+pub fn tasks_dir(state: &Path) -> PathBuf {
+    state.join("tasks")
+}
+
+/// A workspace's task list: `<state>/tasks/<name>-<hash>.md` (N188, REQ-1061, REQ-892). The hash is the
+/// FNV-1a of the folder's canonical path, written here because `DefaultHasher` is not promised to be the
+/// same between releases; a folder that is not there is canonical from its nearest ancestor that is, so
+/// it has the name it had. The name is the folder's last name with only letters, digits, `-` and `_`.
+pub fn tasks_path(state: &Path, folder: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut base = folder;
+    let canonical = loop {
+        match std::fs::canonicalize(base) {
+            Ok(c) => break c,
+            Err(_) => match (base.parent(), base.file_name()) {
+                (Some(parent), Some(last)) => {
+                    rest.push(last);
+                    base = parent;
+                }
+                _ => break base.to_path_buf(),
+            },
+        }
+    };
+    let canonical = rest.iter().rev().fold(canonical, |p, last| p.join(last));
+    let hash = canonical
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325_u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
+        });
+    let name: String = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(40)
+        .collect();
+    let name = if name.is_empty() { "workspace" } else { &name };
+    tasks_dir(state).join(format!("{name}-{hash:016x}.md"))
+}
+
+/// Where N180 kept the task list, `<folder>/.<name>/tasks.md`: the place a list is moved from (N188, REQ-1063).
+/// The directory is the product's name with a dot, so nothing else spells it.
+pub fn legacy_tasks_path(folder: &Path) -> PathBuf {
     folder.join(format!(".{}", get().name)).join("tasks.md")
 }
 
@@ -129,9 +179,95 @@ mod tests {
     }
 
     #[test]
-    fn the_task_list_is_in_the_products_dot_directory() {
-        let path = tasks_path(Path::new("/w"));
+    fn the_task_list_was_in_the_products_dot_directory() {
+        let path = legacy_tasks_path(Path::new("/w"));
         assert_eq!(path, PathBuf::from(format!("/w/.{}/tasks.md", get().name)));
+    }
+
+    /// REQ-1061: a name that never changes between releases, and one file for one folder.
+    #[test]
+    fn the_task_list_of_a_folder_is_one_file_that_never_changes_its_name() {
+        let state = Path::new("/s");
+        // the FNV-1a of `/no/such/dir/app`, pinned: a change of the hash would lose every list
+        assert_eq!(
+            tasks_path(state, Path::new("/no/such/dir/app")),
+            PathBuf::from("/s/tasks/app-abceb34ba314045d.md")
+        );
+        // a relative path that is nowhere keeps all of its names, once
+        assert_eq!(
+            tasks_path(state, Path::new("rel-gone-xyz/x")),
+            PathBuf::from("/s/tasks/x-4ddb06c915fbc265.md")
+        );
+        let a = tasks_path(state, Path::new("/one/app"));
+        let b = tasks_path(state, Path::new("/two/app"));
+        assert_ne!(a, b, "two folders with one name are two files");
+        assert!(a.starts_with(tasks_dir(state)));
+    }
+
+    /// REQ-1061: the name has no strange characters, and a folder with none, or a path with spaces, has a file.
+    #[test]
+    fn the_name_in_the_file_has_only_safe_characters() {
+        let state = Path::new("/s");
+        let name = |p: &str| {
+            tasks_path(state, Path::new(p))
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert!(
+            name("/no/my app (1)/.hidden é").starts_with("_hidden__-"),
+            "{}",
+            name("/no/my app (1)/.hidden é")
+        );
+        assert!(name("/").starts_with("workspace-"));
+        let long = name(&format!("/no/{}", "a".repeat(100)));
+        assert_eq!(long.len(), 40 + 1 + 16 + 3, "{long}");
+        for n in [name("/no/my app (1)/x y"), long] {
+            assert!(
+                n.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
+                "{n}"
+            );
+        }
+    }
+
+    /// REQ-1061: a link and the folder it points at are one list; a folder that is not there keeps its name.
+    #[test]
+    fn a_link_to_a_folder_and_a_folder_that_is_gone_have_the_file_they_had() {
+        let root = std::env::temp_dir().join(format!("jw-ident-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        let state = Path::new("/s");
+        let by_real = tasks_path(state, &real);
+        assert_eq!(
+            by_real.file_name(),
+            tasks_path(state, &real.join("../real")).file_name()
+        );
+        assert_ne!(
+            tasks_path(state, &root.join("link"))
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .split('-')
+                .next(),
+            Some("link"),
+            "the name is the real folder's"
+        );
+        assert_eq!(tasks_path(state, &root.join("link")), by_real);
+        let sub = real.join("deep/er");
+        let before = tasks_path(state, &sub);
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(
+            tasks_path(state, &sub),
+            before,
+            "the folder came to be: the same file"
+        );
+        std::fs::remove_dir_all(&sub).unwrap();
+        assert_eq!(tasks_path(state, &sub), before, "and went: the same file");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

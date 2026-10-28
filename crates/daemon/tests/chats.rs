@@ -508,6 +508,10 @@ fn deleting_removes_the_folder_and_the_chat_and_only_inside_the_chats() {
     );
     let dir = r.chats_dir().join(&id);
     std::fs::write(dir.join("notes.txt"), "x").unwrap();
+    // the chat's task list is a file of the state directory, and goes with the chat (REQ-1064)
+    let list = identity::tasks_path(&r.config.state_dir, &dir);
+    std::fs::create_dir_all(list.parent().unwrap()).unwrap();
+    std::fs::write(&list, "- [ ] a x\n").unwrap();
     r.ok(Cmd::DeleteChat {
         workspace: id.clone(),
     });
@@ -517,6 +521,7 @@ fn deleting_removes_the_folder_and_the_chat_and_only_inside_the_chats() {
         assert!(Instant::now() < end, "the chat is still listed");
     }
     assert!(!exists(&dir));
+    assert!(!exists(&list), "its task list went with it");
 
     // a record whose folder points outside the chats removes nothing
     let other = r.new_chat();

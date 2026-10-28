@@ -10300,11 +10300,8 @@ mod tests {
         match v.press_key(plain(KeyCode::Char('e'))) {
             After::ReadMarkdown { workspace, path } => {
                 assert_eq!(workspace, ws);
-                assert_eq!(
-                    Path::new(&path).file_name(),
-                    identity::tasks_path(Path::new("")).file_name(),
-                    "{path}"
-                );
+                // the file the node says, which is in the state directory and not in the project (REQ-1061)
+                assert!(path.ends_with(".md") && path.contains("/tasks/"), "{path}");
             }
             other => panic!("{other:?}"),
         }
