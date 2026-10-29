@@ -1,5 +1,6 @@
-//! The product identity, read from `identity.toml` at the root. Nothing else in the
-//! workspace spells a product name, env prefix, directory or socket by hand.
+//! The product identity, read from `identity.toml` at the root (or, for a test install, from the
+//! file `IDENTITY_FILE` names when building: `build.rs`). Nothing else in the workspace spells a
+//! product name, env prefix, directory or socket by hand.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -16,9 +17,12 @@ pub struct Identity {
     pub pairing_store: String,
     pub repo: String,
     pub agent_skill: String,
+    /// A test install (N190): `update` and `android install` refuse. Absent means `false`.
+    #[serde(default)]
+    pub test: bool,
 }
 
-const SOURCE: &str = include_str!("../../../identity.toml");
+const SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/identity.toml"));
 
 pub fn get() -> &'static Identity {
     static ID: OnceLock<Identity> = OnceLock::new();
@@ -164,6 +168,41 @@ mod tests {
         }
         assert!(config_dir().ends_with(&get().name));
         assert_eq!(chats_dir(Path::new("/s")), PathBuf::from("/s/chats"));
+    }
+
+    #[test]
+    fn the_test_identity_is_the_products_plus_test() {
+        let product: toml::Table = include_str!("../../../identity.toml").parse().unwrap();
+        let test: toml::Table = include_str!("../../../identity.test.toml").parse().unwrap();
+        let mut keys: Vec<_> = product
+            .keys()
+            .cloned()
+            .chain(["test".to_string()])
+            .collect();
+        keys.sort();
+        let mut test_keys: Vec<_> = test.keys().cloned().collect();
+        test_keys.sort();
+        assert_eq!(test_keys, keys);
+        for k in [
+            "name",
+            "env_prefix",
+            "agent_skill",
+            "android_application_id",
+        ] {
+            assert_ne!(product[k], test[k], "{k} is the product's");
+        }
+        for k in ["repo", "tunnel_program", "pairing_store"] {
+            assert_eq!(product[k], test[k], "{k}");
+        }
+        assert_eq!(test["test"], toml::Value::Boolean(true));
+        assert!(!product.contains_key("test"));
+    }
+
+    #[test]
+    fn the_test_identity_parses_and_the_product_is_not_a_test_install() {
+        let test: Identity = toml::from_str(include_str!("../../../identity.test.toml")).unwrap();
+        assert!(test.test && test.name == "jwtest" && test.env_prefix == "JWTEST");
+        assert!(!get().test);
     }
 
     #[test]
