@@ -21,4 +21,9 @@ jw claude            # a conversation with Claude in this pane
 just ci              # fmt, clippy, tests and the Android build, as CI runs them
 ```
 
+To try a branch without touching the `jw` you run, `just jwtest` builds it as `jwtest` (another identity,
+`identity.test.toml`: its own daemon, socket, state directory, `JWTEST_*` variables and skills) into
+`target/jwtest` and installs the binary beside `jw`; `jwtest` and `jw` run side by side, and
+`jwtest update` is refused (it is built from a checkout).
+
 The Android app is in `android/` (`just android-check` builds and lints it, `just android` installs it on the phone adb sees, and `just install` installs jw).

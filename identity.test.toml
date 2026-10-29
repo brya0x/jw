@@ -1,0 +1,12 @@
+# The identity of the test install (N190): the same source built as `jwtest`, which runs beside the
+# product and shares with it no binary, socket, state or config directory, environment name or skill.
+# `just jwtest` compiles it in with `IDENTITY_FILE`; the keys are those of `identity.toml` plus `test`.
+name = "jwtest"
+env_prefix = "JWTEST"
+label = "jwtest"
+android_application_id = "dev.jw.next.test"  # not built yet (OPEN-109)
+tunnel_program = "cloudflared"
+pairing_store = "mobile.json"
+repo = "https://github.com/brya0x/jw"
+agent_skill = "agent-test"                    # not `agent`: the product's /agent skill is another file
+test = true                                   # `update` and `android install` refuse (REQ-1085)
