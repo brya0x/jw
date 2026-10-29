@@ -5,9 +5,12 @@ the old jw (0.0.26 and before) in N157. It took the name `jw` in N158 (the swap)
 commit that removed them; they are read for what they did and why, never pasted.
 
 ## Rules
-- **Identity lives in `identity.toml` only.** Names, dirs, socket, env prefix, applicationId
+- **Identity lives in `identity.toml` only** (and in `identity.test.toml`, its variant for the
+  test install, N190). Names, dirs, socket, env prefix, applicationId
   come from the `identity` crate. Never spell `jw`, `JW_` or a path by hand
   (the exceptions are listed in `identity.toml`, each with a test).
+- **`just jwtest` builds a test install** (`jwtest`: its own daemon, socket, state, `JWTEST_*`
+  and skills) that runs beside the production `jw` and never writes it. Try a branch with it.
 - **The JSON documents are the contract** (`contract/schema`, `contract/fixtures`). The
   envelope never changes; node documents are versioned per type (`v`). See `docs/spec.md`.
 - **A pane is a terminal first**: always the user's `$SHELL`; a program runs inside it.

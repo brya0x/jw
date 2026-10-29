@@ -518,7 +518,22 @@ fn refresh_skills() {
     }
 }
 
+/// A test install (`identity.test.toml`) is built from a checkout, not fetched from the repository,
+/// so `update` and `android install` refuse in it (REQ-1085).
+fn test_install_refusal(test: bool, label: &str, name: &str) -> Option<String> {
+    test.then(|| format!("{label} is installed with `just {name}` from a copy of the repository"))
+}
+
+fn refuse_in_a_test_install() -> Result<(), String> {
+    let id = identity::get();
+    match test_install_refusal(id.test, &id.label, &id.name) {
+        Some(m) => Err(m),
+        None => Ok(()),
+    }
+}
+
 pub fn update(args: &[&str]) -> Res {
+    refuse_in_a_test_install()?;
     let o = parse(args, &["--ref", "--cache", "--keep", "--restart"])?;
     let (url, from_env) = repo();
     say_repo(&url, from_env, o.git_ref.as_deref());
@@ -616,6 +631,7 @@ fn pick_device(output: &str, serial: Option<&str>) -> Result<String, String> {
 const NEVER_UNINSTALLS: &str = "the app is never uninstalled by this command: INSTALL_FAILED_UPDATE_INCOMPATIBLE means the phone holds the app signed with another key, and uninstalling it would erase its data";
 
 pub fn android(args: &[&str]) -> Res {
+    refuse_in_a_test_install()?;
     let ["install", rest @ ..] = args else {
         return Err(format!(
             "usage: {0} android install --debug [--serial <id>] [--ref <ref>] [--keep]",
@@ -667,6 +683,17 @@ pub fn android(args: &[&str]) -> Res {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_test_install_refuses_to_update_and_the_product_does_not() {
+        assert_eq!(
+            test_install_refusal(true, "jwtest", "jwtest").as_deref(),
+            Some("jwtest is installed with `just jwtest` from a copy of the repository")
+        );
+        assert_eq!(test_install_refusal(false, "jw", "jw"), None);
+        // the product's own identity is not a test install, so `update` goes on for it
+        assert!(refuse_in_a_test_install().is_ok());
+    }
+
     use super::*;
 
     #[test]
