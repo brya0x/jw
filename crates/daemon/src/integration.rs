@@ -12,6 +12,20 @@ const ZSHRC: &str = include_str!("../shell/zsh/.zshrc");
 const BASH_RC: &str = include_str!("../shell/bash/rc.sh");
 const FISH: &str = include_str!("../shell/fish/jw.fish");
 
+const SCRIPTS: [(&str, &str); 5] = [
+    ("zsh/.zshenv", ZSHENV),
+    ("zsh/.zprofile", ZPROFILE),
+    ("zsh/.zshrc", ZSHRC),
+    ("bash/rc.sh", BASH_RC),
+    ("fish/jw.fish", FISH),
+];
+
+/// The scripts spell the product's `JW_` names; each install writes them with the identity's
+/// prefix, so a test install's panes read `JWTEST_*` (REQ-1083).
+fn with_prefix(text: &str, prefix: &str) -> String {
+    text.replace("JW_", &format!("{prefix}_"))
+}
+
 /// What a shell needs to start with the integration.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Setup {
@@ -30,16 +44,11 @@ impl Setup {
 
 /// Write the scripts under `dir` (the daemon's state directory).
 pub fn install(dir: &Path) -> io::Result<()> {
-    for (rel, text) in [
-        ("zsh/.zshenv", ZSHENV),
-        ("zsh/.zprofile", ZPROFILE),
-        ("zsh/.zshrc", ZSHRC),
-        ("bash/rc.sh", BASH_RC),
-        ("fish/jw.fish", FISH),
-    ] {
+    for (rel, text) in SCRIPTS {
+        let text = with_prefix(text, &identity::get().env_prefix);
         let path = dir.join(rel);
         fs::create_dir_all(path.parent().expect("a file has a parent"))?;
-        if fs::read_to_string(&path).ok().as_deref() != Some(text) {
+        if fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
             fs::write(&path, text)?;
         }
     }
@@ -90,30 +99,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_scripts_read_the_env_names_of_the_identity_and_no_others() {
-        for (name, text) in [
-            ("zsh/.zshenv", ZSHENV),
-            ("zsh/.zprofile", ZPROFILE),
-            ("zsh/.zshrc", ZSHRC),
-            ("bash/rc.sh", BASH_RC),
-            ("fish/jw.fish", FISH),
-        ] {
-            let prefix = format!("{}_", identity::get().env_prefix);
-            let own: Vec<&str> = text
-                .split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
-                .filter(|w| w.starts_with("JW") || w.starts_with("JWN"))
-                .collect();
-            assert!(
-                own.iter().all(|w| w.starts_with(&prefix)),
-                "{name} reads {own:?}, not {prefix}*"
-            );
-        }
-        for suffix in ["BIN", "PANE_ID", "CONVERSATION", "WORKSPACE_DIR"] {
-            for text in [BASH_RC, ZSHRC, FISH] {
-                assert!(text.contains(&identity::env_var(suffix)), "{suffix}");
+    fn the_scripts_are_written_with_the_prefix_of_the_identity_and_no_other() {
+        // the product's prefix and the test install's (REQ-1083)
+        for prefix in [identity::get().env_prefix.as_str(), "JWTEST"] {
+            let own_prefix = format!("{prefix}_");
+            for (name, text) in SCRIPTS {
+                let written = with_prefix(text, prefix);
+                let own: Vec<&str> = written
+                    .split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+                    .filter(|w| w.starts_with("JW"))
+                    .collect();
+                assert!(
+                    own.iter().all(|w| w.starts_with(&own_prefix)),
+                    "{name} writes {own:?}, not {own_prefix}*"
+                );
             }
+            for suffix in ["BIN", "PANE_ID", "CONVERSATION", "WORKSPACE_DIR"] {
+                for text in [BASH_RC, ZSHRC, FISH] {
+                    assert!(
+                        with_prefix(text, prefix).contains(&format!("{prefix}_{suffix}")),
+                        "{prefix} {suffix}"
+                    );
+                }
+            }
+            assert!(with_prefix(ZSHRC, prefix).contains(&format!("{prefix}_USER_ZDOTDIR")));
         }
-        assert!(ZSHRC.contains(&identity::env_var("USER_ZDOTDIR")));
+    }
+
+    #[test]
+    fn install_writes_the_scripts_with_the_prefix_of_the_identity() {
+        let dir = std::env::temp_dir().join(format!("integration-install-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        install(&dir).unwrap();
+        for (rel, text) in SCRIPTS {
+            let written = fs::read_to_string(dir.join(rel)).unwrap();
+            assert_eq!(written, with_prefix(text, &identity::get().env_prefix));
+        }
+        let rc = fs::read_to_string(dir.join("bash/rc.sh")).unwrap();
+        assert!(rc.contains(&identity::env_var("PANE_ID")));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -34,7 +34,8 @@ jwtest:
     bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
     mkdir -p "$bin"
     install -m 755 target/jwtest/release/jw "$bin/jwtest"
-    said="$("$bin/jwtest" --version | head -n 1)"
+    said="$("$bin/jwtest" --version)"
+    said="${said%%$'\n'*}"
     case "$said" in
         jwtest\ *) echo "$said ($bin/jwtest)" ;;
         *) echo "jwtest --version says «$said»: not the test identity" >&2; exit 1 ;;

@@ -199,6 +199,25 @@ mod tests {
     }
 
     #[test]
+    fn the_skill_names_of_the_test_identity_are_not_the_products() {
+        // the directories of `skills/`: `<name>`, `<name>-tasks` (crates/jw/src/agent.rs) and the agent skill
+        let names = |src: &str| {
+            let id: Identity = toml::from_str(src).unwrap();
+            [
+                id.name.clone(),
+                format!("{}-tasks", id.name),
+                id.agent_skill,
+            ]
+        };
+        let product = names(include_str!("../../../identity.toml"));
+        let test = names(include_str!("../../../identity.test.toml"));
+        assert!(
+            test.iter().all(|n| !product.contains(n)),
+            "{product:?} {test:?}"
+        );
+    }
+
+    #[test]
     fn the_test_identity_parses_and_the_product_is_not_a_test_install() {
         let test: Identity = toml::from_str(include_str!("../../../identity.test.toml")).unwrap();
         assert!(test.test && test.name == "jwtest" && test.env_prefix == "JWTEST");
