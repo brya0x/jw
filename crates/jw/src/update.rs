@@ -526,10 +526,7 @@ fn test_install_refusal(test: bool, label: &str, name: &str) -> Option<String> {
 
 fn refuse_in_a_test_install() -> Result<(), String> {
     let id = identity::get();
-    match test_install_refusal(id.test, &id.label, &id.name) {
-        Some(m) => Err(m),
-        None => Ok(()),
-    }
+    test_install_refusal(id.test, &id.label, &id.name).map_or(Ok(()), Err)
 }
 
 pub fn update(args: &[&str]) -> Res {
@@ -683,18 +680,18 @@ pub fn android(args: &[&str]) -> Res {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn a_test_install_refuses_to_update_and_the_product_does_not() {
         assert_eq!(
-            test_install_refusal(true, "jwtest", "jwtest").as_deref(),
-            Some("jwtest is installed with `just jwtest` from a copy of the repository")
+            test_install_refusal(true, "label", "name").as_deref(),
+            Some("label is installed with `just name` from a copy of the repository")
         );
-        assert_eq!(test_install_refusal(false, "jw", "jw"), None);
+        assert_eq!(test_install_refusal(false, "label", "name"), None);
         // the product's own identity is not a test install, so `update` goes on for it
         assert!(refuse_in_a_test_install().is_ok());
     }
-
-    use super::*;
 
     #[test]
     fn the_installed_binary_is_where_cargo_puts_it() {

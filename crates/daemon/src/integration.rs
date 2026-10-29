@@ -44,8 +44,12 @@ impl Setup {
 
 /// Write the scripts under `dir` (the daemon's state directory).
 pub fn install(dir: &Path) -> io::Result<()> {
+    install_as(dir, &identity::get().env_prefix)
+}
+
+fn install_as(dir: &Path, prefix: &str) -> io::Result<()> {
     for (rel, text) in SCRIPTS {
-        let text = with_prefix(text, &identity::get().env_prefix);
+        let text = with_prefix(text, prefix);
         let path = dir.join(rel);
         fs::create_dir_all(path.parent().expect("a file has a parent"))?;
         if fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
@@ -101,7 +105,12 @@ mod tests {
     #[test]
     fn the_scripts_are_written_with_the_prefix_of_the_identity_and_no_other() {
         // the product's prefix and the test install's (REQ-1083)
-        for prefix in [identity::get().env_prefix.as_str(), "JWTEST"] {
+        let test: identity::Identity =
+            toml::from_str(include_str!("../../../identity.test.toml")).unwrap();
+        for prefix in [
+            identity::get().env_prefix.as_str(),
+            test.env_prefix.as_str(),
+        ] {
             let own_prefix = format!("{prefix}_");
             for (name, text) in SCRIPTS {
                 let written = with_prefix(text, prefix);
@@ -127,16 +136,21 @@ mod tests {
     }
 
     #[test]
-    fn install_writes_the_scripts_with_the_prefix_of_the_identity() {
+    fn install_writes_the_scripts_with_the_prefix_it_is_given() {
         let dir = std::env::temp_dir().join(format!("integration-install-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        install(&dir).unwrap();
+        install_as(&dir, "OTHER").unwrap();
         for (rel, text) in SCRIPTS {
-            let written = fs::read_to_string(dir.join(rel)).unwrap();
-            assert_eq!(written, with_prefix(text, &identity::get().env_prefix));
+            assert_eq!(
+                fs::read_to_string(dir.join(rel)).unwrap(),
+                with_prefix(text, "OTHER")
+            );
         }
-        let rc = fs::read_to_string(dir.join("bash/rc.sh")).unwrap();
-        assert!(rc.contains(&identity::env_var("PANE_ID")));
+        assert!(
+            fs::read_to_string(dir.join("bash/rc.sh"))
+                .unwrap()
+                .contains("OTHER_PANE_ID")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
